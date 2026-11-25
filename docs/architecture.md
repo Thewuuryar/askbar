@@ -142,12 +142,16 @@ Every link and the network it uses. Every network except `edge` and `egress-outb
 | model-gateway to the auditor (model-call spans) | `audit-model-gateway` |
 | alerter to the auditor (delivery records) and the auditor to the alerter (alert events) | `audit-alerter` |
 | the MCP gateway's front and the auditor (`tool` spans) | `audit-mcp-gateway` |
+| the server to the MCP gateway's front (tools, approved calls) | `mcp-server` |
+| the admin to the MCP gateway's front (status, configuration) | `mcp-admin` |
+| the front to `searxng` (search queries; the service comes in P5A.13) | `mcp-searxng` |
 | Caddy to the auditor (access lines, no token) | `audit-caddy` |
 | Caddy to certificate authorities | `edge` |
 | model-gateway to `cpa` | `cpa-gateway` |
 | model-gateway to the egress proxy (provider calls) | `egress-model-gateway` |
 | `cpa` to the egress proxy (provider calls) | `egress-cpa` |
 | the alerter to the egress proxy (ntfy, the mail relay, the daily release poll) | `egress-alerter` |
+| the front to the egress proxy (the `fetch` source) | `egress-fetch` |
 | the egress proxy to the providers, ntfy, the mail relay and GitHub | `egress-outbound` |
 | the admin to the egress proxy (allowlists, status, approvals) | `egress-admin` |
 

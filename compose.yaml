@@ -19,7 +19,9 @@
 #   audit-alerter  the auditor and the alerter, nothing else. `internal`. The auditor sends its alert events on it, and the
 #               alerter appends the outcome of each alert (ADR 0055); alerter-admin (the admin and the alerter) is the same.
 #   audit-mcp-gateway  the auditor and the MCP gateway's front, nothing else. `internal`. The front writes its `tool` spans on it (ADR 0057).
-#   egress-admin, egress-model-gateway, egress-cpa, egress-alerter  the egress proxy and one caller each. `internal`. A caller
+#   mcp-server, mcp-admin  the MCP gateway's front and the server or the admin, nothing else. `internal`. mcp-searxng is the front and
+#               searxng (P5A.13).
+#   egress-admin, egress-model-gateway, egress-cpa, egress-alerter, egress-fetch  the egress proxy and one caller each. `internal`. A caller
 #               reaches a provider, ntfy or a mail server only through the proxy (ADR 0056).
 #   egress-outbound  the egress proxy's route out. Not `internal`. The proxy and, in dev, the mock LLM, nothing else. Only
 #               Caddy (edge, for certificates) and the proxy have a route out.
@@ -96,6 +98,8 @@ services:
       # The gateway (replies) and the auditor (records) each get a network of their own with the server (ADR 0054, 0051).
       gateway-server: {}
       audit-server: {}
+      # The MCP gateway's front (tools and approved calls), on a network of the two of them (ADR 0057).
+      mcp-server: {}
     volumes:
       # The bind-mounted DATA_DIR must be writable by uid 10002.
       - ${DATA_DIR:-./data}:/data
@@ -140,6 +144,8 @@ services:
       alerter-admin: {}
       # The egress proxy's API (status, allowlists), the same way (ADR 0056).
       egress-admin: {}
+      # The MCP gateway's front (status, configuration), the same way (ADR 0057).
+      mcp-admin: {}
     volumes:
       # CLIProxyAPI's config: the admin makes it (API key and control secret) before CPA starts.
       - cpa-config:/cpa-config
@@ -274,12 +280,48 @@ services:
       # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
       - alerter-token:/alerter-token:ro
 
+  # The MCP gateway's front (ADR 0057): /api/mcp-gateway/v1 on two listeners, one on mcp-server for the server (tools and approved
+  # calls) and one on mcp-admin for the admin (status, configuration), each on the address its alias gives and never a wildcard,
+  # because it also sits on egress-fetch. Runs as uid 10007 from the image, with no exception to the hardening above, and 128 MB.
+  # Its one volume is its credential volume, read-only. It reaches the auditor on audit-mcp-gateway, searxng on mcp-searxng (the
+  # service comes in P5A.13; until then nothing answers there) and the web only through the egress proxy on egress-fetch.
+  # ASKBAR_EGRESS_PROXY_URL is not read until the fetch client lands (P5A.15).
+  mcp-gateway:
+    build:
+      context: .
+      target: mcp-gateway
+    image: ${ASKBAR_IMAGE_REGISTRY:-}askbar-mcp-gateway:${ASKBAR_IMAGE_TAG:-latest}
+    container_name: askbar-mcp-gateway
+    restart: unless-stopped
+    <<: *hardening
+    mem_limit: 128m
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ASKBAR_MCP_GATEWAY_SERVER_ADDR: mcp-gateway-server-host:8087
+      ASKBAR_MCP_GATEWAY_ADMIN_ADDR: mcp-gateway-admin-host:8087
+      ASKBAR_AUDIT_API_URL: http://auditor-mcp-gateway-host:8083
+      ASKBAR_EGRESS_PROXY_URL: http://egress-fetch-host:3128
+      ASKBAR_SEARXNG_ADDR: searxng-host:8080
+    networks:
+      mcp-server:
+        aliases: [mcp-gateway-server-host]
+      mcp-admin:
+        aliases: [mcp-gateway-admin-host]
+      audit-mcp-gateway: {}
+      mcp-searxng: {}
+      egress-fetch: {}
+    volumes:
+      # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
+      - mcp-gateway-token:/mcp-gateway-token:ro
+
   # The egress proxy (ADR 0056): /api/egress-proxy/v1 for the admin on egress-admin, and one listener per source on the
   # network that source arrives on (the network is the source, so no secret is in a URL or variable), each bound to the
   # address its alias gives and never a wildcard, because it also sits on egress-outbound, the one route out. The alerter's
   # relay port is on egress-alerter. Runs as uid 10006 from the image, with no exception to the hardening above, and 128 MB.
   # It denies everything until the admin pushes its allowlists, which are in memory only. The admin, model-gateway, cpa and
-  # the alerter each share one internal network with it.
+  # the alerter and the MCP gateway's front (source `fetch`) each share one internal network with it.
   egress-proxy:
     build:
       context: .
@@ -294,7 +336,7 @@ services:
         condition: service_completed_successfully
     environment:
       ASKBAR_EGRESS_PROXY_ADMIN_ADDR: egress-admin-host:8086
-      ASKBAR_EGRESS_PROXY_SOURCES: model-gateway=egress-model-gateway-host:3128,cpa=egress-cpa-host:3128,alerter=egress-alerter-host:3128
+      ASKBAR_EGRESS_PROXY_SOURCES: model-gateway=egress-model-gateway-host:3128,cpa=egress-cpa-host:3128,alerter=egress-alerter-host:3128,fetch=egress-fetch-host:3128
       ASKBAR_EGRESS_PROXY_RELAYS: alerter=egress-alerter-host:2525
     networks:
       egress-admin:
@@ -305,6 +347,8 @@ services:
         aliases: [egress-cpa-host]
       egress-alerter:
         aliases: [egress-alerter-host]
+      egress-fetch:
+        aliases: [egress-fetch-host]
       egress-outbound: {}
     volumes:
       # The hash of the admin's token, made by bootstrap. Read-only.
@@ -442,6 +486,13 @@ networks:
   # The alerter's listener for the admin. The admin and the alerter, nothing else. No route out.
   alerter-admin:
     internal: true
+  # The MCP gateway's front with the server (mcp-server) and with the admin (mcp-admin), and with searxng (mcp-searxng, P5A.13). No route out.
+  mcp-server:
+    internal: true
+  mcp-admin:
+    internal: true
+  mcp-searxng:
+    internal: true
   # The egress proxy's listener for the admin. The admin and the proxy, nothing else. No route out.
   egress-admin:
     internal: true
@@ -451,6 +502,9 @@ networks:
   egress-cpa:
     internal: true
   egress-alerter:
+    internal: true
+  # The front's fetch source: the front and the proxy, nothing else.
+  egress-fetch:
     internal: true
   # The proxy's route out (ADR 0056). Not internal. The proxy and, in the dev profile, the mock LLM join it, and its
   # listeners are bound to the addresses of its internal networks, so it answers nothing here.
