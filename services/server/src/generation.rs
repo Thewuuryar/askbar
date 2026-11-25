@@ -35,6 +35,11 @@ pub enum GenEvent {
         name: String,
         model: String,
     },
+    /// Quick search (plan W5): the queries and sources, once, before the first delta. Not counted in `seq`.
+    Search {
+        queries: Vec<String>,
+        sources: Vec<askbar_proto::SearchSource>,
+    },
     Delta {
         seq: u64,
         text: String,
@@ -58,6 +63,7 @@ struct Inner {
     deltas: Vec<String>,
     /// The provider announced before the first delta (one at most: there is no fallback): id, name, model.
     providers: Vec<(String, String, String)>,
+    search: Option<(Vec<String>, Vec<askbar_proto::SearchSource>)>,
     terminal: Option<Terminal>,
 }
 
@@ -74,6 +80,9 @@ pub struct Live {
     cancel_notify: Notify,
     /// Why it was cancelled when that was not the person pressing Stop (e.g. `kill_switch`).
     cancel_reason: Mutex<Option<String>>,
+    /// The message asked for a web search (plan W5.3). Kept here, not in the row, because a queued message that has not
+    /// started has no row to say it and a restart ends it anyway.
+    web_search: std::sync::atomic::AtomicBool,
 }
 
 impl Live {
@@ -106,6 +115,18 @@ impl Live {
                 return;
             }
             g.providers.push((id.to_string(), name.to_string(), model.to_string()));
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Announces the queries and sources of a quick search, once, before the first delta.
+    fn set_search(&self, queries: Vec<String>, sources: Vec<askbar_proto::SearchSource>) {
+        {
+            let mut g = self.lock();
+            if g.terminal.is_some() || !g.deltas.is_empty() || g.search.is_some() {
+                return;
+            }
+            g.search = Some((queries, sources));
         }
         self.notify.notify_waiters();
     }
@@ -203,47 +224,55 @@ impl Live {
             /// How many provider announcements have been passed on. A subscriber that already has
             /// deltas has seen them and starts past them.
             providers_sent: usize,
+            search_sent: bool,
         }
         let providers_sent = if after == 0 { 0 } else { usize::MAX };
-        futures_util::stream::unfold(State { live: self.clone(), next: after, ended: false, providers_sent }, |mut s| async move {
-            if s.ended {
-                return None;
-            }
-            let live = s.live.clone();
-            loop {
-                // Register for wake-ups before looking, so a push between the look and the wait is not missed.
-                let notified = live.notify.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-                let step = {
-                    let g = live.lock();
-                    if s.next == 0 && s.providers_sent < g.providers.len() {
-                        let (id, name, model) = g.providers[s.providers_sent].clone();
-                        s.providers_sent += 1;
-                        Some(GenEvent::Provider { id, name, model })
-                    } else if (s.next as usize) < g.deltas.len() {
-                        Some(GenEvent::Delta { seq: s.next + 1, text: g.deltas[s.next as usize].clone() })
-                    } else {
-                        g.terminal.as_ref().map(|t| match t {
-                            Terminal::Done => GenEvent::Done,
-                            Terminal::Error { message, code } => GenEvent::Error { message: message.clone(), code },
-                        })
-                    }
-                };
-                match step {
-                    Some(ev @ GenEvent::Provider { .. }) => return Some((ev, s)),
-                    Some(ev @ GenEvent::Delta { .. }) => {
-                        s.next += 1;
-                        return Some((ev, s));
-                    }
-                    Some(ev) => {
-                        s.ended = true;
-                        return Some((ev, s));
-                    }
-                    None => notified.await,
+        let search_sent = after != 0;
+        futures_util::stream::unfold(
+            State { live: self.clone(), next: after, ended: false, providers_sent, search_sent },
+            |mut s| async move {
+                if s.ended {
+                    return None;
                 }
-            }
-        })
+                let live = s.live.clone();
+                loop {
+                    // Register for wake-ups before looking, so a push between the look and the wait is not missed.
+                    let notified = live.notify.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+                    let step = {
+                        let g = live.lock();
+                        if s.next == 0 && s.providers_sent < g.providers.len() {
+                            let (id, name, model) = g.providers[s.providers_sent].clone();
+                            s.providers_sent += 1;
+                            Some(GenEvent::Provider { id, name, model })
+                        } else if let (false, Some((queries, sources))) = (s.search_sent, g.search.clone()) {
+                            s.search_sent = true;
+                            Some(GenEvent::Search { queries, sources })
+                        } else if (s.next as usize) < g.deltas.len() {
+                            Some(GenEvent::Delta { seq: s.next + 1, text: g.deltas[s.next as usize].clone() })
+                        } else {
+                            g.terminal.as_ref().map(|t| match t {
+                                Terminal::Done => GenEvent::Done,
+                                Terminal::Error { message, code } => GenEvent::Error { message: message.clone(), code },
+                            })
+                        }
+                    };
+                    match step {
+                        Some(ev @ (GenEvent::Provider { .. } | GenEvent::Search { .. })) => return Some((ev, s)),
+                        Some(ev @ GenEvent::Delta { .. }) => {
+                            s.next += 1;
+                            return Some((ev, s));
+                        }
+                        Some(ev) => {
+                            s.ended = true;
+                            return Some((ev, s));
+                        }
+                        None => notified.await,
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -429,7 +458,7 @@ fn current_audit_key(state: &AppState) -> Option<Vec<u8>> {
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 
 /// `text` cut to at most `max` bytes at a character boundary.
-fn cut(text: &str, max: usize) -> &str {
+pub(crate) fn cut(text: &str, max: usize) -> &str {
     if text.len() <= max {
         return text;
     }
@@ -529,25 +558,9 @@ impl Finisher {
             }
         }
         self.finish_turn_span(status);
-        // One usage row per generation that has numbers, whatever way it ended. In the control
-        // database, which keeps the budget's counts across spaces.
+        // One usage row per generation that has numbers, whatever way it ended.
         if let Some(u) = self.usage {
-            let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
-            let _ = db.conn().execute(
-                "INSERT INTO token_usage (id, user_id, client_id, provider_id, tokens_in, tokens_out, created_at, space_id, role)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                rusqlite::params![
-                    crate::ids::new_id(),
-                    self.user_id,
-                    self.client_id,
-                    self.provider_id,
-                    u.input.unwrap_or(0) as i64,
-                    u.output.unwrap_or(0) as i64,
-                    crate::auth::now(),
-                    self.space.id,
-                    self.role.and_then(|r| serde_json::to_value(r).ok()).and_then(|v| v.as_str().map(str::to_string))
-                ],
-            );
+            record_usage(&self.state, &self.user_id, self.client_id.as_deref(), &self.provider_id, &self.space.id, self.role, u);
         }
     }
 
@@ -611,6 +624,34 @@ impl Drop for Finisher {
             Err(_) => state.generations.remove(&id),
         }
     }
+}
+
+/// One usage row, in the control database, which keeps the budget's counts across spaces.
+pub(crate) fn record_usage(
+    state: &AppState,
+    user_id: &str,
+    client_id: Option<&str>,
+    provider_id: &str,
+    space_id: &str,
+    role: Option<askbar_proto::gateway::Role>,
+    u: Usage,
+) {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = db.conn().execute(
+        "INSERT INTO token_usage (id, user_id, client_id, provider_id, tokens_in, tokens_out, created_at, space_id, role)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            crate::ids::new_id(),
+            user_id,
+            client_id,
+            provider_id,
+            u.input.unwrap_or(0) as i64,
+            u.output.unwrap_or(0) as i64,
+            crate::auth::now(),
+            space_id,
+            role.and_then(|r| serde_json::to_value(r).ok()).and_then(|v| v.as_str().map(str::to_string))
+        ],
+    );
 }
 
 /// How long a generation that starts now may run: the test override if one is set, else the
@@ -717,6 +758,11 @@ fn budget_gate(
 /// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
 /// fail with a plain HTTP status happens here, before any stream starts.
 pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
+    submit_with(state, s, false)
+}
+
+/// `submit`, for a message that may ask for a web search (plan W5.3).
+pub fn submit_with(state: &Arc<AppState>, s: Submit, web_search: bool) -> Result<Submitted, SubmitError> {
     // Generations already running finish; new ones wait until the audit store has caught up.
     if !state.audit.healthy() {
         return Err(SubmitError::AuditBacklog);
@@ -804,6 +850,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
         pass_kill_switch_gate(state, &id, &s);
         pass_budget_gate(state, &id, &s, &budget_note);
         let live = Live::new();
+        live.web_search.store(web_search, std::sync::atomic::Ordering::Relaxed);
         live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.client_id))));
         state.generations.insert(&id, live.clone(), &space);
         return Ok(Submitted { generation_id: id, conversation_id, live, queued: true });
@@ -815,6 +862,7 @@ pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError
     pass_kill_switch_gate(state, &id, &s);
     pass_budget_gate(state, &id, &s, &budget_note);
     let live = Live::new();
+    live.web_search.store(web_search, std::sync::atomic::Ordering::Relaxed);
     state.generations.insert(&id, live.clone(), &space);
     drop(store);
     drop(db);
@@ -885,7 +933,41 @@ fn spawn_run(
         // Race the gateway's stream against the deadline. Dropping it on expiry closes the request in flight, which
         // cancels the provider call; the text that had arrived is already in `fin`.
         let ended = {
-            let run = via_gateway(&state, &mut fin, &provider, &model, &system, &history);
+            let run = async {
+                let (mut history, mut notice) = (history, String::new());
+                if fin.live.web_search.load(std::sync::atomic::Ordering::Relaxed) {
+                    let message = history.last().filter(|m| m.role == "user").map(|m| m.content.clone()).unwrap_or_default();
+                    let cx = crate::quick_search::Ctx {
+                        state: &state,
+                        user_id: &fin.user_id,
+                        client_id: fin.client_id.as_deref(),
+                        space_id: &fin.space.id,
+                        conversation_id: &fin.conversation_id,
+                        generation_id: &fin.id,
+                        provider_id: &provider.id,
+                        model: &model,
+                        audit_key: fin.audit_key.as_deref(),
+                    };
+                    let prepared = tokio::select! {
+                        p = crate::quick_search::prepare(&cx, &message) => p,
+                        _ = fin.live.cancel_asked() => return Ended::Cancelled(None),
+                    };
+                    let p = match prepared {
+                        Ok(p) => p,
+                        Err(f) => return Ended::Failed(f),
+                    };
+                    notice = p.notice;
+                    if !p.prompt.is_empty() {
+                        // The answer call sees the sources; the saved history does not.
+                        if let Some(last) = history.last_mut() {
+                            last.content = p.prompt;
+                        }
+                        fin.role = Some(askbar_proto::gateway::Role::SearchWriter);
+                        fin.live.set_search(p.queries, p.sources);
+                    }
+                }
+                via_gateway(&state, &mut fin, &provider, &model, &system, &history, &notice).await
+            };
             tokio::pin!(run);
             tokio::select! {
                 r = &mut run => Some(r),
@@ -929,20 +1011,20 @@ enum Ended {
 }
 
 /// A call that did not end in a reply: a code for the audit trail and the stored row, and a sentence for the person.
-struct Failed {
-    code: String,
-    message: String,
+pub(crate) struct Failed {
+    pub(crate) code: String,
+    pub(crate) message: String,
     usage: Option<Usage>,
 }
 
 impl Failed {
-    fn new(code: &str, message: &str) -> Failed {
+    pub(crate) fn new(code: &str, message: &str) -> Failed {
         Failed { code: code.into(), message: message.into(), usage: None }
     }
 }
 
 /// What the person is told when the gateway took no request (it called no provider).
-fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
+pub(crate) fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
     use crate::gateway::GatewayError as E;
     match e {
         E::AuditBacklog => Failed::new(
@@ -983,6 +1065,7 @@ async fn via_gateway(
     model: &str,
     system: &str,
     history: &[ChatMessage],
+    notice: &str,
 ) -> Ended {
     let live = fin.live.clone();
     if live.cancel_was_asked() {
@@ -995,6 +1078,10 @@ async fn via_gateway(
     let _ = fin.space.lock().set_generation_provider(&fin.id, &by);
     fin.by = Some(by);
     live.set_provider(&provider.id, &provider.name, model);
+    // A search that was not made, or only in part, says so before the answer (quick search, plan W5.3).
+    if !notice.is_empty() {
+        fin.push(notice);
+    }
     let Some(client) = state.gateway.clone() else {
         return Ended::Failed(Failed::new("gateway_unavailable", "No model gateway is set up on this server."));
     };
@@ -1146,9 +1233,9 @@ fn start_next(state: &Arc<AppState>, space: &Arc<Space>, conversation_id: &str) 
     }
 }
 
-const KILLED: &str = "Generations were switched off by the administrator.";
+pub(crate) const KILLED: &str = "Generations were switched off by the administrator.";
 const MODEL_NOT_APPROVED: &str = "That model is not approved. Pick another one.";
-const PAUSED: &str = "Replies are paused for you by the administrator. Your message is kept; send it again when they are back.";
+pub(crate) const PAUSED: &str = "Replies are paused for you by the administrator. Your message is kept; send it again when they are back.";
 /// What a failed question says when the provider failed; its own words stay sealed in the audit.
 const PROVIDER_FAILED: &str = "The provider could not answer.";
 const STOPPED: &str = "The reply stopped unexpectedly.";
@@ -1315,9 +1402,10 @@ pub struct StreamQuery {
 
 pub(crate) type EventStream = std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
-fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
+pub(crate) fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
     Ok(match e {
         GenEvent::Provider { id, name, model } => sse_event(&ChatEvent::Provider { id, name, model: Some(model) }),
+        GenEvent::Search { queries, sources } => sse_event(&ChatEvent::Search { queries, sources }),
         GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
         GenEvent::Done => sse_event(&ChatEvent::Done),
         GenEvent::Error { message, code } => sse_event(&ChatEvent::Error { message, code: Some(code.into()) }),

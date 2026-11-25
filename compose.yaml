@@ -89,6 +89,8 @@ services:
       # server API listens there and nowhere else. The server refuses a wildcard, or a name that resolves
       # to more than one address.
       ASKBAR_SERVER_API_ADDR: server-api-host:8082
+      # The MCP gateway's front, on mcp-server: quick search asks it for the user's tools and calls them with an approval (plan W5.3).
+      ASKBAR_MCP_GATEWAY_URL: http://mcp-gateway-server-host:8087
     networks:
       # Caddy reaches the client API here, on a network of the two of them: `edge` has a route out, and the server has
       # none (ADR 0006, ADR 0054).

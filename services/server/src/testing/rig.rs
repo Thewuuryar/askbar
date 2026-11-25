@@ -8,7 +8,7 @@
 use crate::AppState;
 use askbar_audit::{AuditDb, Recorder};
 use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
-use askbar_proto::gateway::{GatewayConfig, GatewayProvider};
+use askbar_proto::gateway::{GatewayConfig, GatewayProvider, Role};
 use askbar_proto::CatalogEntry;
 use askbar_service::audit_client::AuditClient;
 use askbar_service::restart::Restarter;
@@ -44,6 +44,8 @@ pub struct Rig {
     pub admin_tokens: PathBuf,
     /// The key to give the gateway for each provider (the server holds none; ADR 0054).
     keys: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+    /// The gateway's approval signing key (base64url PKCS#8), so it can sign quick search approvals.
+    approval_pkcs8: String,
 }
 
 impl Drop for Rig {
@@ -71,6 +73,8 @@ impl Rig {
         link("model-gateway-auditor", &audit_tokens, &gw_tokens);
         link("model-gateway-auditor-read", &audit_tokens, &gw_tokens);
         link("server-model-gateway", &gw_tokens, &server_tokens);
+        // The MCP front is a test's own fake, which checks nothing: the server only needs the token file.
+        std::fs::write(server_tokens.join("call").join("server-mcp-gateway.token"), "srvmcp_test\n").unwrap();
         link("admin-auditor-read", &audit_tokens, &admin_tokens);
         link("admin-auditor-append", &audit_tokens, &admin_tokens);
         link("admin-auditor-restore", &audit_tokens, &admin_tokens);
@@ -97,7 +101,21 @@ impl Rig {
             assert!(Instant::now() < deadline, "the gateway never said hello");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        Rig { dir, auditor, audit_url, gateway, gateway_url, free, server_tokens, admin_tokens, keys: Default::default() }
+        Rig {
+            dir,
+            auditor,
+            audit_url,
+            gateway,
+            gateway_url,
+            free,
+            server_tokens,
+            admin_tokens,
+            keys: Default::default(),
+            approval_pkcs8: base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                askbar_service::approval::generate_keypair().unwrap().0,
+            ),
+        }
     }
 
     /// A state like the old `state_with_audit`: an in-memory database with the provider "p1" at `base_url` (its key
@@ -132,6 +150,11 @@ impl Rig {
         // `flush` waits for the gateway's records too: a reply's spans come from both.
         let recorder = crate::audit::Recorder::new(client).also_flush(self.gateway.audit().clone());
         state.with_audit(recorder).with_gateway(crate::gateway::GatewayClient::new(&self.gateway_url, self.server_tokens.clone()))
+    }
+
+    /// `state` with its link to a (fake) MCP front at `url`.
+    pub fn attach_mcp(&self, state: Arc<AppState>, url: &str) -> Arc<AppState> {
+        state.with_mcp(crate::quick_search::McpClient::new(url, self.server_tokens.clone()))
     }
 
     /// The directory holding the gateway's own tokens (its `model-gateway-auditor` token among them), so a test can build
@@ -187,11 +210,12 @@ impl Rig {
             paused_users: snap.paused_user_ids,
             // Every provider's own model is approved, and the snapshot's default provider's is the default (else the first by name).
             catalog,
-            default_model,
-            approval_key: None,
+            default_model: default_model.clone(),
+            approval_key: Some(askbar_proto::gateway::ApprovalSigningKey { version: 1, pkcs8: self.approval_pkcs8.clone() }),
             approval_ttl_secs: askbar_proto::DEFAULT_APPROVAL_TTL_SECS,
-            role_pins: Default::default(),
-            quick_search: Default::default(),
+            // The two quick search roles run on the default model, so a test sees the role on the turn, not another model.
+            role_pins: [Role::SearchQuery, Role::SearchWriter].into_iter().filter_map(|r| Some((r, default_model.clone()?))).collect(),
+            quick_search: snap.quick_search,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

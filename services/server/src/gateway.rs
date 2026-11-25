@@ -94,6 +94,23 @@ impl GatewayClient {
         Some(t.trim().to_string()).filter(|t| !t.is_empty())
     }
 
+    /// Ask for a signed approval of one quick search call (plan W5.2). The answer is the JSON the MCP front's call takes
+    /// (`approval`, `destination`, `provenance`, `query_data`), passed on unchanged. `Err` is the problem's code, or
+    /// `unreachable`; it names no argument.
+    pub async fn approve_quick_search(
+        &self,
+        req: &askbar_proto::approval::QuickSearchApprovalRequest,
+    ) -> Result<serde_json::Value, String> {
+        let token = self.token().ok_or("gateway_rejected")?;
+        let url = format!("{}{}/approvals/quick-search", self.base, askbar_proto::paths::MODEL_GATEWAY_V1);
+        let resp =
+            self.http.post(url).bearer_auth(token).timeout(Duration::from_secs(10)).json(req).send().await.map_err(|_| "unreachable")?;
+        if resp.status().as_u16() == 200 {
+            return resp.json().await.map_err(|_| "gateway_error".to_string());
+        }
+        Err(resp.json::<Problem>().await.ok().and_then(|p| p.code()).map_or("gateway_error", |c| c.as_str()).to_string())
+    }
+
     /// Start one generation. On success, the events, first `span`. The stream ends after `done` or `error` (or when the
     /// connection breaks, which the caller treats as a failure).
     pub async fn chat(&self, req: &ChatRequest) -> Result<impl Stream<Item = ChatEvent> + Send + Unpin, GatewayError> {

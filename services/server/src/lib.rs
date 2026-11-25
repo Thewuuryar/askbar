@@ -12,6 +12,7 @@ pub mod generation;
 pub mod import;
 pub use askbar_service::ids;
 pub mod llm;
+pub mod quick_search;
 pub mod routes;
 pub mod seal;
 pub mod server_api;
@@ -52,6 +53,9 @@ pub struct AppState {
     pub audit: audit::Recorder,
     /// Where replies come from (ADR 0054). Without one, a generation fails and says there is no gateway.
     pub gateway: Option<Arc<gateway::GatewayClient>>,
+    /// The MCP gateway's front, for quick search (plan W5.3). Without one, a message that asks for search is answered
+    /// normally, with a note.
+    pub mcp: Option<Arc<quick_search::McpClient>>,
     /// Tests only: replaces the configured generation timeout (see `testing`).
     generation_timeout_override: Mutex<Option<std::time::Duration>>,
     /// New on every start of the process, so the admin can tell a restart from a long silence
@@ -70,6 +74,7 @@ impl AppState {
             generations: Default::default(),
             audit: audit::Recorder::noop(),
             gateway: None,
+            mcp: None,
             generation_timeout_override: Mutex::new(None),
             boot_id: askbar_service::status::BootId::new(),
             restarter: Default::default(),
@@ -88,6 +93,13 @@ impl AppState {
     pub fn with_gateway(self: Arc<Self>, gateway: Arc<gateway::GatewayClient>) -> Arc<AppState> {
         let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_gateway is for a state nothing else holds yet"));
         state.gateway = Some(gateway);
+        Arc::new(state)
+    }
+
+    /// Gives a fresh state the link to the MCP gateway's front (quick search).
+    pub fn with_mcp(self: Arc<Self>, mcp: Arc<quick_search::McpClient>) -> Arc<AppState> {
+        let mut state = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("with_mcp is for a state nothing else holds yet"));
+        state.mcp = Some(mcp);
         Arc::new(state)
     }
 

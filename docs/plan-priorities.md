@@ -199,7 +199,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   - **No model calls:** this route never calls a model.
 
   Accept: each refusal has its own `ErrorCode`; the signed action matches what the MCP front verifies (P5A.20 fixtures pass); no query text appears in logs or attributes.
-- [ ] **W5.3** `feat(server): answer a message with quick search` · sonnet · after W5.2, P5A.23, W4.2, AV2.1
+- [x] **W5.3** `feat(server): answer a message with quick search` · sonnet · after W5.2, P5A.23, W4.2, AV2.1
   Files: `services/server/src/{generation,quick_search}.rs` (new `quick_search.rs`), `services/model-gateway/src/lib.rs` (the `role` attribute), tests.
   Do:
   - Check that the user has the search permission. Without it, answer normally, say search is off, and open a `gate` span for the refusal (the server may open only `gate` spans).

@@ -133,6 +133,7 @@ async fn main() {
         .map_or_else(|| "/server-token".into(), std::path::PathBuf::from);
     let env_url =
         |var: &str, default: &str| std::env::var(var).ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| default.to_string());
+    let token_dir_mcp = token_dir.clone();
     let audit_url = env_url("ASKBAR_AUDIT_API_URL", "http://auditor:8083");
     let audit_client = askbar_service::audit_client::AuditClient::new(&audit_url, token_dir.clone(), "server-auditor");
     let state = askbar_server::AppState::new(db, askbar_server::MIN_CLIENT);
@@ -143,6 +144,11 @@ async fn main() {
     let state = state.with_spaces(spaces).with_audit(askbar_server::audit::Recorder::new(audit_client)).with_gateway(
         askbar_server::gateway::GatewayClient::new(&env_url("ASKBAR_GATEWAY_URL", "http://gateway-server-host:8084"), token_dir),
     );
+    // Quick search needs the MCP gateway's front; with no address a message that asks for search is answered without it.
+    let state = match std::env::var("ASKBAR_MCP_GATEWAY_URL").ok().filter(|u| !u.trim().is_empty()) {
+        Some(url) => state.with_mcp(askbar_server::quick_search::McpClient::new(&url, token_dir_mcp)),
+        None => state,
+    };
     tokio::spawn(stop_on_signal(state.clone()));
     // POST /api/server/v1/restart saves running replies, as a stop does, then exits (ADR 0005).
     let on_stop = state.clone();
