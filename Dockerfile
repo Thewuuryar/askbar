@@ -38,8 +38,9 @@ COPY services/alerter/Cargo.toml services/alerter/
 COPY services/mcp-gateway/Cargo.toml services/mcp-gateway/
 COPY services/egress-proxy/Cargo.toml services/egress-proxy/
 RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
+ && mkdir crates/askbar-service/examples && echo 'fn main() {}' > crates/askbar-service/examples/sign_approval.rs \
  && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy -p askbar-mcp-gateway \
- && rm -rf crates/*/src services/*/src target/release/.fingerprint/askbar-*
+ && rm -rf crates/*/src crates/askbar-service/examples services/*/src target/release/.fingerprint/askbar-*
 # The real sources. Removing the members' fingerprints above makes cargo rebuild them, whatever the
 # copied files' timestamps.
 COPY crates crates
