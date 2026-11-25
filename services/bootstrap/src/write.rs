@@ -303,7 +303,9 @@ mod tests {
                 "admin-alerter",
                 "alerter-auditor",
                 "admin-auditor-restore",
-                "admin-egress-proxy"
+                "admin-egress-proxy",
+                "server-mcp-gateway",
+                "admin-mcp-gateway"
             ]
         );
         let before = all(&root);
@@ -325,7 +327,9 @@ mod tests {
                     "admin-alerter",
                     "alerter-auditor",
                     "admin-auditor-restore",
-                    "admin-egress-proxy"
+                    "admin-egress-proxy",
+                    "server-mcp-gateway",
+                    "admin-mcp-gateway"
                 ]
             }
         );

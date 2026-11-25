@@ -1,4 +1,4 @@
-use askbar_mcp_gateway::{no_links, router, Gateway};
+use askbar_mcp_gateway::{links, router, token_dir, Gateway};
 use askbar_service::boot::{self, die, listen_addr};
 use askbar_service::status::BootId;
 
@@ -18,7 +18,7 @@ async fn main() {
     let searxng = std::env::var("ASKBAR_SEARXNG_ADDR").ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let gateway = Gateway::new(BootId::new(), searxng);
     askbar_service::restart::start_watchdog(healthy);
-    let app = router(gateway, no_links());
+    let app = router(gateway, links(&token_dir()));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| die(format!("cannot listen on {addr}: {e}"), 1));
     tracing::info!(%addr, "the mcp-gateway is listening");
     if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(boot::stop_signal()).await {
