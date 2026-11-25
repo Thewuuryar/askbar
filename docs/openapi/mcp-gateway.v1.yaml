@@ -8,11 +8,11 @@ info:
     it (ADR 0057). It is documented so the services can be changed with confidence, not for outside callers.
 
     Every request except `GET /health` carries `Authorization: Bearer <token>`; the links are added in P5A.6a, and until
-    then no token is accepted. The front holds no key, and no route returns an argument or a URL.
+    then no token is accepted. The front holds no secret (only the approval public key), and no route returns an argument or a URL.
 
     **Config** is pushed in `PUT /config` (ADR 0028). A push outside the bounds in `askbar-proto` is `400 bad_request`
     and the earlier config stays live. Until the first push the front uses the `askbar-proto` defaults and refuses every
-    tool call (`503 not_configured`); the tool routes are not built yet.
+    tool call (`503 not_configured`); the a config without an approval public key refuses them the same way.
 
     Every error is a problem (`application/problem+json`), and none echoes what it was sent.
 servers:
@@ -77,6 +77,58 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/mcp-gateway/v1/tools/{id}/call:
+    post:
+      operationId: callTool
+      summary: Call a tool with a signed approval. The server link only.
+      description: >-
+        `id` is the tool name. The front rebuilds the action from the path and the body, then checks, in order: a config
+        with an approval public key is held (else `503 not_configured`); the approval (its own code for each failure:
+        `approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`,
+        `approval_replayed`, `approval_unsignable`); each approval passes once. A valid approval reaches the next checks,
+        which are not built yet and answer `501 tool_not_available`. The admin link gets `403`. No answer repeats an
+        argument, a URL or a signature.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolCall'
+      responses:
+        '400':
+          description: The body is not a tool call (`bad_request`), or the action cannot be signed (`approval_unsignable`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Another link's token (`forbidden`), or an approval refused (`approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: The approval was already used (`approval_replayed`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '501':
+          description: The approval is valid; the next checks and the tools are not built yet (`tool_not_available`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
 components:
   securitySchemes:
     linkToken:
@@ -156,6 +208,13 @@ components:
           - password_change_required
           - server_unavailable
           - conflict
+          - approval_unsignable
+          - approval_unsigned
+          - approval_signature_invalid
+          - approval_action_swapped
+          - approval_expired
+          - approval_replayed
+          - tool_not_available
           - internal
     Status:
       type: object
@@ -169,6 +228,27 @@ components:
           type: object
           additionalProperties:
             type: integer
+    ToolCall:
+      type: object
+      additionalProperties: false
+      required: [arguments, destination, approval]
+      description: The `ToolAction` of `askbar-proto` without its `tool` (the path), and its approval.
+      properties:
+        arguments: {}
+        destination: {type: string}
+        provenance: {type: string, enum: [search, user], default: search}
+        query_data: {type: boolean, default: false}
+        approval:
+          type: object
+          additionalProperties: false
+          required: [action_hash, task_id, user, one_time_id, expires_at, signature]
+          properties:
+            action_hash: {type: string}
+            task_id: {type: string}
+            user: {type: string}
+            one_time_id: {type: string}
+            expires_at: {type: integer}
+            signature: {type: string}
     Config:
       type: object
       additionalProperties: false
@@ -182,3 +262,8 @@ components:
         one_time_id_window_secs: {type: integer, minimum: 10, maximum: 600}
         search_results: {type: integer, minimum: 1, maximum: 20}
         remembered_urls: {type: integer, minimum: 10, maximum: 200}
+        approval_public_key:
+          type: [string, 'null']
+          pattern: '^[0-9a-fA-F]{64}$'
+          description: The approval public key, 64 hex characters. Absent until the admin pushes one; every call is refused then.
+        approval_key_version: {type: integer, minimum: 0, default: 0}

@@ -44,11 +44,18 @@ pub enum ErrorCode {
     NotConfigured,
     PasswordChangeRequired,
     Conflict,
+    ApprovalUnsignable,
+    ApprovalUnsigned,
+    ApprovalSignatureInvalid,
+    ApprovalActionSwapped,
+    ApprovalExpired,
+    ApprovalReplayed,
+    ToolNotAvailable,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 26] = [
+    pub const ALL: [ErrorCode; 33] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -74,6 +81,13 @@ impl ErrorCode {
         ErrorCode::NotConfigured,
         ErrorCode::PasswordChangeRequired,
         ErrorCode::Conflict,
+        ErrorCode::ApprovalUnsignable,
+        ErrorCode::ApprovalUnsigned,
+        ErrorCode::ApprovalSignatureInvalid,
+        ErrorCode::ApprovalActionSwapped,
+        ErrorCode::ApprovalExpired,
+        ErrorCode::ApprovalReplayed,
+        ErrorCode::ToolNotAvailable,
         ErrorCode::Internal,
     ];
 
@@ -105,6 +119,13 @@ impl ErrorCode {
             ErrorCode::NotConfigured => "not_configured",
             ErrorCode::PasswordChangeRequired => "password_change_required",
             ErrorCode::Conflict => "conflict",
+            ErrorCode::ApprovalUnsignable => "approval_unsignable",
+            ErrorCode::ApprovalUnsigned => "approval_unsigned",
+            ErrorCode::ApprovalSignatureInvalid => "approval_signature_invalid",
+            ErrorCode::ApprovalActionSwapped => "approval_action_swapped",
+            ErrorCode::ApprovalExpired => "approval_expired",
+            ErrorCode::ApprovalReplayed => "approval_replayed",
+            ErrorCode::ToolNotAvailable => "tool_not_available",
             ErrorCode::Internal => "internal",
         }
     }
@@ -126,6 +147,13 @@ impl ErrorCode {
             ErrorCode::ClientVersionMissing | ErrorCode::BadRequest | ErrorCode::ModelNotApproved => 400,
             ErrorCode::Unauthorized => 401,
             ErrorCode::Forbidden | ErrorCode::PasswordChangeRequired | ErrorCode::UserPaused => 403,
+            ErrorCode::ApprovalUnsignable => 400,
+            ErrorCode::ApprovalUnsigned
+            | ErrorCode::ApprovalSignatureInvalid
+            | ErrorCode::ApprovalActionSwapped
+            | ErrorCode::ApprovalExpired => 403,
+            ErrorCode::ApprovalReplayed => 409,
+            ErrorCode::ToolNotAvailable => 501,
             ErrorCode::NotFound => 404,
             ErrorCode::MethodNotAllowed => 405,
             ErrorCode::PayloadTooLarge => 413,
@@ -162,6 +190,13 @@ impl ErrorCode {
             ErrorCode::NotConfigured => "The service has not received its settings yet",
             ErrorCode::PasswordChangeRequired => "Change the admin password first",
             ErrorCode::Conflict => "Conflict",
+            ErrorCode::ApprovalUnsignable => "The tool action cannot be signed",
+            ErrorCode::ApprovalUnsigned => "The approval is not signed",
+            ErrorCode::ApprovalSignatureInvalid => "The approval signature is not valid",
+            ErrorCode::ApprovalActionSwapped => "The approval is for another action",
+            ErrorCode::ApprovalExpired => "The approval has expired",
+            ErrorCode::ApprovalReplayed => "The approval was already used",
+            ErrorCode::ToolNotAvailable => "The tool is not available",
             ErrorCode::Internal => "Something went wrong on the server",
         }
     }
@@ -280,6 +315,9 @@ mod tests {
         assert_eq!(status(ErrorCode::ApiKeyExists), 409);
         assert_eq!(status(ErrorCode::ServerUnavailable), 502);
         assert_eq!(status(ErrorCode::NotConfigured), 503);
+        assert_eq!(status(ErrorCode::ApprovalExpired), 403);
+        assert_eq!(status(ErrorCode::ApprovalReplayed), 409);
+        assert_eq!(status(ErrorCode::ToolNotAvailable), 501);
         assert_eq!(status(ErrorCode::Internal), 500);
     }
 
@@ -313,9 +351,16 @@ mod tests {
                 | ErrorCode::NotConfigured
                 | ErrorCode::PasswordChangeRequired
                 | ErrorCode::Conflict
+                | ErrorCode::ApprovalUnsignable
+                | ErrorCode::ApprovalUnsigned
+                | ErrorCode::ApprovalSignatureInvalid
+                | ErrorCode::ApprovalActionSwapped
+                | ErrorCode::ApprovalExpired
+                | ErrorCode::ApprovalReplayed
+                | ErrorCode::ToolNotAvailable
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 26);
+        assert_eq!(ErrorCode::ALL.len(), 33);
     }
 }

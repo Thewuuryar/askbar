@@ -2,11 +2,14 @@
 //!
 //! - **Config by push.** The admin pushes the tool limits in `PUT /config` (ADR 0028). A bad push is refused and the old
 //!   config stays live. Until the first push every tool call is refused ([`Gateway::admit`]) and the defaults apply.
-//! - **No tool route yet.** Only health, status and config exist; the tools, the approval check and the audit spans follow.
-//! - **Links.** One listener, two token links ([`LINKS`]): the admin's (status, config) and the server's (no route yet; the
-//!   tool route follows). A token that matches no link, or a route the link may not call, is refused.
+//! - **One tool route.** `POST /tools/{tool}/call` checks the signed approval, then refuses (`tool_not_available`): the
+//!   permission check, the audit spans and the tools follow.
+//! - **Links.** One listener, two token links ([`LINKS`]): the admin's (status, config) and the server's (the tool call). A token that matches no link, or a route the link may not call, is refused.
 
+pub mod approval;
+mod call;
 pub mod config;
+mod constants;
 pub mod status;
 
 use askbar_proto::http::ApiError;
@@ -19,7 +22,7 @@ use askbar_service::status::BootId;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::Method;
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use config::Config;
 use status::Status;
@@ -36,11 +39,18 @@ pub struct Gateway {
     pub searxng_addr: Option<String>,
     config: RwLock<Option<Arc<Config>>>,
     calls: Mutex<BTreeMap<&'static str, u64>>,
+    one_time_ids: approval::OneTimeStore,
 }
 
 impl Gateway {
     pub fn new(boot_id: BootId, searxng_addr: Option<String>) -> Arc<Gateway> {
-        Arc::new(Gateway { boot_id, searxng_addr, config: RwLock::new(None), calls: Mutex::new(BTreeMap::new()) })
+        Arc::new(Gateway {
+            boot_id,
+            searxng_addr,
+            config: RwLock::new(None),
+            calls: Mutex::new(BTreeMap::new()),
+            one_time_ids: Default::default(),
+        })
     }
 
     fn applied(&self) -> Option<Arc<Config>> {
@@ -84,7 +94,7 @@ impl Gateway {
     }
 }
 
-const SERVER_ROUTES: Routes = &[];
+const SERVER_ROUTES: Routes = &[("POST", "/tools/*/call")];
 const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config")];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
@@ -121,6 +131,7 @@ pub fn router(g: Arc<Gateway>, links: Links) -> Router {
     let protected = Router::new()
         .route(&full("/status"), get(status))
         .route(&full("/config"), put(put_config))
+        .route(&full("/tools/{tool}/call"), post(call::call))
         .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     links::shell(MCP_GATEWAY_V1, MAX_BODY, g, protected)

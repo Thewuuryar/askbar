@@ -263,7 +263,7 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 - [x] **[P5A.5](plan-tiered-routing/phase-5a-mcp-gateway.md)** add MCP gateway values to constants.rs · W3
 - [x] **[P5A.6](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the front service with status and config push · W3
 - [x] **[P5A.6a](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the server and admin links of the MCP gateway · W3
-- [ ] **[P5A.8](plan-tiered-routing/phase-5a-mcp-gateway.md)** verify the signed approval before any tool call · W3
+- [x] **[P5A.8](plan-tiered-routing/phase-5a-mcp-gateway.md)** verify the signed approval before any tool call · W3
 - [x] **[P5A.9a](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the mcp-gateway audit link · W3
 - [ ] **[P5A.9](plan-tiered-routing/phase-5a-mcp-gateway.md)** write the audit span before each call · W3
 - [ ] **[P5A.10](plan-tiered-routing/phase-5a-mcp-gateway.md)** check per-user tool permissions · W3
