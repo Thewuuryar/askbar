@@ -33,6 +33,7 @@ COPY services/bootstrap/Cargo.toml services/bootstrap/
 COPY services/auditor/Cargo.toml services/auditor/
 COPY services/model-gateway/Cargo.toml services/model-gateway/
 COPY services/alerter/Cargo.toml services/alerter/
+COPY services/mcp-gateway/Cargo.toml services/mcp-gateway/
 COPY services/egress-proxy/Cargo.toml services/egress-proxy/
 RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
  && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy \

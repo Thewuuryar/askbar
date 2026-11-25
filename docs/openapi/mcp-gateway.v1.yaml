@@ -1,0 +1,184 @@
+openapi: 3.1.0
+info:
+  title: Askbar MCP gateway API
+  version: 1.0.0
+  summary: What the admin calls on the `mcp-gateway` front. Internal.
+  description: |
+    The API under `/api/mcp-gateway/v1`, served by the `mcp-gateway` front. **It is never public**: Caddy has no route to
+    it (ADR 0057). It is documented so the services can be changed with confidence, not for outside callers.
+
+    Every request except `GET /health` carries `Authorization: Bearer <token>`; the links are added in P5A.6a, and until
+    then no token is accepted. The front holds no key, and no route returns an argument or a URL.
+
+    **Config** is pushed in `PUT /config` (ADR 0028). A push outside the bounds in `askbar-proto` is `400 bad_request`
+    and the earlier config stays live. Until the first push the front uses the `askbar-proto` defaults and refuses every
+    tool call (`503 not_configured`); the tool routes are not built yet.
+
+    Every error is a problem (`application/problem+json`), and none echoes what it was sent.
+servers:
+  - url: http://mcp-gateway-host:8087
+    description: The front on an internal network.
+security:
+  - linkToken: []
+paths:
+  /api/mcp-gateway/v1/health:
+    get:
+      operationId: getHealth
+      summary: The front is up. Needs no token and carries nothing.
+      security: []
+      responses:
+        '200':
+          description: OK.
+  /api/mcp-gateway/v1/status:
+    get:
+      operationId: getStatus
+      summary: Which config this process runs, which process it is, and tool calls by outcome.
+      description: >-
+        `config_version` is null until the admin has pushed. `calls` counts by outcome (for example
+        `refused_not_configured`); it holds no key, argument or URL.
+      responses:
+        '200':
+          description: Status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/mcp-gateway/v1/config:
+    put:
+      operationId: putConfig
+      summary: Replace the config.
+      description: >-
+        Checked first against the bounds in `askbar-proto`; nothing changes if it is refused. `version` in the answer is
+        a hash of the content, so equal content has an equal version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Config'
+      responses:
+        '200':
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+components:
+  securitySchemes:
+    linkToken:
+      type: http
+      scheme: bearer
+      description: The token of one link. Only its SHA-256 is on the front.
+  responses:
+    BadRequest:
+      description: The body could not be used (`bad_request`). The answer does not repeat it.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing or unknown token (`unauthorized`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: A known token on another link's route (`forbidden`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotConfigured:
+      description: The admin has not pushed the config yet (`not_configured`), with `Retry-After`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: >-
+        An error, as RFC 9457 problem details (application/problem+json). Branch on `error`, never on
+        `detail`.
+      required: [type, title, status, detail, error]
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: A URN, `urn:askbar:problem:<error>`; nothing is hosted at it.
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+          description: A sentence for a person.
+        error:
+          type: string
+          description: The stable code.
+          enum:
+          - queue_full
+          - budget_exceeded
+          - kill_switch
+          - user_paused
+          - model_not_approved
+          - audit_key_missing
+          - backup_key_missing
+          - backup_newer_release
+          - not_empty
+          - audit_backlog
+          - client_too_old
+          - client_version_missing
+          - unauthorized
+          - forbidden
+          - not_found
+          - method_not_allowed
+          - bad_request
+          - payload_too_large
+          - too_many_attempts
+          - api_key_exists
+          - setup_required
+          - not_configured
+          - password_change_required
+          - server_unavailable
+          - conflict
+          - internal
+    Status:
+      type: object
+      required: [config_version, boot_id, calls]
+      properties:
+        config_version:
+          type: [integer, 'null']
+        boot_id:
+          type: string
+        calls:
+          type: object
+          additionalProperties:
+            type: integer
+    Config:
+      type: object
+      additionalProperties: false
+      required: [fetch_max_bytes, fetch_timeout_secs, fetch_redirects, tool_call_timeout_secs, one_time_id_window_secs, search_results, remembered_urls]
+      description: Each value within the bounds in `crates/askbar-proto/src/mcp.rs`.
+      properties:
+        fetch_max_bytes: {type: integer, minimum: 65536, maximum: 5242880}
+        fetch_timeout_secs: {type: integer, minimum: 1, maximum: 60}
+        fetch_redirects: {type: integer, minimum: 0, maximum: 5}
+        tool_call_timeout_secs: {type: integer, minimum: 5, maximum: 120}
+        one_time_id_window_secs: {type: integer, minimum: 10, maximum: 600}
+        search_results: {type: integer, minimum: 1, maximum: 20}
+        remembered_urls: {type: integer, minimum: 10, maximum: 200}
