@@ -37,3 +37,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 
 [lints]
 workspace = true
+
+# The smoke test's signer (scripts/smoke.sh): no service holds the private key, so the smoke makes its own.
+[[example]]
+name = "sign_approval"
+required-features = ["approval"]
