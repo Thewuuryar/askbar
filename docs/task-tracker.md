@@ -1,6 +1,6 @@
 # Task tracker
 
-As of 2026-11-24, on `main` at `0ad71c2`. One line for every numbered step in the plans listed in [plan-priorities.md](plan-priorities.md). The plans hold the step text; this file holds only the state.
+As of 2026-11-25, on `main` at `82cf7881`. One line for every numbered step in the plans listed in [plan-priorities.md](plan-priorities.md). The plans hold the step text; this file holds only the state.
 
 A step is `[x]` only when its box is ticked on `main`. A step whose branch or pull request is open is In progress and stays `[ ]`. Tick the step's line here in the same commit that ticks its box in the plan. The admin redesign plan has no per-step boxes (finished, merged in #117), so it is not listed. The `W` stages are those of track 1 in [plan-priorities.md](plan-priorities.md#stages).
 
@@ -13,8 +13,8 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 1: records](plan-tiered-routing/phase-1-records.md) | 0 | 0 | 29 | 29 |
 | [Tiered routing Phase 2: shadow](plan-tiered-routing/phase-2-shadow.md) | 0 | 0 | 20 | 20 |
 | [Tiered routing Phase 3: Auto](plan-tiered-routing/phase-3-auto.md) | 0 | 0 | 28 | 28 |
-| [Tiered routing Phase 4: egress proxy](plan-tiered-routing/phase-4-egress-proxy.md) | 9 | 1 | 13 | 23 |
-| [Tiered routing Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | 4 | 0 | 37 | 41 |
+| [Tiered routing Phase 4: egress proxy](plan-tiered-routing/phase-4-egress-proxy.md) | 23 | 0 | 0 | 23 |
+| [Tiered routing Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | 41 | 0 | 1 | 42 |
 | [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 0 | 0 | 10 | 10 |
 | [Tiered routing Phase 6: agents](plan-tiered-routing/phase-6-agents.md) | 0 | 0 | 31 | 31 |
 | [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 0 | 0 | 10 | 10 |
@@ -22,9 +22,9 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 0 | 0 | 11 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **59** | **1** | **242** | **302** |
+| **Total** | **110** | **0** | **193** | **303** |
 
-## Completed (59)
+## Completed (110)
 
 ### Refactor (track 0)
 
@@ -95,6 +95,20 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[P4.4](plan-tiered-routing/phase-4-egress-proxy.md)** push per-source allowlists to the proxy · W2
 - [x] **[P4.4a](plan-tiered-routing/phase-4-egress-proxy.md)** approve private egress destinations per source · W2
 - [x] **[P4.4b](plan-tiered-routing/phase-4-egress-proxy.md)** show blocked outbound requests · W2
+- [x] **[P4.3a](plan-tiered-routing/phase-4-egress-proxy.md)** send model-gateway traffic through the proxy · W2
+- [x] **[P4.3b](plan-tiered-routing/phase-4-egress-proxy.md)** send cpa traffic through the proxy · W2
+- [x] **[P4.3c](plan-tiered-routing/phase-4-egress-proxy.md)** send alerter traffic through the proxy · W2
+- [x] **[P4.3](plan-tiered-routing/phase-4-egress-proxy.md)** send gateway, cpa, alerter and searxng traffic through the proxy · W2
+- [x] **[P4.5](plan-tiered-routing/phase-4-egress-proxy.md)** prove default deny and private-address blocking · W2
+- [x] **[P4.6](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0006: egress through the proxy · W2
+- [x] **[P4.7](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0032: proxy container limits · W2
+- [x] **[P4.7a](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0022: the egress proxy API prefix · W2
+- [x] **[P4.7b](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0049: the admin-egress-proxy link · W2
+- [x] **[P4.7c](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0054: the gateway reaches providers through the proxy · W2
+- [x] **[P4.7d](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0055: the alerter delivers through the proxy · W2
+- [x] **[P4.7e](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0042: cpa reaches providers through the proxy · W2
+- [x] **[P4.7f](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0040: the admin pushes the egress allowlists · W2
+- [x] **[P4.8](plan-tiered-routing/phase-4-egress-proxy.md)** update the architecture network table and diagram · W2
 
 ### Tiered routing Phase 5A: MCP gateway (track 1)
 
@@ -102,16 +116,49 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[P5A.2](plan-tiered-routing/phase-5a-mcp-gateway.md)** propose the MCP gateway and its front · W3
 - [x] **[P5A.3](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the agentgateway image pinned by digest · W3
 - [x] **[P5A.7](plan-tiered-routing/phase-5a-mcp-gateway.md)** generate agentgateway config from pushed config · W3
+- [x] **[P5.2](plan-tiered-routing/phase-5a-mcp-gateway.md)** add task, approval and decide types · W3
+- [x] **[P5.5](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the approval feature: keys, sign and verify · W3
+- [x] **[P5A.31](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0036: the approval feature · W3
+- [x] **[P5.3](plan-tiered-routing/phase-5a-mcp-gateway.md)** create and push the approval signing key · W3
+- [x] **[P5.4](plan-tiered-routing/phase-5a-mcp-gateway.md)** sign approvals · W3
+- [x] **[P5A.4](plan-tiered-routing/phase-5a-mcp-gateway.md)** scan the searxng image for vulnerabilities · W3
+- [x] **[P5A.5](plan-tiered-routing/phase-5a-mcp-gateway.md)** add MCP gateway values to constants.rs · W3
+- [x] **[P5A.6](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the front service with status and config push · W3
+- [x] **[P5A.6a](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the server and admin links of the MCP gateway · W3
+- [x] **[P5A.8](plan-tiered-routing/phase-5a-mcp-gateway.md)** verify the signed approval before any tool call · W3
+- [x] **[P5A.9a](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the mcp-gateway audit link · W3
+- [x] **[P5A.9](plan-tiered-routing/phase-5a-mcp-gateway.md)** write the audit span before each call · W3
+- [x] **[P5A.10](plan-tiered-routing/phase-5a-mcp-gateway.md)** check per-user tool permissions · W3
+- [x] **[P5A.11](plan-tiered-routing/phase-5a-mcp-gateway.md)** list tools and run approved calls through the registry · W3
+- [x] **[P5A.11b](plan-tiered-routing/phase-5a-mcp-gateway.md)** serve the server and admin links on their own listeners · W3
+- [x] **[P5A.12](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the mcp-gateway service and the fetch egress source · W3
+- [x] **[P5A.13](plan-tiered-routing/phase-5a-mcp-gateway.md)** add searxng · W3
+- [x] **[P5A.14](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the native search tool · W3
+- [x] **[P5A.15](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the native fetch tool and the ADR 0019 fetch rules · W3
+- [x] **[P5A.17](plan-tiered-routing/phase-5a-mcp-gateway.md)** set per-user MCP tool permissions · W3
+- [x] **[P5A.18](plan-tiered-routing/phase-5a-mcp-gateway.md)** push MCP config to the front · W3
+- [x] **[P5A.19](plan-tiered-routing/phase-5a-mcp-gateway.md)** push the searxng and fetch egress entries · W3
+- [x] **[P5A.20](plan-tiered-routing/phase-5a-mcp-gateway.md)** refuse unsigned, replayed, swapped and expired approvals · W3
+- [x] **[P5A.21](plan-tiered-routing/phase-5a-mcp-gateway.md)** refuse the call when the audit write fails or the permission is off · W3
+- [x] **[P5A.22](plan-tiered-routing/phase-5a-mcp-gateway.md)** the fetch SSRF matrix at the front · W3
+- [x] **[P5A.23](plan-tiered-routing/phase-5a-mcp-gateway.md)** search and fetch end to end · W3
+- [x] **[P5A.24](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0019: the MCP gateway is an own front with native tools · W3
+- [x] **[P5A.25](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0028: MCP gateway config and the approval public key · W3
+- [x] **[P5A.26](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0032: MCP gateway and searxng container limits · W3
+- [x] **[P5A.27](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0017: the one third-party image is searxng · W3
+- [x] **[P5A.28](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0026: scan third-party images · W3
+- [x] **[P5A.29](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0016: tool servers as an attack surface · W3
+- [x] **[P5A.30](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0056: an any_public entry for fetch · W3
+- [x] **[P5A.32](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0022: the MCP gateway API prefix · W3
+- [x] **[P5A.33](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0049: the MCP gateway links · W3
+- [x] **[P5A.34](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0010: the mcp-gateway audit link · W3
+- [x] **[P5A.35](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0051: the mcp-gateway may start tool spans · W3
 
-## In progress (1)
+## In progress (0)
 
-P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is green on `f8cc0db`, including `isolation`. It is ticked here when the PR merges to `main`.
+Nothing: no step has an open branch or pull request.
 
-### Tiered routing Phase 4: egress proxy (track 1)
-
-- [ ] **[P4.3a](plan-tiered-routing/phase-4-egress-proxy.md)** send model-gateway traffic through the proxy · W2
-
-## Not started (242)
+## Not started (193)
 
 ### Order of work and web search (track 1)
 
@@ -236,62 +283,9 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 - [ ] **[P3.27](plan-tiered-routing/phase-3-auto.md)** amend 0044: Auto, tier and effort controls
 - [ ] **[P3.28](plan-tiered-routing/phase-3-auto.md)** amend 0023: request_blocked problem type
 
-### Tiered routing Phase 4: egress proxy (track 1)
-
-- [x] **[P4.3b](plan-tiered-routing/phase-4-egress-proxy.md)** send cpa traffic through the proxy · W2
-- [x] **[P4.3c](plan-tiered-routing/phase-4-egress-proxy.md)** send alerter traffic through the proxy · W2
-- [x] **[P4.3](plan-tiered-routing/phase-4-egress-proxy.md)** send gateway, cpa, alerter and searxng traffic through the proxy · W2
-- [x] **[P4.5](plan-tiered-routing/phase-4-egress-proxy.md)** prove default deny and private-address blocking · W2
-- [x] **[P4.6](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0006: egress through the proxy · W2
-- [x] **[P4.7](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0032: proxy container limits · W2
-- [x] **[P4.7a](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0022: the egress proxy API prefix · W2
-- [x] **[P4.7b](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0049: the admin-egress-proxy link · W2
-- [x] **[P4.7c](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0054: the gateway reaches providers through the proxy · W2
-- [x] **[P4.7d](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0055: the alerter delivers through the proxy · W2
-- [x] **[P4.7e](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0042: cpa reaches providers through the proxy · W2
-- [x] **[P4.7f](plan-tiered-routing/phase-4-egress-proxy.md)** amend 0040: the admin pushes the egress allowlists · W2
-- [x] **[P4.8](plan-tiered-routing/phase-4-egress-proxy.md)** update the architecture network table and diagram · W2
-
 ### Tiered routing Phase 5A: MCP gateway (track 1)
 
-- [x] **[P5.2](plan-tiered-routing/phase-5a-mcp-gateway.md)** add task, approval and decide types · W3
-- [x] **[P5.5](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the approval feature: keys, sign and verify · W3
-- [x] **[P5A.31](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0036: the approval feature · W3
-- [x] **[P5.3](plan-tiered-routing/phase-5a-mcp-gateway.md)** create and push the approval signing key · W3
-- [x] **[P5.4](plan-tiered-routing/phase-5a-mcp-gateway.md)** sign approvals · W3
-- [x] **[P5A.4](plan-tiered-routing/phase-5a-mcp-gateway.md)** scan the searxng image for vulnerabilities · W3
-- [x] **[P5A.5](plan-tiered-routing/phase-5a-mcp-gateway.md)** add MCP gateway values to constants.rs · W3
-- [x] **[P5A.6](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the front service with status and config push · W3
-- [x] **[P5A.6a](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the server and admin links of the MCP gateway · W3
-- [x] **[P5A.8](plan-tiered-routing/phase-5a-mcp-gateway.md)** verify the signed approval before any tool call · W3
-- [x] **[P5A.9a](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the mcp-gateway audit link · W3
-- [x] **[P5A.9](plan-tiered-routing/phase-5a-mcp-gateway.md)** write the audit span before each call · W3
-- [x] **[P5A.10](plan-tiered-routing/phase-5a-mcp-gateway.md)** check per-user tool permissions · W3
-- [x] **[P5A.11](plan-tiered-routing/phase-5a-mcp-gateway.md)** list tools and run approved calls through the registry · W3
-- [x] **[P5A.11b](plan-tiered-routing/phase-5a-mcp-gateway.md)** serve the server and admin links on their own listeners · W3
-- [x] **[P5A.12](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the mcp-gateway service and the fetch egress source · W3
-- [x] **[P5A.13](plan-tiered-routing/phase-5a-mcp-gateway.md)** add searxng · W3
-- [x] **[P5A.14](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the native search tool · W3
-- [x] **[P5A.15](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the native fetch tool and the ADR 0019 fetch rules · W3
 - [ ] **[P5A.16](plan-tiered-routing/phase-5a-mcp-gateway.md)** register MCP servers and their credentials · W3
-- [x] **[P5A.17](plan-tiered-routing/phase-5a-mcp-gateway.md)** set per-user MCP tool permissions · W3
-- [x] **[P5A.18](plan-tiered-routing/phase-5a-mcp-gateway.md)** push MCP config to the front · W3
-- [x] **[P5A.19](plan-tiered-routing/phase-5a-mcp-gateway.md)** push the searxng and fetch egress entries · W3
-- [x] **[P5A.20](plan-tiered-routing/phase-5a-mcp-gateway.md)** refuse unsigned, replayed, swapped and expired approvals · W3
-- [x] **[P5A.21](plan-tiered-routing/phase-5a-mcp-gateway.md)** refuse the call when the audit write fails or the permission is off · W3
-- [x] **[P5A.22](plan-tiered-routing/phase-5a-mcp-gateway.md)** the fetch SSRF matrix at the front · W3
-- [x] **[P5A.23](plan-tiered-routing/phase-5a-mcp-gateway.md)** search and fetch end to end · W3
-- [x] **[P5A.24](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0019: the MCP gateway is an own front with native tools · W3
-- [x] **[P5A.25](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0028: MCP gateway config and the approval public key · W3
-- [x] **[P5A.26](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0032: MCP gateway and searxng container limits · W3
-- [x] **[P5A.27](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0017: the one third-party image is searxng · W3
-- [x] **[P5A.28](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0026: scan third-party images · W3
-- [x] **[P5A.29](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0016: tool servers as an attack surface · W3
-- [x] **[P5A.30](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0056: an any_public entry for fetch · W3
-- [x] **[P5A.32](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0022: the MCP gateway API prefix · W3
-- [x] **[P5A.33](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0049: the MCP gateway links · W3
-- [x] **[P5A.34](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0010: the mcp-gateway audit link · W3
-- [x] **[P5A.35](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0051: the mcp-gateway may start tool spans · W3
 
 ### Tiered routing Phase 5B: research and judge (tracks 1 and 4)
 
