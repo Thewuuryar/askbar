@@ -14,7 +14,7 @@ info:
     `model-gateway-token/accept/<link>.sha256`, read on every request. Each listener takes only its own link's
     token and serves only its own routes:
 
-    - the server's listener: `POST /chat`;
+    - the server's listener: `POST /chat`, `GET /catalog` and `POST /approvals/quick-search`;
     - the admin's listener: `GET /status`, `PUT /config`, `POST /restart`, `POST /models` and
       `POST /providers/{id}/test` (they moved here from the server, which has no keys and no route out).
 
@@ -273,6 +273,86 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /api/model-gateway/v1/approvals/quick-search:
+    post:
+      operationId: approveQuickSearch
+      summary: Sign one quick search call by fixed rules. The server's listener.
+      description: >-
+        No model is called and none judges: the gateway refuses or signs by fixed rules (plan W5.2). Refused when the
+        kill switch is on (`503 kill_switch`), the user is paused (`403 user_paused`), the tool is not `search` or `fetch`
+        (`400 quick_search_tool`), the arguments are not the tool's or a query is over the length limit
+        (`400 quick_search_arguments`), the reply has used its searches (`429 quick_search_query_count`) or its fetches
+        (`429 quick_search_fetch_count`), or the user has used the hour's searches (`429 quick_search_hourly_limit`). A refusal
+        counts for nothing and is a `blocked` `quick_search_approval` gate span; an approval counts once. The approval's
+        span (a `gate`, with the tool, the action hash and the one-time ID, never a query or a URL) is acknowledged by the
+        auditor before the approval is returned, else `503 audit_backlog` and nothing is signed. The task ID and trace ID are
+        the generation ID. The answer carries the `destination`, `provenance` and `query_data` the action was signed with,
+        which the caller must send to the MCP gateway unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generation_id, user, tool, arguments]
+              properties:
+                generation_id:
+                  type: string
+                user:
+                  type: string
+                tool:
+                  type: string
+                arguments:
+                  type: object
+      responses:
+        '200':
+          description: The signed approval.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approval, destination, provenance, query_data]
+                properties:
+                  approval:
+                    type: object
+                    description: The `Approval` (`action_hash`, `task_id`, `user`, `one_time_id`, `expires_at`, `signature`).
+                  destination:
+                    type: string
+                  provenance:
+                    type: string
+                    enum: [search, user]
+                  query_data:
+                    type: boolean
+        '400':
+          description: The body could not be used (`bad_request`), the tool is not `search` or `fetch` (`quick_search_tool`), or the arguments are not allowed (`quick_search_arguments`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The user is paused (`user_paused`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: A limit is used up (`quick_search_query_count`, `quick_search_fetch_count` or `quick_search_hourly_limit`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: No configuration or no approval key yet (`not_configured`), the kill switch is on (`kill_switch`), or the span was not acknowledged (`audit_backlog`). Nothing was signed.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     linkToken:
@@ -327,6 +407,11 @@ components:
           - user_paused
           - model_not_approved
           - role_not_pinned
+          - quick_search_tool
+          - quick_search_arguments
+          - quick_search_query_count
+          - quick_search_fetch_count
+          - quick_search_hourly_limit
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
