@@ -1,0 +1,27 @@
+[package]
+name = "askbar-mcp-gateway"
+license = "AGPL-3.0-or-later"
+publish = false
+version = "1.0.0"
+edition = "2021"
+description = "The MCP gateway's front in its own container: /api/mcp-gateway/v1 (ADR 0057)"
+
+[dependencies]
+askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
+# The `approval` feature: the Ed25519 check of a signed tool action (used from P5A.7 on).
+askbar-service = { path = "../../crates/askbar-service", features = ["approval"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# YAML in safe Rust, to read our own OpenAPI files (as the alerter does).
+serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
+
+[lints]
+workspace = true

@@ -19,7 +19,7 @@ tree() { # dir package... -> lines "name vX.Y.Z|license"
   done
 }
 {
-  tree . askbar-server askbar-admin askbar-auditor askbar-model-gateway askbar-alerter askbar-egress-proxy askbar-bootstrap askbar-cpa-supervisor
+  tree . askbar-server askbar-admin askbar-auditor askbar-model-gateway askbar-alerter askbar-mcp-gateway askbar-egress-proxy askbar-bootstrap askbar-cpa-supervisor
   tree clients/desktop askbar-client
 } > "$TMP/rust.txt"
 

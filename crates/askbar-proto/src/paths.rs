@@ -24,6 +24,10 @@ pub const MODEL_GATEWAY: &str = "/api/model-gateway";
 pub const ALERTER_V1: &str = "/api/alerter/v1";
 /// Every version of the alerter API.
 pub const ALERTER: &str = "/api/alerter";
+/// What the server and the admin call on the MCP gateway's front. Served only on its internal listeners (ADR 0057).
+pub const MCP_GATEWAY_V1: &str = "/api/mcp-gateway/v1";
+/// Every version of the MCP gateway API.
+pub const MCP_GATEWAY: &str = "/api/mcp-gateway";
 /// What the admin calls on the egress proxy. Served only on its internal listener (ADR 0056).
 pub const EGRESS_PROXY_V1: &str = "/api/egress-proxy/v1";
 /// Every version of the egress proxy API.
@@ -62,6 +66,8 @@ mod tests {
             MODEL_GATEWAY,
             ALERTER_V1,
             ALERTER,
+            MCP_GATEWAY_V1,
+            MCP_GATEWAY,
             EGRESS_PROXY_V1,
             EGRESS_PROXY,
         ] {
@@ -74,6 +80,7 @@ mod tests {
         assert!(AUDIT_V1.starts_with(&format!("{AUDIT}/v")));
         assert!(MODEL_GATEWAY_V1.starts_with(&format!("{MODEL_GATEWAY}/v")));
         assert!(ALERTER_V1.starts_with(&format!("{ALERTER}/v")));
+        assert!(MCP_GATEWAY_V1.starts_with(&format!("{MCP_GATEWAY}/v")));
         assert!(EGRESS_PROXY_V1.starts_with(&format!("{EGRESS_PROXY}/v")));
         assert!(!ADMIN_API.starts_with(ADMIN), "the admin API is not under the site's path");
     }
@@ -89,6 +96,7 @@ mod tests {
             assert!(!AUDIT_V1.starts_with(other) && !other.starts_with(AUDIT));
             assert!(!MODEL_GATEWAY_V1.starts_with(other) && !other.starts_with(MODEL_GATEWAY));
             assert!(!ALERTER_V1.starts_with(other) && !other.starts_with(ALERTER));
+            assert!(!MCP_GATEWAY_V1.starts_with(other) && !other.starts_with(MCP_GATEWAY));
             assert!(!EGRESS_PROXY_V1.starts_with(other) && !other.starts_with(EGRESS_PROXY));
         }
     }
