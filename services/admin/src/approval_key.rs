@@ -46,6 +46,12 @@ pub fn public_key(conn: &Connection) -> Option<(u64, Vec<u8>)> {
         .ok()?
 }
 
+/// The first 16 hex digits of the SHA-256 of the raw public key: safe to show.
+pub fn fingerprint(public: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(public)[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

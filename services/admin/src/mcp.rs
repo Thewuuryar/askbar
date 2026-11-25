@@ -109,3 +109,51 @@ pub async fn delete(
     mark_dirty(&state);
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// `GET /api/admin/v1/mcp/status`: what the link to the front keeps, and the approval key's fingerprint and version. Counts and
+/// versions only; no key, user or URL.
+pub async fn status(State(state): St) -> Json<serde_json::Value> {
+    let (config, key) = {
+        let db = state.db.lock().await;
+        (crate::mcp_link::build_config(db.conn()), crate::approval_key::public_key(db.conn()))
+    };
+    let key = key.map(|(version, k)| serde_json::json!({ "fingerprint": crate::approval_key::fingerprint(&k), "version": version }));
+    Json(match state.mcp.get() {
+        None => serde_json::json!({
+            "online": false, "error": "No link to the MCP gateway is set up.", "configured": false,
+            "pushed_version": config.version(), "reported_version": null, "calls": {}, "approval_key": key,
+        }),
+        Some(l) => {
+            let (reported, calls) = l.reported();
+            serde_json::json!({
+                "online": l.online(), "error": l.last_error(), "configured": reported.is_some(),
+                "pushed_version": config.version(), "reported_version": reported, "calls": calls, "approval_key": key,
+            })
+        }
+    })
+}
+
+/// `POST /api/admin/v1/mcp/approval-key/rotate`: a new key under the next version, a session signed in within 10 minutes. The record
+/// of it is made by the audit layer first (version only); the front and `model-gateway` get the new keys at once.
+pub async fn rotate_key(
+    State(state): St,
+    headers: axum::http::HeaderMap,
+    notes: Option<axum::Extension<crate::actions::ActionNotes>>,
+) -> Result<Json<serde_json::Value>, Failure> {
+    crate::web::require_fresh_signin(&state, &headers)?;
+    let key = {
+        let db = state.db.lock().await;
+        crate::approval_key::rotate(db.conn(), &state.secrets)
+            .ok()
+            .and_then(|()| crate::approval_key::public_key(db.conn()))
+            .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "The admin could not make the approval key."))?
+    };
+    if let Some(axum::Extension(n)) = &notes {
+        n.add("version", key.0.into());
+    }
+    mark_dirty(&state);
+    if let Some(g) = state.gateway.get() {
+        g.mark_dirty();
+    }
+    Ok(Json(serde_json::json!({ "fingerprint": crate::approval_key::fingerprint(&key.1), "version": key.0 })))
+}

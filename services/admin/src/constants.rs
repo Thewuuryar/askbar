@@ -122,7 +122,7 @@ pub const MAX_BACKUP_KEEP_DAYS: u32 = 3650;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
-pub const PAGE_SLUGS: [&str; 15] = [
+pub const PAGE_SLUGS: [&str; 16] = [
     "home",
     "alerts",
     "audit/calls",
@@ -132,6 +132,7 @@ pub const PAGE_SLUGS: [&str; 15] = [
     "general",
     "providers",
     "people",
+    "mcp",
     "services",
     "network",
     "security",
@@ -147,6 +148,7 @@ pub const LANDING_PAGE: &str = "home";
 pub const HELP_TOPICS: &[&str] = &[
     "settings/providers",
     "settings/people",
+    "settings/mcp",
     "settings/services",
     "settings/network",
     "settings/security",
@@ -159,6 +161,10 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/providers#model-for-each-job",
     "settings/people#users",
     "settings/people#paired-clients",
+    "settings/mcp#tool-permissions",
+    "settings/mcp#front-status",
+    "settings/mcp#approval-key",
+    "settings/mcp#egress-status",
     "settings/services#running-services",
     "settings/services#blocked-outbound-requests",
     "settings/network#host-name",
@@ -306,7 +312,7 @@ struct Constants {
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
     home_stats_range_days: [u32; 3],
-    page_slugs: [&'static str; 15],
+    page_slugs: [&'static str; 16],
     landing_page: &'static str,
     help_topics: &'static [&'static str],
 }

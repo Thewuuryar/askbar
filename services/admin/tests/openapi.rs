@@ -129,6 +129,9 @@ async fn what_the_file_says_about_a_key_is_what_the_admin_does() {
         ("GET", "/services"),
         ("POST", "/services/{name}/restart"),
         ("GET", "/egress/denied"),
+        ("GET", "/egress/status"),
+        ("GET", "/mcp/status"),
+        ("POST", "/mcp/approval-key/rotate"),
         // How alerts are delivered: secrets, and a test alert reaches outside (ADR 0055).
         ("GET", "/alerts"),
         ("PUT", "/alerts"),

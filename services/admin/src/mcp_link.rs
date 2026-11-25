@@ -79,11 +79,13 @@ pub fn build_config(conn: &Connection) -> McpConfig {
     }
 }
 
-/// The front's `GET /status`, the two fields read here.
-#[derive(Deserialize)]
+/// The front's `GET /status`, the fields read here.
+#[derive(Clone, Deserialize)]
 struct Status {
     config_version: Option<u64>,
     boot_id: String,
+    #[serde(default)]
+    calls: BTreeMap<String, u64>,
 }
 
 /// How a check went.
@@ -103,11 +105,14 @@ pub enum Sync {
 
 pub struct McpLink {
     link: LinkClient,
+    /// The last status the front answered (kept in memory only).
+    last: std::sync::Mutex<Option<Status>>,
 }
 
 impl McpLink {
     pub fn new(base: &str, token: String) -> Arc<McpLink> {
         Arc::new(McpLink {
+            last: Default::default(),
             link: LinkClient::new(base, token, LINK, "mcp-gateway", askbar_proto::paths::MCP_GATEWAY_V1, Duration::from_secs(15)),
         })
     }
@@ -128,6 +133,11 @@ impl McpLink {
         self.link.mark_dirty();
     }
 
+    /// The config version and the call counts by outcome of the last status the front answered.
+    pub fn reported(&self) -> (Option<u64>, BTreeMap<String, u64>) {
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).clone().map(|s| (s.config_version, s.calls)).unwrap_or_default()
+    }
+
     /// `GET /status`: `None` if the front did not answer or did not take the token.
     async fn status_now(&self) -> Option<Status> {
         let result = self.link.request(reqwest::Method::GET, askbar_service::routes::STATUS, None).await;
@@ -137,6 +147,7 @@ impl McpLink {
         };
         self.link.online.store(ok.is_some(), Ordering::Relaxed);
         if let Some(st) = &ok {
+            *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(st.clone());
             self.link.restarts.saw(&st.boot_id);
         } else {
             self.link.set_error(Some(match result {

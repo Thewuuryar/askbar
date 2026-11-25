@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block content %}
+    <div id="mcp-banner"></div>
+    <section id="mcp-perms-section" aria-labelledby="mcp-perms-title">
+      <div class="sect-head">
+        {% call c::section_title("mcp-perms-title", "Tool permissions", "settings/mcp#tool-permissions") %}{% endcall %}
+      </div>
+      <p class="hint">Off for everyone until you turn it on. A tool someone is denied through the API stays off here.</p>
+      <div class="table-wrap">
+        <table class="table" id="mcp-perms-table">
+          <caption class="visually-hidden">Tool permissions</caption>
+          <thead><tr><th scope="col">Person</th><th scope="col">Search</th><th scope="col">Fetch</th></tr></thead>
+          <tbody id="mcp-perms"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="mcp-front-section" aria-labelledby="mcp-front-title">
+      <div class="sect-head">
+        {% call c::section_title("mcp-front-title", "Front status", "settings/mcp#front-status") %}{% endcall %}
+        <span class="spacer"></span>
+        <span id="mcp-front-state"></span>
+      </div>
+      <p class="hint" id="mcp-front-versions"></p>
+      <div class="table-wrap">
+        <table class="table" id="mcp-calls-table">
+          <caption class="visually-hidden">Calls by outcome</caption>
+          {% call c::table_head(["Outcome", ">Calls"]) %}{% endcall %}
+          <tbody id="mcp-calls"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="mcp-key-section" aria-labelledby="mcp-key-title">
+      <div class="sect-head">
+        {% call c::section_title("mcp-key-title", "Approval key", "settings/mcp#approval-key") %}{% endcall %}
+        <span class="spacer"></span>
+        <button type="button" id="mcp-rotate" class="btn btn-danger btn-s">Rotate the key</button>
+      </div>
+      <p class="hint">The key that signs the one-time approvals the front checks. Fingerprint: <code id="mcp-fingerprint"></code> · version <span id="mcp-key-version"></span></p>
+    </section>
+    <section id="mcp-egress-section" aria-labelledby="mcp-egress-title">
+      <div class="sect-head">
+        {% call c::section_title("mcp-egress-title", "Egress status", "settings/mcp#egress-status") %}{% endcall %}
+      </div>
+      <p id="mcp-egress-note" class="hint" role="status" hidden></p>
+      <div class="table-wrap">
+        <table class="table" id="mcp-egress-table">
+          <caption class="visually-hidden">Egress status</caption>
+          {% call c::table_head(["Source", "Allowed destinations", ">Allowed", ">Denied"]) %}{% endcall %}
+          <tbody id="mcp-egress"></tbody>
+        </table>
+      </div>
+    </section>
+{% endblock %}

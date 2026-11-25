@@ -216,6 +216,7 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("DELETE", "/egress/approvals") => ("egress", "approval_remove"),
         ("PUT", "/mcp/permissions/{user}") => ("mcp", "permissions_set"),
         ("DELETE", "/mcp/permissions/{user}") => ("mcp", "permissions_remove"),
+        ("POST", "/mcp/approval-key/rotate") => ("secret", "approval_key_rotate"),
         ("PUT", "/roles/{role}") => ("roles", "pin_set"),
         ("DELETE", "/roles/{role}") => ("roles", "pin_remove"),
         ("POST", "/keys") => ("secret", "api_key_create"),

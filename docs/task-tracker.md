@@ -17,14 +17,14 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | 41 | 0 | 1 | 42 |
 | [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 0 | 0 | 10 | 10 |
 | [Tiered routing Phase 6: agents](plan-tiered-routing/phase-6-agents.md) | 0 | 0 | 31 | 31 |
-| [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 0 | 0 | 10 | 10 |
+| [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 1 | 0 | 9 | 10 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 0 | 0 | 11 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **118** | **0** | **185** | **303** |
+| **Total** | **119** | **0** | **184** | **303** |
 
-## Completed (118)
+## Completed (119)
 
 ### Refactor (track 0)
 
@@ -162,11 +162,15 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[P5A.34](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0010: the mcp-gateway audit link · W3
 - [x] **[P5A.35](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0051: the mcp-gateway may start tool spans · W3
 
+### Tiered routing Phase 8: admin UI (tracks 1 and 4)
+
+- [x] **[P8.6a](plan-tiered-routing/phase-8-admin-ui.md)** add the MCP page · W6
+
 ## In progress (0)
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (185)
+## Not started (184)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -338,7 +342,6 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P8.4](plan-tiered-routing/phase-8-admin-ui.md)** add the dry-run panel and decider comparison
 - [ ] **[P8.5](plan-tiered-routing/phase-8-admin-ui.md)** add example labeling and shared-question review
 - [ ] **[P8.6](plan-tiered-routing/phase-8-admin-ui.md)** add spend and subscription limit views
-- [ ] **[P8.6a](plan-tiered-routing/phase-8-admin-ui.md)** add the MCP page · W6
 - [ ] **[P8.6c](plan-tiered-routing/phase-8-admin-ui.md)** add the egress page · W6
 - [ ] **[P8.6d](plan-tiered-routing/phase-8-admin-ui.md)** make the quick search and MCP limits editable · W6
 - [ ] **[P8.6e](plan-tiered-routing/phase-8-admin-ui.md)** turn quick search on and off · W6

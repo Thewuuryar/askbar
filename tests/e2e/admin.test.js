@@ -4424,7 +4424,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -4573,7 +4573,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       }
       assert.deepEqual(opens.map((o) => o.href), p.settings.map((s) => '/admin/' + s + '/'), p.id + ': one button for each admin page it documents');
       // A settings page reads "Open Network settings"; Home, Alerts and the Audit pages read "Open Home".
-      const settingsSlugs = ['general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications'];
+      const settingsSlugs = ['general', 'providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications'];
       for (const o of opens) assert.match(o.text, settingsSlugs.includes(o.href.split('/')[2]) ? /^Open .+ settings$/ : /^Open (?!.* settings$).+$/, p.id);
       // Each target is on the admin page: visit it and look for the element.
       const bySlug = {};
@@ -4762,7 +4762,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     };
     // Every settings page: its title has a ? and each topic of the page has one, named "Help: <title>", with the same tooltip,
     // a target big enough, and the topic's text on the page already (a <template>, so nothing has to be fetched).
-    for (const slug of ['providers', 'people', 'services', 'network', 'security', 'backup', 'notifications', 'general']) {
+    for (const slug of ['providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications', 'general']) {
       await page.goto(base + slug + '/');
       await page.waitForSelector('#app:not([hidden])');
       const info = await page.evaluate(() => ({
@@ -4970,7 +4970,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await heading.getAttribute('href'), '/admin/general/', 'the heading links to General');
     assert.equal(await heading.getAttribute('aria-current'), null, 'the heading is never current');
     const subs = await page.evaluate(() => [...document.querySelector('#nav a.sm-parent').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
-    assert.deepEqual(subs, ['general', 'providers', 'people', 'services', 'network', 'security', 'backup', 'notifications']);
+    assert.deepEqual(subs, ['general', 'providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications']);
     await openMenu();
     await Promise.all([page.waitForURL('**/admin/general/'), page.locator('#nav a.sm-parent').click()]);
     await page.waitForSelector('#app:not([hidden])');
@@ -5607,7 +5607,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('one primary action per view: every page at rest and with its save bar showing, and the destructive buttons carry the danger style', async () => {
     const K = await page.evaluate(() => window.ui.ready);
     // The expected count of page-level primaries at rest, by page. A page with no natural primary action has none.
-    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, services: 0, network: 0, security: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
+    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, mcp: 0, services: 0, network: 0, security: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
     assert.deepEqual(Object.keys(EXPECT).filter((k) => k !== 'reference/settings/network').sort(), [...K.PAGE_SLUGS].sort(), 'the map covers every page');
     const measure = () => page.evaluate(() => {
       const probe = document.createElement('div');
