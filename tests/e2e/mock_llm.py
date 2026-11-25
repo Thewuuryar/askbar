@@ -14,6 +14,7 @@ that comes after text has been delivered). With stream_options.include_usage a f
 "drop" sends two content deltas and closes the connection without [DONE].
 Quick search: the server's query-proposal call gets a JSON array of two queries, and the answer call (the prompt holds
 <untrusted_web_content>) gets a reply that cites [1] and [2] and says how many numbered sources it was given.
+A message with a line "MOCK-REPLY <text>" gets exactly <text> as the reply (the judge tests choose its answer this way).
 """
 import json
 import os
@@ -181,6 +182,8 @@ class Handler(BaseHTTPRequestHandler):
         text = SLOW if slow else REPLY
         if "You propose web search queries" in system:
             text = QUERIES
+        elif (chosen := re.search(r"^MOCK-REPLY (.*)$", last, re.M)):
+            text = chosen.group(1)
         elif "<untrusted_web_content>" in last:
             text = f"From the sources [1] and [2]: sources seen {len(re.findall(r'^\[\d+\] ', last, re.M))}."
         self.send_response(200)

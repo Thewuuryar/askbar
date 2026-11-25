@@ -71,6 +71,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::TaskToolCalls => "This task has already made as many tool calls as it may.",
         ErrorCode::ResearchBusy => "You already have a research report running. Wait for it to finish.",
         ErrorCode::ResearchDisabled => "Research has been turned off by the administrator.",
+        ErrorCode::DecisionUnsupported => "The gateway does not take that decision yet.",
         ErrorCode::AuditKeyMissing => "The administrator has not set up the audit key yet.",
         ErrorCode::BackupKeyMissing => "The administrator has not set up the backup key yet, so nothing can be backed up.",
         ErrorCode::BackupNewerRelease => "This backup was made by a newer release of Askbar. Install that release to restore it.",

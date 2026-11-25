@@ -1394,3 +1394,152 @@ async fn reserve_tool_call_refuses_past_the_pushed_limit_and_uses_the_default_be
     assert_eq!(rig.gw.reserve_tool_call("u"), Err(askbar_proto::ErrorCode::TaskToolCalls));
     assert!(rig.gw.reserve_tool_call("v").is_ok(), "tasks do not share");
 }
+
+// ------------------------------------------------------------------ POST /decide, the judge (plan P5.6)
+
+const JUDGE_MARKER: &str = "judge-marker-words";
+
+impl Rig {
+    /// A judge decision whose draft makes the mock answer `reply`.
+    async fn judge(&self, task: &str, user: &str, reply: &str) -> (u16, Value) {
+        let input = json!({"task_id": task, "user_id": user, "question": format!("what is {JUDGE_MARKER}?"),
+            "summaries": [{"source": 1, "urls": ["https://e.example/"], "text": "summary one"}],
+            "draft": format!("{JUDGE_MARKER} [Source 1]\nMOCK-REPLY {reply}")});
+        self.decide(json!({"decision": "judge", "input": input, "generation_id": task, "user_id": user})).await
+    }
+
+    async fn decide(&self, body: Value) -> (u16, Value) {
+        problem_of(
+            self.http.post(format!("{}/api/model-gateway/v1/decide", self.server)).bearer_auth(SRV).json(&body).send().await.unwrap(),
+        )
+        .await
+    }
+}
+
+async fn judge_rig(tweak: impl FnOnce(&mut GatewayConfig)) -> Rig {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m"), ("bad", "m-fail")]);
+    cfg.role_pins.insert(Role::JudgeReview, "p/m".into());
+    tweak(&mut cfg);
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    rig
+}
+
+#[tokio::test]
+async fn the_judge_approves_or_refuses_with_each_reason_and_the_turn_span_holds_only_the_verdict() {
+    let rig = judge_rig(|_| {}).await;
+    let (s, b) = rig.judge("task-ok", "user1", r#"{"verdict":"approve"}"#).await;
+    assert_eq!((s, b), (200, json!({"decision": "judge", "output": {"verdict": "approve"}})));
+    for reason in ["unsupported_claim", "contradicts_source", "off_topic", "unsafe", "bad_citation"] {
+        let task = format!("task-{reason}");
+        let (s, b) = rig.judge(&task, "user1", &format!(r#"{{"verdict":"refuse","reason":"{reason}"}}"#)).await;
+        assert_eq!((s, &b["output"]), (200, &json!({"verdict": "refuse", "reason": reason})));
+        let rows = rig
+            .wait_rows(&format!("SELECT attrs_json, status FROM spans WHERE trace_id = '{task}' AND kind = 'turn' AND status = 'done'"))
+            .await;
+        let attrs: Value = serde_json::from_str(rows[0][0].as_str().unwrap()).unwrap();
+        assert_eq!((&attrs["role"], &attrs["verdict"], &attrs["reason"]), (&json!("judge.review"), &json!("refuse"), &json!(reason)));
+    }
+    let rows = rig.wait_rows("SELECT attrs_json FROM spans WHERE trace_id = 'task-ok' AND kind = 'turn' AND status = 'done'").await;
+    let attrs: Value = serde_json::from_str(rows[0][0].as_str().unwrap()).unwrap();
+    assert_eq!((&attrs["role"], &attrs["verdict"], attrs.get("reason")), (&json!("judge.review"), &json!("approve"), None));
+}
+
+#[tokio::test]
+async fn an_answer_off_the_fixed_format_is_a_refusal_with_bad_format() {
+    let rig = judge_rig(|_| {}).await;
+    for (i, reply) in [
+        r#"Sure. {"verdict":"approve"}"#,
+        r#"{"verdict":"approve"} thanks"#,
+        r#"{"verdict":"approve","note":"x"}"#,
+        r#"{"verdict":"approve","reason":"off_topic"}"#,
+        r#"{"verdict":"refuse","reason":"rude"}"#,
+        r#"{"verdict":"refuse"}"#,
+        r#"{"verdict":"maybe"}"#,
+        "approve",
+        "",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (s, b) = rig.judge(&format!("task-bad{i}"), "user1", reply).await;
+        assert_eq!((s, &b["output"]), (200, &json!({"verdict": "refuse", "reason": "bad_format"})), "{reply:?}");
+    }
+}
+
+#[tokio::test]
+async fn an_unpinned_judge_is_role_not_pinned_and_no_provider_is_called() {
+    let rig = judge_rig(|c| {
+        c.role_pins.clear();
+    })
+    .await;
+    let (s, b) = rig.judge("task-np", "user1", r#"{"verdict":"approve"}"#).await;
+    assert_eq!((s, b["error"].as_str()), (400, Some("role_not_pinned")));
+    assert_eq!(rig.provider_calls(), 0);
+    rig.wait_rows("SELECT 1 FROM spans WHERE trace_id = 'task-np' AND kind = 'gate' AND error_code = 'role_not_pinned'").await;
+}
+
+#[tokio::test]
+async fn a_provider_error_an_over_cap_task_a_pause_and_the_kill_switch_are_problems_not_verdicts() {
+    let rig = judge_rig(|c| {
+        c.role_pins.insert(Role::JudgeReview, "bad/m-fail".into());
+    })
+    .await;
+    let (s, b) = rig.judge("task-pe", "user1", r#"{"verdict":"approve"}"#).await;
+    assert!(s >= 400 && b.get("output").is_none() && b.get("verdict").is_none(), "{s} {b}");
+    rig.wait_rows("SELECT 1 FROM spans WHERE trace_id = 'task-pe' AND kind = 'turn' AND status = 'error'").await;
+
+    let rig = judge_rig(|c| c.task_limits.token_cap = 20_000).await;
+    rig.gw.tasks.lock().unwrap().add_tokens("task-cap", 20_000, 20_000);
+    let (s, b) = rig.judge("task-cap", "user1", r#"{"verdict":"approve"}"#).await;
+    assert_eq!((s, b["error"].as_str()), (402, Some("task_token_cap")));
+    assert_eq!(rig.provider_calls(), 0);
+
+    let rig = judge_rig(|c| c.paused_users.push("user1".into())).await;
+    let (s, b) = rig.judge("task-p", "user1", r#"{"verdict":"approve"}"#).await;
+    assert_eq!((s, b["error"].as_str()), (403, Some("user_paused")));
+    let rig = judge_rig(|c| c.kill_switch = true).await;
+    let (s, b) = rig.judge("task-k", "user1", r#"{"verdict":"approve"}"#).await;
+    assert_eq!((s, b["error"].as_str()), (503, Some("kill_switch")));
+    assert_eq!(rig.provider_calls(), 0);
+}
+
+#[tokio::test]
+async fn other_decisions_and_bad_inputs_are_refused_before_any_call() {
+    let rig = judge_rig(|_| {}).await;
+    for decision in ["step_check", "research"] {
+        let (s, b) = rig.decide(json!({"decision": decision, "input": {}, "generation_id": "t", "user_id": "user1"})).await;
+        assert_eq!((s, b["error"].as_str()), (400, Some("decision_unsupported")));
+    }
+    let ok = json!({"task_id": "t", "user_id": "user1", "question": "q", "summaries": [], "draft": "d"});
+    let mut extra = ok.clone();
+    extra["x"] = json!(1);
+    let mut huge = ok.clone();
+    huge["draft"] = json!("x".repeat(300 * 1024));
+    let mut other = ok.clone();
+    other["task_id"] = json!("u");
+    for (input, gen) in [(extra, "t"), (huge, "t"), (other, "t"), (json!("text"), "t")] {
+        let (s, b) = rig.decide(json!({"decision": "judge", "input": input, "generation_id": gen, "user_id": "user1"})).await;
+        assert_eq!((s, b["error"].as_str()), (400, Some("bad_request")));
+    }
+    let (s, _) = rig.decide(json!({"decision": "judge", "input": ok})).await;
+    assert_eq!(s, 400, "a judge decision needs its ids");
+    assert_eq!(rig.provider_calls(), 0);
+}
+
+#[tokio::test]
+async fn the_judges_text_is_only_in_the_sealed_payloads() {
+    let rig = judge_rig(|_| {}).await;
+    let (s, _) = rig.judge("task-seal", "user1", r#"{"verdict":"approve"}"#).await;
+    assert_eq!(s, 200);
+    let spans = rig.wait_rows("SELECT id FROM spans WHERE trace_id = 'task-seal' AND kind = 'turn' AND status = 'done'").await;
+    let sql = format!("SELECT ciphertext FROM payloads WHERE span_id = '{}' AND role = 'prompt'", spans[0][0].as_str().unwrap());
+    rig.wait_rows(&sql).await;
+    let blob: Vec<u8> = rig.auditor.recorder.reader().unwrap().query_row(&sql, [], |r| r.get(0)).unwrap();
+    let prompt = String::from_utf8(crypto_box::SecretKey::from(AUDIT_SECRET).unseal(&blob).unwrap()).unwrap();
+    assert!(prompt.contains(JUDGE_MARKER) && prompt.contains("summary one") && prompt.contains("[Source 1]"), "{prompt}");
+    let all = format!("{:?}", rig.rows("SELECT attrs_json, name, error_code FROM spans"));
+    assert!(!all.contains(JUDGE_MARKER) && !all.contains("summary one"), "{all}");
+    let status = rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap();
+    assert!(!status.text().await.unwrap().contains(JUDGE_MARKER));
+}
