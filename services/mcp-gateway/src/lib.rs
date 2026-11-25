@@ -13,6 +13,7 @@ pub mod config;
 mod constants;
 pub mod permissions;
 pub mod registry;
+pub mod search;
 pub mod status;
 
 use askbar_proto::http::ApiError;
@@ -53,7 +54,8 @@ pub struct Gateway {
 
 impl Gateway {
     pub fn new(boot_id: BootId, searxng_addr: Option<String>, audit: Option<Arc<AuditClient>>) -> Arc<Gateway> {
-        Gateway::with_registry(boot_id, searxng_addr, audit, registry::Registry::builtin())
+        let registry = registry::Registry::builtin(searxng_addr.clone());
+        Gateway::with_registry(boot_id, searxng_addr, audit, registry)
     }
 
     pub fn with_registry(

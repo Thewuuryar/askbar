@@ -4,6 +4,7 @@
 
 use crate::approval::At;
 use crate::permissions;
+use crate::registry::ToolCall;
 use crate::Gateway;
 use askbar_proto::approval::{Approval, Provenance, ToolAction};
 use askbar_proto::audit::{SpanFinish, SpanKind, SpanStart};
@@ -98,7 +99,8 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         return Err(audit_down());
     }
     g.tool_runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let run = (g.registry.get(&action.tool).expect("checked above"))(action);
+    let tool_call = ToolCall { action, task_id: a.task_id.clone(), user: a.user.clone(), config: config.clone() };
+    let run = (g.registry.get(&tool_call.action.tool).expect("checked above"))(tool_call);
     let limit = std::time::Duration::from_secs(u64::from(config.tool_call_timeout_secs));
     // Only the outcome goes to the span; the result is not recorded.
     let (status, code, out) = match tokio::time::timeout(limit, run).await {

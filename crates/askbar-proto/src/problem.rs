@@ -54,11 +54,12 @@ pub enum ErrorCode {
     ToolNotPermitted,
     ToolTimeout,
     ToolResultTooLarge,
+    ToolUpstreamFailed,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 36] = [
+    pub const ALL: [ErrorCode; 37] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -94,6 +95,7 @@ impl ErrorCode {
         ErrorCode::ToolNotPermitted,
         ErrorCode::ToolTimeout,
         ErrorCode::ToolResultTooLarge,
+        ErrorCode::ToolUpstreamFailed,
         ErrorCode::Internal,
     ];
 
@@ -135,6 +137,7 @@ impl ErrorCode {
             ErrorCode::ToolNotPermitted => "tool_not_permitted",
             ErrorCode::ToolTimeout => "tool_timeout",
             ErrorCode::ToolResultTooLarge => "tool_result_too_large",
+            ErrorCode::ToolUpstreamFailed => "tool_upstream_failed",
             ErrorCode::Internal => "internal",
         }
     }
@@ -166,7 +169,7 @@ impl ErrorCode {
             ErrorCode::NotFound => 404,
             ErrorCode::MethodNotAllowed => 405,
             ErrorCode::PayloadTooLarge => 413,
-            ErrorCode::ServerUnavailable | ErrorCode::ToolResultTooLarge => 502,
+            ErrorCode::ServerUnavailable | ErrorCode::ToolResultTooLarge | ErrorCode::ToolUpstreamFailed => 502,
             ErrorCode::ToolTimeout => 504,
             ErrorCode::Internal => 500,
         }
@@ -210,6 +213,7 @@ impl ErrorCode {
             ErrorCode::ToolNotPermitted => "The tool is not permitted",
             ErrorCode::ToolTimeout => "The tool took too long",
             ErrorCode::ToolResultTooLarge => "The tool result is too large",
+            ErrorCode::ToolUpstreamFailed => "The tool's backing service failed",
             ErrorCode::Internal => "Something went wrong on the server",
         }
     }
@@ -374,9 +378,10 @@ mod tests {
                 | ErrorCode::ToolNotPermitted
                 | ErrorCode::ToolTimeout
                 | ErrorCode::ToolResultTooLarge
+                | ErrorCode::ToolUpstreamFailed
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 36);
+        assert_eq!(ErrorCode::ALL.len(), 37);
     }
 }

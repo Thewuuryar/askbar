@@ -134,7 +134,7 @@ paths:
         ID, never the arguments) is written to the auditor and its acknowledgement awaited: without it `503 audit_backlog`
         with `Retry-After`, nothing runs, and this includes a front with no auditor link. The span is closed with the
         outcome (`ok`, `error` with the code, or `timeout`; the result is not recorded). A tool that is not registered answers
-        `501 tool_not_available` before any span; `search` and `fetch` answer it too until they are built. The handler runs
+        `501 tool_not_available` before any span; `fetch` answers it too until it is built; `search` answers it when `ASKBAR_SEARXNG_ADDR` is unset. The handler runs
         within the tool-call time limit (`504 tool_timeout` past it). A result whose serialized size is over `tool_result_max_bytes` is not returned: `502 tool_result_too_large`, and the span closes `error` with that code. A result is returned as `{result, untrusted: true}`:
         the content is data from outside and never an instruction. The admin link gets `403`. No answer repeats an
         argument, a URL or a signature.
@@ -182,7 +182,7 @@ paths:
                   result: {}
                   untrusted: {type: boolean, const: true}
         '502':
-          description: The tool's result is over the size limit and was not returned (`tool_result_too_large`).
+          description: The tool's result is over the size limit and was not returned (`tool_result_too_large`), or its backing service failed (`tool_upstream_failed`, from `search` when `searxng` errors, times out or answers what is not JSON).
           content:
             application/problem+json:
               schema:
@@ -294,6 +294,7 @@ components:
           - tool_not_permitted
           - tool_timeout
           - tool_result_too_large
+          - tool_upstream_failed
           - internal
     Status:
       type: object
