@@ -198,6 +198,8 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | hex | 0.4.3 | MIT OR Apache-2.0 |
 | hkdf | 0.12.4 | MIT OR Apache-2.0 |
 | hmac | 0.12.1 | MIT OR Apache-2.0 |
+| html2text | 0.16.7 | MIT |
+| html5ever | 0.38.0 | MIT OR Apache-2.0 |
 | html5ever | 0.39.0 | MIT OR Apache-2.0 |
 | http | 1.5.0 | MIT OR Apache-2.0 |
 | http-body | 1.1.0 | MIT |
@@ -258,6 +260,7 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | litemap | 0.8.3 | Unicode-3.0 |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
+| markup5ever | 0.38.0 | MIT OR Apache-2.0 |
 | markup5ever | 0.39.0 | MIT OR Apache-2.0 |
 | matchit | 0.8.4 | MIT AND BSD-3-Clause |
 | memchr | 2.8.3 | Unlicense OR MIT |
