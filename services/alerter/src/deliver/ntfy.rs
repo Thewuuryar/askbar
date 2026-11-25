@@ -90,4 +90,22 @@ mod tests {
     fn the_address_is_the_server_and_the_topic() {
         assert_eq!(url(&cfg("https://ntfy.example.com/", "t", None)), "https://ntfy.example.com/t");
     }
+
+    /// A fake proxy sees a CONNECT to the ntfy host and port, and refuses it: the alert fails there, so nothing went around it.
+    #[tokio::test]
+    async fn ntfy_goes_through_the_proxy_with_a_connect() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = crate::http_client(Some(&format!("http://{}", l.local_addr().unwrap())));
+        let server = tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let n = s.read(&mut buf).await.unwrap();
+            s.write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n").await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        let r = Rendered { title: "t".into(), body: "b".into() };
+        assert!(send(&client, &cfg("https://ntfy.example.com", "t", None), Severity::Info, &r).await.is_err());
+        assert!(server.await.unwrap().starts_with("CONNECT ntfy.example.com:443 HTTP/1.1"));
+    }
 }

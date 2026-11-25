@@ -102,10 +102,26 @@ struct Queue {
     dropped: u64,
 }
 
+/// An address from the environment (never a secret); unset or blank means none, and the alerter connects directly.
+fn env_addr(name: &str) -> Option<String> {
+    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// The client for ntfy and the release check: through the egress proxy when `proxy` names one (ADR 0056).
+pub(crate) fn http_client(proxy: Option<&str>) -> reqwest::Client {
+    let mut b = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).no_proxy();
+    if let Some(url) = proxy {
+        b = b.proxy(reqwest::Proxy::all(url).expect("ASKBAR_EGRESS_PROXY_URL"));
+    }
+    b.build().expect("reqwest client")
+}
+
 pub struct Alerter {
     pub boot_id: BootId,
     audit: Arc<AuditClient>,
     http: reqwest::Client,
+    /// `host:port` of the egress proxy's relay listener, where mail connects instead of the real server (ADR 0056).
+    relay: Option<String>,
     config: RwLock<Option<Arc<Applied>>>,
     state: Mutex<limits::State>,
     ledger: ledger::Ledger,
@@ -126,7 +142,8 @@ impl Alerter {
         Arc::new(Alerter {
             boot_id,
             audit,
-            http: reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).build().expect("reqwest client"),
+            http: http_client(env_addr("ASKBAR_EGRESS_PROXY_URL").as_deref()),
+            relay: env_addr("ASKBAR_EGRESS_RELAY_ADDR"),
             config: RwLock::new(None),
             state: Mutex::new(state),
             ledger,
@@ -321,7 +338,7 @@ impl Alerter {
     async fn send(&self, cfg: &Applied, channel: Channel, severity: Severity, r: &Rendered) -> Result<(), Problem> {
         match (channel, &cfg.ntfy, &cfg.email) {
             (Channel::Ntfy, Some(n), _) => deliver::ntfy::send(&self.http, n, severity, r).await,
-            (Channel::Email, _, Some(m)) => deliver::smtp::send(m, severity, r).await,
+            (Channel::Email, _, Some(m)) => deliver::smtp::send(m, self.relay.as_deref(), severity, r).await,
             _ => Err(Problem::Unreachable),
         }
     }
