@@ -5,6 +5,7 @@
 use crate::constants::*;
 use crate::fetch_rules::check;
 use crate::registry::{handler, Handler, ToolCall};
+use crate::status::LastSearch;
 use askbar_proto::ErrorCode;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -14,10 +15,21 @@ use std::time::Duration;
 const MAX_QUERY_CHARS: usize = 200;
 
 /// Per task, the URLs its searches returned: the oldest task is dropped past [`MAX_REMEMBERED_TASKS`], the oldest URL of a task past its bound.
+/// It also holds how the last search to `searxng` went (for `GET /status`), since `search` and the status both reach it.
 #[derive(Default)]
-pub struct Remembered(Mutex<VecDeque<(String, VecDeque<String>)>>);
+pub struct Remembered(Mutex<VecDeque<(String, VecDeque<String>)>>, Mutex<Option<LastSearch>>);
 
 impl Remembered {
+    /// How the last search went: the time and `ok` or the error code word. Nothing from the query.
+    pub fn last_search(&self) -> Option<LastSearch> {
+        self.1.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn note(&self, outcome: &str) {
+        let at = askbar_service::audit_client::now_parts().0;
+        *self.1.lock().unwrap_or_else(|e| e.into_inner()) = Some(LastSearch { at, outcome: outcome.into() });
+    }
+
     /// Remembers `urls` for the task, keeping at most `cap` of its newest.
     pub(crate) fn add(&self, task_id: &str, urls: &[String], cap: usize) {
         let mut tasks = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -57,8 +69,13 @@ pub fn handler_for(addr: Option<String>, store: Arc<Remembered>) -> Handler {
             let query = query_of(&c.arguments).ok_or(ErrorCode::BadRequest)?;
             // A second under the call's own limit, so a slow `searxng` answers the typed error and not `tool_timeout`.
             let limit = Duration::from_secs(u64::from(c.config.tool_call_timeout_secs) - 1);
-            let body = ask(&client, addr, query, limit).await.ok_or(ErrorCode::ToolUpstreamFailed)?;
-            let results = parse(&body, c.config.search_results as usize).ok_or(ErrorCode::ToolUpstreamFailed)?;
+            let failed = || {
+                store.note(ErrorCode::ToolUpstreamFailed.as_str());
+                ErrorCode::ToolUpstreamFailed
+            };
+            let body = ask(&client, addr, query, limit).await.ok_or_else(failed)?;
+            let results = parse(&body, c.config.search_results as usize).ok_or_else(failed)?;
+            store.note("ok");
             let urls: Vec<String> = results.iter().map(|r| r["url"].as_str().unwrap_or_default().to_string()).collect();
             store.add(&c.task_id, &urls, c.config.remembered_urls as usize);
             Ok(json!({ "results": results }))

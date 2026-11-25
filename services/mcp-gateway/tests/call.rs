@@ -505,20 +505,28 @@ async fn search_returns_at_most_n_trimmed_untrusted_results_sent_as_a_post_form(
     assert_eq!(st, 200);
     let text = serde_json::to_string(&rig.g.status().calls).unwrap();
     assert!(!text.contains(secret_query) && !text.contains("r.example"), "status leaked search content");
+    let last = rig.g.status().last_search.expect("a search was made");
+    assert_eq!(last.outcome, "ok");
+    assert!(!serde_json::to_string(&rig.g.status()).unwrap().contains(secret_query), "the status holds no query text");
 }
 
 #[tokio::test]
 async fn search_failures_are_typed_and_a_long_query_is_refused() {
     let (addr, _) = fake_searxng().await;
     let rig = start_full(true, Auditor::Up, Registry::builtin(Some(addr)), 5).await;
+    assert!(rig.g.status().last_search.is_none(), "no search yet");
     for (q, id) in [("boom", "e1"), ("garbage", "e2"), ("slow", "e3")] {
         let r = search(&rig, "t", q, id).await;
         assert_eq!(code(&r), (502, "tool_upstream_failed"), "{q}");
+        let last = rig.g.status().last_search.expect("the failure is recorded");
+        assert_eq!(last.outcome, "tool_upstream_failed", "{q}");
+        assert!(!serde_json::to_string(&last).unwrap().contains(q) || q == "slow", "no query text in the status");
         assert!(!r.1.to_string().contains(q) || q == "slow", "the answer repeats the query");
     }
     assert_eq!(code(&search(&rig, "t", &"x".repeat(201), "e4").await), (400, "bad_request"));
     assert_eq!(code(&search(&rig, "t", "  ", "e5").await), (400, "bad_request"));
     assert_eq!(search(&rig, "t", &"x".repeat(200), "e6").await.0, 200);
+    assert_eq!(rig.g.status().last_search.unwrap().outcome, "ok", "the last search decides");
 }
 
 #[tokio::test]

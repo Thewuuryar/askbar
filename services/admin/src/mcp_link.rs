@@ -85,6 +85,15 @@ struct Status {
     boot_id: String,
     #[serde(default)]
     calls: BTreeMap<String, u64>,
+    #[serde(default)]
+    last_search: Option<LastSearch>,
+}
+
+/// How the front's last search to `searxng` went: unix seconds and `ok` or an error code word. No text.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LastSearch {
+    pub at: i64,
+    pub outcome: String,
 }
 
 /// How a check went.
@@ -135,6 +144,11 @@ impl McpLink {
     /// The config version and the call counts by outcome of the last status the front answered.
     pub fn reported(&self) -> (Option<u64>, BTreeMap<String, u64>) {
         self.last.lock().unwrap_or_else(|e| e.into_inner()).clone().map(|s| (s.config_version, s.calls)).unwrap_or_default()
+    }
+
+    /// The front's last search to `searxng`, from the last status it answered.
+    pub fn last_search(&self) -> Option<LastSearch> {
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|s| s.last_search.clone())
     }
 
     /// `GET /status`: `None` if the front did not answer or did not take the token.

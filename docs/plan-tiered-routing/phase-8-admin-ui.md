@@ -47,7 +47,7 @@ Track 1 runs P8.6a, P8.6c to P8.6f, P8.8a and P8.9a as stage W6 of [plan-priorit
   Files: `crates/askbar-proto/src/quick_search.rs`, `services/admin/src/{admin_api/settings,gateway_link,server_link}.rs`, `services/model-gateway/src/approval.rs`, `services/server/src/quick_search.rs`, `docs/openapi/{admin,client}.v1.yaml` if a field is added, tests.
   Do: a global `quick_search_enabled` setting, on by default (per-user permissions still start off), apart from the kill switch. When off, `model-gateway` refuses `POST /approvals/quick-search` with its own `ErrorCode`, and the server answers without search and says search is off, as it does for a user without the permission (W5.3). The server already tells the client whether the user may search (W5.4); that answer becomes false while the setting is off, so the client hides the toggle.
   Accept: with the setting off, a quick search message is answered without any `search` or `fetch` span and the refusal has its `ErrorCode`; turning it on restores search without a restart; additive fields only.
-- [ ] **P8.6f** `feat(admin): add the search page` · sonnet · after P8.6a, P8.6d, P8.6e
+- [x] **P8.6f** `feat(admin): add the search page` · sonnet · after P8.6a, P8.6d, P8.6e
   Files: a new `search.html` template, `services/admin/src/ui/*.js`, `services/admin/src/{routes,cost}.rs`, `services/mcp-gateway/src/{search,status}.rs`, `crates/askbar-proto/src/mcp.rs`, `services/admin/tests/`, `services/mcp-gateway/tests/`, a check in `scripts/check-docs.sh` or a Rust test.
   Do:
   - **SearXNG health:** the front's `GET /status` gains, additively, the time and outcome of its last search request to `searxng`. The page shows it from `GET /mcp/status` (P8.6a), since the admin cannot reach `searxng` itself.

@@ -42,6 +42,7 @@ pub mod secrets;
 pub mod self_cert;
 pub mod server_link;
 pub mod services;
+pub mod usage;
 pub mod web;
 
 use axum::{
@@ -292,6 +293,7 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/egress/denied"), egress_link::list_denied)
         .get(&v1("/egress/status"), egress_link::status)
         .get(&v1("/mcp/status"), mcp::status)
+        .get(&v1("/usage/roles"), usage::roles)
         .post(&v1("/mcp/approval-key/rotate"), mcp::rotate_key)
         .post(&v1("/services/{name}/restart"), services::restart)
         // Sealed content is the person's alone: no admin API key can start a session or look into one (ADR 0011).

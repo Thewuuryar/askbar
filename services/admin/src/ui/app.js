@@ -55,6 +55,7 @@
     { id: 'providers', load: loadProviders },
     { id: 'mcp', load: loadMcp },
     { id: 'egress', load: loadEgress },
+    { id: 'search', load: loadSearch },
     { id: 'services', load: loadServices },
     { id: 'people', load: loadClients },
     { id: 'general', load: loadSettings },
@@ -1212,6 +1213,75 @@
     liveMcp.refresh({ force: true });
   });
   function loadMcp() { return liveMcp.start(); }
+  // ------------------------------------------------------------------ Search page
+  // Everything from a service (outcome words, errors) is written with textContent only; no query or URL is ever shown here.
+  const LIMIT_LABELS = {
+    max_queries: 'Searches per question', max_query_chars: 'Characters per search', max_pages: 'Pages read per question',
+    searches_per_user_hour: 'Searches per person per hour', fetch_max_bytes: 'Largest page (bytes)', fetch_timeout_secs: 'Fetch time limit (seconds)',
+    fetch_redirects: 'Redirects followed', tool_call_timeout_secs: 'Tool call time limit (seconds)', one_time_id_window_secs: 'Approval lifetime (seconds)',
+    search_results: 'Results per search', remembered_urls: 'Result links remembered per task', tool_result_max_bytes: 'Largest tool result (bytes)',
+  };
+  const SEARXNG_STATES = {
+    ok: ['ok', 'Answering'], down: ['warning', 'Down'], no_search_yet: ['ok', 'No search yet'], unknown: ['warning', 'Not known'],
+  };
+  async function saveLimits(body, text) {
+    pageError('');
+    try { await api('PUT', '/api/admin/v1/limits', body); ui.toast(text); } catch (ex) { pageError(ex.message); }
+    liveSearch.refresh({ force: true });
+  }
+  function limitRow(l) {
+    const input = ui.el('input', { type: 'number', min: String(l.min), max: String(l.max), value: String(l.value), 'aria-label': LIMIT_LABELS[l.name] || l.name });
+    const save = ui.el('button', { type: 'button', class: 'btn btn-secondary btn-s', text: 'Save', 'aria-label': 'Save ' + (LIMIT_LABELS[l.name] || l.name) });
+    const reset = ui.el('button', { type: 'button', class: 'btn btn-quiet btn-s', text: 'Reset', 'aria-label': 'Reset ' + (LIMIT_LABELS[l.name] || l.name) + ' to its default', disabled: l.value === l.default });
+    save.addEventListener('click', () => saveLimits({ [l.name]: Number(input.value) }, 'Limit saved.'));
+    reset.addEventListener('click', () => saveLimits({ [l.name]: null }, 'Limit reset to its default.'));
+    return ui.el('tr', { 'data-limit': l.name },
+      ui.el('td', { text: LIMIT_LABELS[l.name] || l.name }), ui.el('td', null, input),
+      ui.el('td', { class: 'num', text: l.default.toLocaleString() }), ui.el('td', { text: l.min.toLocaleString() + ' to ' + l.max.toLocaleString() }),
+      ui.el('td', { class: 'actions' }, save, reset));
+  }
+  const liveSearch = ui.live(() => Promise.all([
+    api('GET', '/api/admin/v1/mcp/status'), api('GET', '/api/admin/v1/limits'), api('GET', '/api/admin/v1/settings'), api('GET', '/api/admin/v1/roles'),
+  ]), {
+    every: 'STATUS_EVERY_SECS',
+    when: appShownNow,
+    render([st, limits, settings, roles], ctx) {
+      const banner = $('search-banner');
+      banner.textContent = '';
+      if (!st.online) banner.appendChild(ui.notice('warning', 'The MCP front does not answer, so web search cannot work.', st.error || ''));
+      $('search-on').checked = settings.quick_search_enabled !== false;
+      $('search-pins').textContent = ['search.query', 'search.writer'].map((r) => {
+        const row = roles.find((x) => x.role === r);
+        return (r === 'search.query' ? 'writes the query: ' : 'writes the answer: ') + (row && row.pin ? row.pin.model : 'the default model');
+      }).join(' · ') + '.';
+      for (const [id, rows] of [['search-limits-quick', limits.quick_search], ['search-limits-mcp', limits.mcp]]) {
+        ui.rows($(id), rows, limitRow, { key: (l) => l.name, sig: (l) => l.value + '|' + l.default, force: ctx.force });
+      }
+      const [kind, word] = SEARXNG_STATES[st.searxng.state] || SEARXNG_STATES.unknown;
+      $('search-searxng-state').replaceChildren(ui.status(kind, word));
+      const last = $('search-searxng-last');
+      last.textContent = st.searxng.last_at == null ? 'The front has not made a search since it started.' : 'Last search ' + (st.searxng.outcome === 'ok' ? 'worked' : 'failed (' + st.searxng.outcome + ')') + ' · ';
+      if (st.searxng.last_at != null) last.appendChild(ui.time(st.searxng.last_at));
+      ui.rows($('search-engines'), K.SEARXNG_ENGINES, ([e, h]) => ui.el('tr', null, ui.el('td', { text: e }), ui.el('td', { text: h })), { key: ([e]) => e, force: ctx.force });
+    },
+    onError: pageFailed,
+  });
+  on('search-on', 'change', async () => {
+    pageError('');
+    try { await api('PUT', '/api/admin/v1/settings', { quick_search_enabled: $('search-on').checked }); ui.toast($('search-on').checked ? 'Quick search is on.' : 'Quick search is off.'); } catch (ex) { pageError(ex.message); }
+    liveSearch.refresh({ force: true });
+  });
+  async function loadUsage() {
+    const u = await api('GET', '/api/admin/v1/usage/roles');
+    $('search-usage-note').textContent = 'The last ' + u.days + ' days, from ' + u.traces_read + ' conversation(s)' + (u.truncated ? '; only the newest are counted, so older days may be incomplete.' : '.');
+    const n = (v) => ui.el('td', { class: 'num', text: Number(v).toLocaleString() });
+    ui.rows($('search-usage-days'), u.per_day, (d) => ui.el('tr', null, ui.el('td', { text: d.day }), n(d.searches), n(d.fetches), n(d.refusals)),
+      { key: (d) => d.day, force: true, empty: 'No search in these days.' });
+    ui.rows($('search-usage-roles'), u.roles, (r) => ui.el('tr', null, ui.el('td', { text: r.day }), ui.el('td', { text: r.role === 'search.query' ? 'Write the query' : 'Write the answer' }),
+      n(r.turns), n(r.tokens_in), n(r.tokens_out), ui.el('td', { class: 'num', text: r.cost == null ? 'Unknown' : r.cost.toFixed(4) })),
+      { key: (r) => r.day + '|' + r.role, force: true, empty: 'No model use in these days.' });
+  }
+  function loadSearch() { return Promise.all([liveSearch.start(), loadUsage()]); }
   // ------------------------------------------------------------------ Egress page
   // Hosts, notes and errors come from outside: text only.
   const DENIED_REASONS = {

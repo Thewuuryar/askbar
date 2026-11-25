@@ -120,6 +120,7 @@ page!(Providers, providers, "providers", "providers.html", "Providers");
 page!(People, people, "people", "people.html", "People & clients");
 page!(Mcp, mcp, "mcp", "mcp.html", "MCP");
 page!(Egress, egress, "egress", "egress.html", "Egress");
+page!(Search, search, "search", "search.html", "Search");
 page!(Services, services, "services", "services.html", "Services");
 page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
@@ -140,6 +141,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "people", label: "People & clients", group: Group::Settings, icon: "people", lede: "Who can use Askbar, and the phones and computers paired to them.", render: people },
     Page { slug: "mcp", label: "MCP", group: Group::Settings, icon: "cube", lede: "Who may use Search and Fetch, the MCP front's state, its approval key, and where Search and Fetch may connect.", render: mcp },
     Page { slug: "egress", label: "Egress", group: Group::Settings, icon: "globe", lede: "Where Askbar may connect on the internet and your network, what the egress proxy refused, and your approvals for private addresses.", render: egress },
+    Page { slug: "search", label: "Search", group: Group::Settings, icon: "globe", lede: "Quick search: whether it is on, its engines and limits, the models it uses, and what it has used.", render: search },
     Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", lede: "Restart a part of Askbar.", render: services },
     Page { slug: "network", label: "Network", group: Group::Settings, icon: "globe", lede: "The host name, its certificate, and which addresses may open this site.", render: network },
     Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", lede: "How you sign in to this admin, its keys, how long audit records are kept and sealed content stays open, and the kill switch.", render: security },

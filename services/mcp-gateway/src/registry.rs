@@ -47,7 +47,7 @@ impl std::ops::Deref for ToolCall {
 pub type Handler = Box<dyn Fn(ToolCall) -> Pin<Box<dyn Future<Output = Outcome> + Send>> + Send + Sync>;
 
 /// A tool: the schema of its arguments (listed by `GET /tools`) and its handler.
-pub struct Registry(HashMap<&'static str, (Value, Handler)>);
+pub struct Registry(HashMap<&'static str, (Value, Handler)>, Arc<search::Remembered>);
 
 impl Registry {
     /// The built-in tools. `search` goes to `searxng_addr` (`tool_not_available` without one); `fetch` goes through
@@ -58,12 +58,14 @@ impl Registry {
         let store = Arc::<search::Remembered>::default(); // `fetch` reads what `search` remembers
         let proxy = std::env::var("ASKBAR_EGRESS_PROXY_URL").ok().map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
         let fetch = fetch::handler_for(fetch::client(proxy.as_deref()), store.clone());
-        Registry::new([("search", query, search::handler_for(searxng_addr, store)), ("fetch", url, fetch)])
+        let mut r = Registry::new([("search", query, search::handler_for(searxng_addr, store.clone())), ("fetch", url, fetch)]);
+        r.1 = store;
+        r
     }
 
     /// A registry of the given handlers (the tests register their own).
     pub fn new(handlers: impl IntoIterator<Item = (&'static str, Value, Handler)>) -> Registry {
-        Registry(handlers.into_iter().map(|(n, s, h)| (n, (s, h))).collect())
+        Registry(handlers.into_iter().map(|(n, s, h)| (n, (s, h))).collect(), Default::default())
     }
 
     pub fn get(&self, tool: &str) -> Option<&Handler> {
@@ -72,6 +74,11 @@ impl Registry {
 
     pub fn schema(&self, tool: &str) -> Option<&Value> {
         self.0.get(tool).map(|t| &t.0)
+    }
+
+    /// How the last search to `searxng` went, if the built-in `search` ran.
+    pub fn last_search(&self) -> Option<crate::status::LastSearch> {
+        self.1.last_search()
     }
 
     pub fn has(&self, tool: &str) -> bool {

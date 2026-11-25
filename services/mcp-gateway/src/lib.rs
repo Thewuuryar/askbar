@@ -119,7 +119,12 @@ impl Gateway {
 
     pub fn status(&self) -> Status {
         let calls = self.calls.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, v)| (k.to_string(), *v)).collect();
-        Status { config_version: self.applied().map(|c| c.version()), boot_id: self.boot_id.as_str().to_string(), calls }
+        Status {
+            config_version: self.applied().map(|c| c.version()),
+            boot_id: self.boot_id.as_str().to_string(),
+            calls,
+            last_search: self.registry.last_search(),
+        }
     }
 }
 

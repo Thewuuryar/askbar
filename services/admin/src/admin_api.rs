@@ -863,7 +863,7 @@ async fn audit_read(
 }
 
 /// The providers as they are now, for prices: read per request, so a corrected price changes every figure at once.
-async fn price_of(state: &AdminState) -> Result<impl Fn(&str) -> Option<crate::cost::Prices>, Failure> {
+pub(crate) async fn price_of(state: &AdminState) -> Result<impl Fn(&str) -> Option<crate::cost::Prices>, Failure> {
     let providers = {
         let db = state.db.lock().await;
         build_snapshot(db.conn()).map_err(internal)?.providers

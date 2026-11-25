@@ -1568,7 +1568,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [online, error, configured, pushed_version, reported_version, calls, approval_key]
+                required: [online, error, configured, pushed_version, reported_version, calls, approval_key, searxng]
                 properties:
                   online:
                     type: boolean
@@ -1592,8 +1592,74 @@ paths:
                         type: string
                       version:
                         type: integer
+                  searxng:
+                    type: object
+                    description: "How searxng answered the front's last search (the admin cannot reach searxng itself): `no_search_yet`, `ok`, `down` (the last search failed) or `unknown` (the front does not answer). The time (unix seconds) and an outcome word (`ok` or an error code) only, never the query."
+                    required: [state, last_at, outcome]
+                    properties:
+                      state:
+                        type: string
+                        enum: [no_search_yet, ok, down, unknown]
+                      last_at:
+                        type: [integer, 'null']
+                      outcome:
+                        type: [string, 'null']
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /api/admin/v1/usage/roles:
+    get:
+      operationId: getUsageRoles
+      summary: What quick search used per day, and its two model jobs' tokens and cost.
+      description: "Searches, fetches and refusals per day, and per day and job (`search.query`, `search.writer`) the turns, tokens and cost. Read from the auditor like the Audit pages: the newest 200 traces and their spans, so a busy install may show older days incomplete (`truncated`). Cost is priced from the admin's prices and is null when one is unknown. Counts only: no query, URL or page text. 503 when the auditor cannot be reached. Session only."
+      security:
+        - adminSession: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 30, default: 7}
+      responses:
+        '200':
+          description: The figures, newest day first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [days, traces_read, truncated, per_day, roles]
+                properties:
+                  days: {type: integer}
+                  traces_read: {type: integer}
+                  truncated: {type: boolean}
+                  per_day:
+                    type: array
+                    items:
+                      type: object
+                      required: [day, searches, fetches, refusals]
+                      properties:
+                        day: {type: string, description: 'YYYY-MM-DD, UTC.'}
+                        searches: {type: integer}
+                        fetches: {type: integer}
+                        refusals: {type: integer}
+                  roles:
+                    type: array
+                    items:
+                      type: object
+                      required: [day, role, turns, tokens_in, tokens_out, tokens_cached, cost, cost_unknown_turns]
+                      properties:
+                        day: {type: string}
+                        role: {type: string, enum: [search.query, search.writer]}
+                        turns: {type: integer}
+                        tokens_in: {type: integer}
+                        tokens_out: {type: integer}
+                        tokens_cached: {type: integer}
+                        cost: {type: [number, 'null']}
+                        cost_unknown_turns: {type: integer}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
   /api/admin/v1/mcp/approval-key/rotate:
     post:
       operationId: rotateMcpApprovalKey
