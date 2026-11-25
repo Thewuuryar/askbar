@@ -845,8 +845,9 @@ def up(h, p):
 print("proxy", up("egress-fetch-host", 3128), "front", up(os.environ["X_IP"], 8087))' 2>/dev/null | tail -1)
   [ "$got" = "proxy 1 front 0" ] && pass "on egress-fetch the proxy answers and the front does not" || fail "on egress-fetch: '$got'"
   [ "$(http "$EDGE" "http://$MG_SRV_IP:8087/api/mcp-gateway/v1/health" GET)" = 0 ] && pass "a container on edge cannot reach the front" || fail "the front is reachable from edge"
-  # No route to the server's API (8082, or the client API on 8080) or the admin's (8084), though the front shares a network with each.
-  for t in server/8082 server/8080 admin/8084; do
+  # No route to the server's API (8082) or the admin's (8084), though the front shares a network with each. The server's client API
+  # (8080) is not listed: it listens on every network the server joins, as it does for model-gateway, and wants a user token.
+  for t in server/8082 admin/8084; do
     docker exec "$MCPG" bash -c "exec 3<>/dev/tcp/$t" >/dev/null 2>&1 && fail "the front reaches ${t%/*} on ${t#*/}" || pass "the front cannot reach ${t%/*} on ${t#*/}"
   done
   docker exec "$MCPG" bash -c 'exec 3<>/dev/tcp/auditor-mcp-gateway-host/8083' >/dev/null 2>&1 && pass "the front reaches the auditor on audit-mcp-gateway" || fail "the front cannot reach the auditor"
