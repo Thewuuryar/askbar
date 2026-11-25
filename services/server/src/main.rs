@@ -125,6 +125,13 @@ async fn main() {
             Err(e) => die(format!("could not clean up generations in space {}: {e}", space.id), 1),
         }
     }
+    for space in &opened {
+        match askbar_server::tasks::mark_running_interrupted(&space.lock()) {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!(space = %space.id, tasks = n, "marked tasks from the previous run as interrupted"),
+            Err(e) => die(format!("could not clean up tasks in space {}: {e}", space.id), 1),
+        }
+    }
     // Records go to the auditor and replies come from the gateway, each over its own link (ADR 0010, ADR 0054). The
     // auditor ends the spans an earlier process left running when this one says its boot ID.
     let token_dir = std::env::var("ASKBAR_SERVER_TOKEN_DIR")
