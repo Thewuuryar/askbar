@@ -426,7 +426,7 @@ paths:
         required: true
         schema:
           type: string
-          enum: [server, model-gateway, alerter, admin, caddy, cpa]
+          enum: [server, model-gateway, alerter, egress-proxy, admin, caddy, cpa]
     post:
       operationId: restartService
       summary: Restart a service, without a controller (ADR 0005).
@@ -437,14 +437,14 @@ paths:
         server's 30-second cooldown after it starts is passed on as 429. `model-gateway` (ADR 0054): asks its
         `POST /restart`, waits for a new boot ID, then pushes its configuration, provider keys included, since they
         were in the memory that went; its cooldown is passed on the same way. `alerter` (ADR 0055): the same, and the
-        delivery settings are pushed again. `admin`: answers 202 and exits; this page
+        delivery settings are pushed again. `egress-proxy`: the same, and the allowlists are pushed again. `admin`: answers 202 and exits; this page
         reconnects when Docker has started it again. `caddy`: pushes its configuration again, which Caddy applies
         live. `cpa`: asks its supervisor (ADR 0037) and waits for CLIProxyAPI to answer again, at most a minute.
       security:
         - adminSession: []
       responses:
         '200':
-          description: The service after the restart (server, model-gateway, alerter, caddy, cpa).
+          description: The service after the restart (server, model-gateway, alerter, egress-proxy, caddy, cpa).
           content:
             application/json:
               schema:
@@ -1504,12 +1504,19 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [online, error, sources]
+                required: [online, error, configured, version, open_tunnels, sources]
                 properties:
                   online:
                     type: boolean
                   error:
                     type: [string, 'null']
+                  configured:
+                    type: boolean
+                  version:
+                    type: [integer, 'null']
+                    description: The version of the config the proxy runs, null until the first push.
+                  open_tunnels:
+                    type: integer
                   sources:
                     type: object
                     additionalProperties:
@@ -1520,8 +1527,12 @@ paths:
                           type: array
                           items:
                             type: object
-                            required: [host, port, plain_http, allow_private, relay, any_public]
+                            required: [host, port, plain_http, allow_private, relay, any_public, origin]
                             properties:
+                              origin:
+                                type: string
+                                enum: [provider, alerts, cpa_hosts, searxng_hosts, fetch_rule, approval]
+                                description: Where the entry comes from, as the admin derives it (an approval that only lifts the private ban on a derived entry keeps that entry's origin).
                               host:
                                 type: string
                               port:
@@ -2254,7 +2265,7 @@ components:
       properties:
         name:
           type: string
-          enum: [server, model-gateway, alerter, admin, caddy, cpa]
+          enum: [server, model-gateway, alerter, egress-proxy, admin, caddy, cpa]
         state:
           type: string
           description: Whether it answers (`running`), does not (`unreachable`), or is restarting itself (`restarting`, the admin only).

@@ -82,7 +82,7 @@ async function runViewport(viewport) {
   // The egress proxy (ADR 0056): the Services page lists what it refuses.
   const egressBin = path.join(ROOT, 'target/debug/askbar-egress-proxy');
   if (!fs.existsSync(egressBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-egress-proxy'], { cwd: ROOT, stdio: 'inherit' });
-  const [egressAdminPort, egressSourcePort] = [await freePort(), await freePort()];
+  const [egressAdminPort, egressSourcePort, egressAlerterPort, egressCpaPort] = [await freePort(), await freePort(), await freePort(), await freePort()];
   const [alerterAuditorPort, alerterAdminPort, ntfyPort, smtpPort, smtpSeenPort, releasesPort] = [await freePort(), await freePort(), await freePort(), await freePort(), await freePort(), await freePort()];
   const auditorBin = path.join(ROOT, 'target/debug/askbar-auditor');
   if (!fs.existsSync(auditorBin)) execFileSync('cargo', ['build', '-q', '-p', 'askbar-auditor'], { cwd: ROOT, stdio: 'inherit' });
@@ -124,7 +124,7 @@ async function runViewport(viewport) {
   });
   run(egressBin, [], {
     ASKBAR_EGRESS_PROXY_TOKEN_DIR: path.join(dirs.creds, 'egress-proxy-token'), ASKBAR_EGRESS_PROXY_ADMIN_ADDR: '127.0.0.1:' + egressAdminPort,
-    ASKBAR_EGRESS_PROXY_SOURCES: 'model-gateway=127.0.0.1:' + egressSourcePort, ASKBAR_EGRESS_PROXY_RELAYS: '',
+    ASKBAR_EGRESS_PROXY_SOURCES: 'model-gateway=127.0.0.1:' + egressSourcePort + ',alerter=127.0.0.1:' + egressAlerterPort + ',cpa=127.0.0.1:' + egressCpaPort, ASKBAR_EGRESS_PROXY_RELAYS: '',
   });
   run(gatewayBin, [], {
     ASKBAR_GATEWAY_SERVER_ADDR: '127.0.0.1:' + gatewayServerPort, ASKBAR_GATEWAY_ADMIN_ADDR: '127.0.0.1:' + gatewayAdminPort,
@@ -1057,8 +1057,8 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.click('#provider-cancel');
     await panelClosed();
   });
-  await step('Services: a refused outbound request is listed as text, and a proxy that does not answer is not an empty list', async () => {
-    await openPage('services');
+  await step('Egress: a refused outbound request is listed as text, and a proxy that does not answer is not an empty list', async () => {
+    await openPage('egress');
     await page.waitForSelector('#denied .empty-row');
     // A request from a source for a host that is not on its list (a CONNECT, as a client sends it).
     await new Promise((resolve) => {
@@ -1081,13 +1081,38 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.isVisible('#denied-table'), false, 'no empty list in place of the warning');
     await page.unroute('**/api/admin/v1/egress/denied');
   });
-  await step('Services: the six services show whether they answer, and Restart asks first and then acts', async () => {
+  await step('Egress: an approval is added and removed from the page, and the allowlist says where each entry comes from', async () => {
+    await openPage('egress');
+    await page.waitForSelector('#approvals .empty-row');
+    await page.waitForSelector('#egress-allow tr');
+    assert.match(await page.innerText('#egress-allow'), /A provider URL/, 'the mock provider is an entry of model-gateway');
+    assert.match(await page.innerText('#egress-summary'), /^Configured · version \d+ · \d+ open tunnel/);
+    await page.click('#approval-add');
+    await page.fill('#a-host', 'bad host');
+    await page.click('#approval-form button[type=submit]');
+    await page.waitForFunction(() => document.querySelector('#approval-add-error') && !document.querySelector('#approval-add-error').hidden && /host is not valid/.test(document.querySelector('#approval-add-error').textContent));
+    await page.fill('#a-host', 'lan-e2e.example');
+    await page.fill('#a-port', '8099');
+    await page.check('#a-plain');
+    await page.fill('#a-note', '<b>lan</b>');
+    await page.click('#approval-form button[type=submit]');
+    await page.waitForSelector('#approvals tr[data-key^="model-gateway|lan-e2e.example|8099|"]');
+    assert.deepEqual(await page.$$eval('#approvals tr[data-key] td', (c) => c.slice(0, 5).map((x) => x.textContent)), ['model-gateway', 'lan-e2e.example', '8099', 'Yes', '<b>lan</b>']);
+    assert.equal(await page.locator('#approvals b').count(), 0, 'a note is never markup');
+    await page.waitForFunction(() => /lan-e2e\.example:8099 \(plain HTTP\) \(private addresses allowed\)\s+An approval/.test(document.querySelector('#egress-allow').innerText));
+    await page.click('#approvals tr[data-key] [data-action="remove"]');
+    await page.waitForSelector('#approvals .row-confirm-row');
+    await page.click('#approvals .row-confirm-row [data-row-action]');
+    await page.waitForSelector('#approvals .empty-row');
+    await page.waitForFunction(() => !/lan-e2e/.test(document.querySelector('#egress-allow').innerText));
+  });
+  await step('Services: the seven services show whether they answer, and Restart asks first and then acts', async () => {
     // No controller (ADR 0005): each state comes from the service. Here the server, the gateway and the admin run;
     // Caddy and CLIProxyAPI do not.
     await openPage('services');
     await page.waitForSelector('#services tr[data-name="cpa"]');
     assert.equal(await page.locator('#cpa-panel, #cpa-accounts, #cpa-connect-anthropic').count(), 0, 'the Claude and ChatGPT accounts moved to Providers');
-    assert.deepEqual(await page.$$eval('#services tr[data-name]', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'admin', 'caddy', 'cpa']);
+    assert.deepEqual(await page.$$eval('#services tr[data-name]', (c) => c.map((x) => x.dataset.name)), ['server', 'model-gateway', 'alerter', 'egress-proxy', 'admin', 'caddy', 'cpa']);
     assert.equal(await page.locator('#services-recent').count(), 0, 'there is no list of recent restarts');
     // Every visible cell has a visible header over it, and a service name never breaks mid-word.
     const misaligned = await page.evaluate(() => {
@@ -4424,7 +4449,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'mcp', 'egress', 'services', 'network', 'security', 'backup', 'notifications', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -4573,7 +4598,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       }
       assert.deepEqual(opens.map((o) => o.href), p.settings.map((s) => '/admin/' + s + '/'), p.id + ': one button for each admin page it documents');
       // A settings page reads "Open Network settings"; Home, Alerts and the Audit pages read "Open Home".
-      const settingsSlugs = ['general', 'providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications'];
+      const settingsSlugs = ['general', 'providers', 'people', 'mcp', 'egress', 'services', 'network', 'security', 'backup', 'notifications'];
       for (const o of opens) assert.match(o.text, settingsSlugs.includes(o.href.split('/')[2]) ? /^Open .+ settings$/ : /^Open (?!.* settings$).+$/, p.id);
       // Each target is on the admin page: visit it and look for the element.
       const bySlug = {};
@@ -4762,7 +4787,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     };
     // Every settings page: its title has a ? and each topic of the page has one, named "Help: <title>", with the same tooltip,
     // a target big enough, and the topic's text on the page already (a <template>, so nothing has to be fetched).
-    for (const slug of ['providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications', 'general']) {
+    for (const slug of ['providers', 'people', 'mcp', 'egress', 'services', 'network', 'security', 'backup', 'notifications', 'general']) {
       await page.goto(base + slug + '/');
       await page.waitForSelector('#app:not([hidden])');
       const info = await page.evaluate(() => ({
@@ -4970,7 +4995,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await heading.getAttribute('href'), '/admin/general/', 'the heading links to General');
     assert.equal(await heading.getAttribute('aria-current'), null, 'the heading is never current');
     const subs = await page.evaluate(() => [...document.querySelector('#nav a.sm-parent').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
-    assert.deepEqual(subs, ['general', 'providers', 'people', 'mcp', 'services', 'network', 'security', 'backup', 'notifications']);
+    assert.deepEqual(subs, ['general', 'providers', 'people', 'mcp', 'egress', 'services', 'network', 'security', 'backup', 'notifications']);
     await openMenu();
     await Promise.all([page.waitForURL('**/admin/general/'), page.locator('#nav a.sm-parent').click()]);
     await page.waitForSelector('#app:not([hidden])');
@@ -5607,7 +5632,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('one primary action per view: every page at rest and with its save bar showing, and the destructive buttons carry the danger style', async () => {
     const K = await page.evaluate(() => window.ui.ready);
     // The expected count of page-level primaries at rest, by page. A page with no natural primary action has none.
-    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, mcp: 0, services: 0, network: 0, security: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
+    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, mcp: 0, egress: 0, services: 0, network: 0, security: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
     assert.deepEqual(Object.keys(EXPECT).filter((k) => k !== 'reference/settings/network').sort(), [...K.PAGE_SLUGS].sort(), 'the map covers every page');
     const measure = () => page.evaluate(() => {
       const probe = document.createElement('div');

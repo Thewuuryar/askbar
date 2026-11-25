@@ -16,17 +16,5 @@
         </table>
       </div>
     </section>
-    <section id="denied-section" aria-labelledby="denied-title">
-      <div class="sect-head">
-        {% call c::section_title("denied-title", "Blocked outbound requests", "settings/services#blocked-outbound-requests") %}{% endcall %}
-      </div>
-      <p id="denied-note" class="hint" role="status" hidden></p>
-      <div class="table-wrap">
-        <table class="table" id="denied-table">
-          <caption class="visually-hidden">Blocked outbound requests</caption>
-          <thead><tr><th scope="col">When</th><th scope="col">Source</th><th scope="col">Host</th><th scope="col">Port</th><th scope="col">Reason</th></tr></thead>
-          <tbody id="denied"></tbody>
-        </table>
-      </div>
-    </section>
+    <p class="hint">Refused outbound requests are listed on the <a href="/admin/egress/">Egress</a> page.</p>
 {% endblock %}

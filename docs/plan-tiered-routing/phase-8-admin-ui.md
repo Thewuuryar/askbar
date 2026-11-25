@@ -24,7 +24,7 @@ Track 1 runs P8.6a, P8.6c to P8.6f, P8.8a and P8.9a as stage W6 of [plan-priorit
   - **Approval key:** show the key's fingerprint and version. Add `POST /api/admin/v1/mcp/approval-key/rotate`. It is session-only and needs a sign-in within 10 minutes, as backup key rotation does. It calls `approval_key::rotate` and pushes the new public key to the front and to `model-gateway` at once.
   - **Egress status:** a new session-only `GET /api/admin/v1/egress/status` returns, per source, the entries the admin pushed and the proxy's allowed and denied counts from its last `/status`. The MCP page shows the `searxng` and `fetch` rows from it.
   Accept: admin tests against a fake front and a fake proxy cover status, rotation (the new key is pushed; a call signed with the old key is refused by the fake front after the push) and the egress rows; an API key gets 401 on the session-only routes; no key material in any response or log; OpenAPI test passes.
-- [ ] **P8.6c** `feat(admin): add the egress page` · sonnet · after P8.6a, P4.4a, P4.4b
+- [x] **P8.6c** `feat(admin): add the egress page` · sonnet · after P8.6a, P4.4a, P4.4b
   Files: a new `egress.html` template, `services/admin/src/ui/*.js`, `services/admin/src/{egress_link,services,routes}.rs`, `docs/openapi/admin.v1.yaml`, `services/admin/tests/{egress,services,openapi}.rs`, `docs/reference/settings/services.md`.
   Do:
   - **Approvals:** the page P4.4a deferred to this phase. List, add and remove private destinations (source, host, port, plain HTTP, note) over the existing `/egress/approvals` routes.

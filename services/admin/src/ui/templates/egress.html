@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block content %}
+    <section id="egress-status-section" aria-labelledby="egress-status-title">
+      <div class="sect-head">
+        {% call c::section_title("egress-status-title", "Status", "settings/egress#status") %}{% endcall %}
+        <span class="spacer"></span>
+        <span id="egress-state"></span>
+      </div>
+      <p id="egress-note" class="hint" role="status" hidden></p>
+      <p class="hint" id="egress-summary"></p>
+      <p class="hint">To restart the egress proxy, use Restart on the <a href="/admin/services/">Services</a> page.</p>
+      <div class="table-wrap">
+        <table class="table" id="egress-counts-table">
+          <caption class="visually-hidden">Requests by source</caption>
+          {% call c::table_head(["Source", ">Allowed", ">Denied"]) %}{% endcall %}
+          <tbody id="egress-counts"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="egress-allow-section" aria-labelledby="egress-allow-title">
+      <div class="sect-head">
+        {% call c::section_title("egress-allow-title", "Allowlist", "settings/egress#allowlist") %}{% endcall %}
+      </div>
+      <p class="hint">What each source may reach. The admin works these out from your settings; nothing is typed here. The last column says where each one comes from.</p>
+      <div class="table-wrap">
+        <table class="table" id="egress-allow-table">
+          <caption class="visually-hidden">Allowlist</caption>
+          {% call c::table_head(["Source", "Destination", "Comes from"]) %}{% endcall %}
+          <tbody id="egress-allow"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="egress-approvals-section" aria-labelledby="egress-approvals-title">
+      <div class="sect-head">
+        {% call c::section_title("egress-approvals-title", "Approvals", "settings/egress#approvals") %}{% endcall %}
+        <span class="spacer"></span>
+        <button type="button" id="approval-add" class="btn btn-secondary">Add approval</button>
+      </div>
+      <p class="hint">A private destination (a server on your own network) is refused until you approve it for a source.</p>
+      {% call b::error_line("approval-error") %}{% endcall %}
+      <div class="table-wrap">
+        <table class="table" id="approvals-table">
+          <caption class="visually-hidden">Approvals</caption>
+          {% call c::table_head(["Source", "Host", ">Port", "Plain HTTP", "Note", ""]) %}{% endcall %}
+          <tbody id="approvals"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="denied-section" aria-labelledby="denied-title">
+      <div class="sect-head">
+        {% call c::section_title("denied-title", "Blocked outbound requests", "settings/egress#blocked-outbound-requests") %}{% endcall %}
+      </div>
+      <p id="denied-note" class="hint" role="status" hidden></p>
+      <div class="table-wrap">
+        <table class="table" id="denied-table">
+          <caption class="visually-hidden">Blocked outbound requests</caption>
+          <thead><tr><th scope="col">When</th><th scope="col">Source</th><th scope="col">Host</th><th scope="col">Port</th><th scope="col">Reason</th></tr></thead>
+          <tbody id="denied"></tbody>
+        </table>
+      </div>
+    </section>
+    {% call c::dialog_box("approval-box", "Add approval") %}
+      <form id="approval-form" novalidate>
+        {% call c::field("Source", "a-source", "", "slot", false) %}<select id="a-source" name="a-source" aria-describedby="a-source-error"><option value="model-gateway">model-gateway</option><option value="alerter">alerter</option><option value="cpa">cpa</option></select>{% endcall %}
+        {% call c::field("Host", "a-host", "A name or an IP address, with no port.", "text", false) %}{% endcall %}
+        {% call c::field("Port", "a-port", "", "number", false) %}{% endcall %}
+        <div class="field"><label class="check" for="a-plain"><input type="checkbox" id="a-plain" name="a-plain"> Plain HTTP (no encryption)</label></div>
+        {% call c::field("Note", "a-note", "", "text", true) %}{% endcall %}
+        {% call b::error_line("approval-add-error") %}{% endcall %}
+        <div class="actions">
+          <button type="button" id="approval-cancel" class="btn btn-secondary">Cancel</button>
+          {% call c::button("Approve", "submit", "", "") %}{% endcall %}
+        </div>
+      </form>
+    {% endcall %}
+{% endblock %}
