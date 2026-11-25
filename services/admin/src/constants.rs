@@ -197,6 +197,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/egress#approvals",
     "settings/egress#blocked-outbound-requests",
     "settings/search#quick-search",
+    "settings/search#research",
     "settings/search#search-engine",
     "settings/search#mcp-limits",
     "settings/search#usage",

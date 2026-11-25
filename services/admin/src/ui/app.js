@@ -1219,11 +1219,15 @@
     max_queries: 'Searches per question', max_query_chars: 'Characters per search', max_pages: 'Pages read per question',
     searches_per_user_hour: 'Searches per person per hour', fetch_max_bytes: 'Largest page (bytes)', fetch_timeout_secs: 'Fetch time limit (seconds)',
     fetch_redirects: 'Redirects followed', tool_call_timeout_secs: 'Tool call time limit (seconds)', one_time_id_window_secs: 'Approval lifetime (seconds)',
+    tool_calls: 'Tool calls per task', token_cap: 'Tokens per task', researchers_max: 'Researchers per task', wait_after_two_secs: 'Wait for the rest after two finish (seconds)',
+    stage_secs: 'Research time limit (seconds)', summary_tokens: 'Tokens per researcher summary',
     search_results: 'Results per search', remembered_urls: 'Result links remembered per task', tool_result_max_bytes: 'Largest tool result (bytes)',
   };
   const SEARXNG_STATES = {
     ok: ['ok', 'Answering'], down: ['warning', 'Down'], no_search_yet: ['ok', 'No search yet'], unknown: ['warning', 'Not known'],
   };
+  const RESEARCH_PINS = [['research.researcher', 'researchers'], ['research.writer', 'writes the report'], ['judge.review', 'judge']];
+  const ROLE_LABELS = { 'search.query': 'Write the query', 'search.writer': 'Write the answer', 'research.researcher': 'Research: researcher', 'research.writer': 'Research: write the report', 'judge.review': 'Research: judge' };
   async function saveLimits(body, text) {
     pageError('');
     try { await api('PUT', '/api/admin/v1/limits', body); ui.toast(text); } catch (ex) { pageError(ex.message); }
@@ -1250,11 +1254,16 @@
       banner.textContent = '';
       if (!st.online) banner.appendChild(ui.notice('warning', 'The MCP front does not answer, so web search cannot work.', st.error || ''));
       $('search-on').checked = settings.quick_search_enabled !== false;
+      $('research-on').checked = settings.research_enabled !== false;
+      $('research-pins').textContent = RESEARCH_PINS.map(([r, what]) => {
+        const row = roles.find((x) => x.role === r);
+        return what + ': ' + (row && row.pin ? row.pin.model : 'not pinned');
+      }).join(' · ') + '.';
       $('search-pins').textContent = ['search.query', 'search.writer'].map((r) => {
         const row = roles.find((x) => x.role === r);
         return (r === 'search.query' ? 'writes the query: ' : 'writes the answer: ') + (row && row.pin ? row.pin.model : 'the default model');
       }).join(' · ') + '.';
-      for (const [id, rows] of [['search-limits-quick', limits.quick_search], ['search-limits-mcp', limits.mcp]]) {
+      for (const [id, rows] of [['search-limits-quick', limits.quick_search], ['search-limits-research', limits.research], ['search-limits-mcp', limits.mcp]]) {
         ui.rows($(id), rows, limitRow, { key: (l) => l.name, sig: (l) => l.value + '|' + l.default, force: ctx.force });
       }
       const [kind, word] = SEARXNG_STATES[st.searxng.state] || SEARXNG_STATES.unknown;
@@ -1266,23 +1275,25 @@
     },
     onError: pageFailed,
   });
-  on('search-on', 'change', async () => {
-    pageError('');
-    // PUT /settings takes the whole object (a field left out keeps its value, but the prompt and display are required): read it, change the one.
-    try {
-      const on = $('search-on').checked;
-      await api('PUT', '/api/admin/v1/settings', { ...(await api('GET', '/api/admin/v1/settings')), quick_search_enabled: on });
-      ui.toast(on ? 'Quick search is on.' : 'Quick search is off.');
-    } catch (ex) { pageError(ex.message); }
-    liveSearch.refresh({ force: true });
-  });
+  for (const [id, field, what] of [['search-on', 'quick_search_enabled', 'Quick search'], ['research-on', 'research_enabled', 'Research']]) {
+    on(id, 'change', async () => {
+      pageError('');
+      // PUT /settings takes the whole object (a field left out keeps its value, but the prompt and display are required): read it, change the one.
+      try {
+        const now = $(id).checked;
+        await api('PUT', '/api/admin/v1/settings', { ...(await api('GET', '/api/admin/v1/settings')), [field]: now });
+        ui.toast(what + (now ? ' is on.' : ' is off.'));
+      } catch (ex) { pageError(ex.message); }
+      liveSearch.refresh({ force: true });
+    });
+  }
   async function loadUsage() {
     const u = await api('GET', '/api/admin/v1/usage/roles');
     $('search-usage-note').textContent = 'The last ' + u.days + ' days, from ' + u.traces_read + ' conversation(s)' + (u.truncated ? '; only the newest are counted, so older days may be incomplete.' : '.');
     const n = (v) => ui.el('td', { class: 'num', text: Number(v).toLocaleString() });
     ui.rows($('search-usage-days'), u.per_day, (d) => ui.el('tr', null, ui.el('td', { text: d.day }), n(d.searches), n(d.fetches), n(d.refusals)),
       { key: (d) => d.day, force: true, empty: 'No search in these days.' });
-    ui.rows($('search-usage-roles'), u.roles, (r) => ui.el('tr', null, ui.el('td', { text: r.day }), ui.el('td', { text: r.role === 'search.query' ? 'Write the query' : 'Write the answer' }),
+    ui.rows($('search-usage-roles'), u.roles, (r) => ui.el('tr', null, ui.el('td', { text: r.day }), ui.el('td', { text: ROLE_LABELS[r.role] || r.role }),
       n(r.turns), n(r.tokens_in), n(r.tokens_out), ui.el('td', { class: 'num', text: r.cost == null ? 'Unknown' : r.cost.toFixed(4) })),
       { key: (r) => r.day + '|' + r.role, force: true, empty: 'No model use in these days.' });
   }
@@ -1621,7 +1632,7 @@
   }
 
   // ---- the model for each job (plan W4.2): one approved model pinned per role, saved a row at a time.
-  const ROLE_NAMES = { 'chat.manual': 'Chat', 'search.query': 'Search: write the query', 'search.writer': 'Search: write the answer' };
+  const ROLE_NAMES = { 'chat.manual': 'Chat', 'search.query': 'Search: write the query', 'search.writer': 'Search: write the answer', 'research.researcher': 'Research: researcher', 'research.writer': 'Research: write the report', 'judge.review': 'Research: judge' };
   let roleRows = [];
 
   async function loadRoles() {
