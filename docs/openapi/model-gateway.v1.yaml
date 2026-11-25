@@ -354,6 +354,8 @@ components:
           - approval_replayed
           - tool_not_available
           - tool_not_permitted
+          - tool_timeout
+          - tool_result_too_large
           - internal
     ModelsRequest:
       type: object

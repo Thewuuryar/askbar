@@ -1,5 +1,6 @@
 //! `POST /tools/{tool}/call`: the signed approval is checked first (a problem on any failure, ADR 0023, counted by
-//! outcome), then the user's permission for the tool, then the `tool` span is on record before anything runs (ADR 0010 rules 1 to 3).
+//! outcome), then the user's permission for the tool, then the `tool` span is on record before the registry's handler runs
+//! (ADR 0010 rules 1 to 3). The handler is bounded by the tool-call time limit; its result goes back marked untrusted.
 
 use crate::approval::At;
 use crate::permissions;
@@ -42,7 +43,7 @@ fn refusal(e: ApprovalError) -> (&'static str, ErrorCode) {
     }
 }
 
-pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body: Bytes) -> Result<Json<()>, ApiError> {
+pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body: Bytes) -> Result<Json<serde_json::Value>, ApiError> {
     let config = g.admit()?;
     let b: CallBody = serde_json::from_slice(&body)
         .map_err(|_| ApiError::new(ErrorCode::BadRequest, "The body is not a tool call: a missing or unknown field or a wrong type."))?;
@@ -62,6 +63,10 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
     if !permissions::holds(&config.permissions, &b.approval.user, &action.tool) {
         g.count("refused_permission");
         return Err(ApiError::new(ErrorCode::ToolNotPermitted, "The user does not hold this tool."));
+    }
+    if !g.registry.has(&action.tool) {
+        g.count("refused_tool_not_available");
+        return Err(ApiError::new(ErrorCode::ToolNotAvailable, "The tool is not available."));
     }
     // The span carries the approval's hash (which covers the arguments) and ID, never the
     // arguments, a URL or the signature; sealed arguments are not recorded.
@@ -92,11 +97,29 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         tracing::warn!(?why, "the tool span was not acknowledged; the call is refused");
         return Err(audit_down());
     }
-    // The tools are P5A.10 and P5A.11; until then the step is this stub.
     g.tool_runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    audit.finish(&id, finish("error", Some("tool_not_available")));
-    g.count("refused_tool_not_available");
-    Err(ApiError::new(ErrorCode::ToolNotAvailable, "The tool is not available yet."))
+    let run = (g.registry.get(&action.tool).expect("checked above"))(action);
+    let limit = std::time::Duration::from_secs(u64::from(config.tool_call_timeout_secs));
+    // Only the outcome goes to the span; the result is not recorded.
+    let (status, code, out) = match tokio::time::timeout(limit, run).await {
+        Ok(Ok(result)) if serde_json::to_vec(&result).map_or(usize::MAX, |v| v.len()) as u64 > config.tool_result_max_bytes => {
+            ("error", Some(ErrorCode::ToolResultTooLarge), Err(ErrorCode::ToolResultTooLarge))
+        }
+        Ok(Ok(result)) => ("ok", None, Ok(result)),
+        Ok(Err(code)) => ("error", Some(code), Err(code)),
+        Err(_) => ("timeout", Some(ErrorCode::ToolTimeout), Err(ErrorCode::ToolTimeout)),
+    };
+    audit.finish(&id, finish(status, code.map(ErrorCode::as_str)));
+    g.count(match (status, code) {
+        ("ok", _) => "tool_ok",
+        (_, Some(ErrorCode::ToolNotAvailable)) => "refused_tool_not_available",
+        ("timeout", _) => "tool_timeout",
+        _ => "tool_error",
+    });
+    match out {
+        Ok(result) => Ok(Json(serde_json::json!({ "result": result, "untrusted": true }))),
+        Err(code) => Err(ApiError::new(code, "The tool did not return a result.")),
+    }
 }
 
 fn audit_down() -> ApiError {
@@ -126,10 +149,12 @@ pub struct ToolsQuery {
     user: String,
 }
 
-/// `GET /tools?user=`: the tools the user holds, by name (no tool has a description yet). Nothing for an unknown user.
+/// `GET /tools?user=`: the registered tools the user holds, by name (no tool has a description yet). Nothing for an unknown user.
 pub async fn tools(State(g): State<Arc<Gateway>>, Query(q): Query<ToolsQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let config = g.admit()?;
-    let tools: Vec<_> =
-        permissions::permitted(&config.permissions, &q.user).into_iter().map(|name| serde_json::json!({ "name": name })).collect();
+    let tools: Vec<_> = permissions::permitted(&config.permissions, &q.user)
+        .into_iter()
+        .filter_map(|name| Some(serde_json::json!({ "name": name, "schema": g.registry.schema(name)? })))
+        .collect();
     Ok(Json(serde_json::json!({ "tools": tools })))
 }

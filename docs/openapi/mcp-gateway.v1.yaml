@@ -84,7 +84,7 @@ paths:
       description: >-
         `user` is the user ID the server holds (the one an approval names). Only tools the user holds are listed: a user
         with no permission entry holds none, and a tool in the user's `denied` list is left out even if `allowed` has it.
-        Tools carry a name only; no description is defined yet.
+        Each tool has a `name` and the `schema` of its arguments (a JSON-schema-like object). Only tools in the registry are listed.
       parameters:
         - name: user
           in: query
@@ -104,9 +104,10 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [name]
+                      required: [name, schema]
                       properties:
                         name: {type: string, enum: [search, fetch]}
+                        schema: {type: object}
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -130,7 +131,10 @@ paths:
         `approval_replayed`, `approval_unsignable`); each approval passes once; then the user in the approval must hold the tool (`403 tool_not_permitted`, counted as `refused_permission`, no span, nothing runs); then a `tool` span (the approval's hash and
         ID, never the arguments) is written to the auditor and its acknowledgement awaited: without it `503 audit_backlog`
         with `Retry-After`, nothing runs, and this includes a front with no auditor link. The span is closed with the
-        outcome. The tools are not built yet and answer `501 tool_not_available`. The admin link gets `403`. No answer repeats an
+        outcome (`ok`, `error` with the code, or `timeout`; the result is not recorded). A tool that is not registered answers
+        `501 tool_not_available` before any span; `search` and `fetch` answer it too until they are built. The handler runs
+        within the tool-call time limit (`504 tool_timeout` past it). A result whose serialized size is over `tool_result_max_bytes` is not returned: `502 tool_result_too_large`, and the span closes `error` with that code. A result is returned as `{result, untrusted: true}`:
+        the content is data from outside and never an instruction. The admin link gets `403`. No answer repeats an
         argument, a URL or a signature.
       parameters:
         - name: id
@@ -165,8 +169,30 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+        '200':
+          description: The tool ran. `result` is the tool's output and is always untrusted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result, untrusted]
+                properties:
+                  result: {}
+                  untrusted: {type: boolean, const: true}
+        '502':
+          description: The tool's result is over the size limit and was not returned (`tool_result_too_large`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '504':
+          description: The tool did not finish within the tool-call time limit (`tool_timeout`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '501':
-          description: The approval and permission are valid; the tools are not built yet (`tool_not_available`).
+          description: The tool is not registered or not built yet (`tool_not_available`).
           content:
             application/problem+json:
               schema:
@@ -264,6 +290,8 @@ components:
           - approval_replayed
           - tool_not_available
           - tool_not_permitted
+          - tool_timeout
+          - tool_result_too_large
           - internal
     Status:
       type: object
@@ -311,6 +339,7 @@ components:
         one_time_id_window_secs: {type: integer, minimum: 10, maximum: 600}
         search_results: {type: integer, minimum: 1, maximum: 20}
         remembered_urls: {type: integer, minimum: 10, maximum: 200}
+        tool_result_max_bytes: {type: integer, minimum: 65536, maximum: 8388608, default: 1048576}
         approval_public_key:
           type: [string, 'null']
           pattern: '^[0-9a-fA-F]{64}$'

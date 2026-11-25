@@ -52,11 +52,13 @@ pub enum ErrorCode {
     ApprovalReplayed,
     ToolNotAvailable,
     ToolNotPermitted,
+    ToolTimeout,
+    ToolResultTooLarge,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 34] = [
+    pub const ALL: [ErrorCode; 36] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -90,6 +92,8 @@ impl ErrorCode {
         ErrorCode::ApprovalReplayed,
         ErrorCode::ToolNotAvailable,
         ErrorCode::ToolNotPermitted,
+        ErrorCode::ToolTimeout,
+        ErrorCode::ToolResultTooLarge,
         ErrorCode::Internal,
     ];
 
@@ -129,6 +133,8 @@ impl ErrorCode {
             ErrorCode::ApprovalReplayed => "approval_replayed",
             ErrorCode::ToolNotAvailable => "tool_not_available",
             ErrorCode::ToolNotPermitted => "tool_not_permitted",
+            ErrorCode::ToolTimeout => "tool_timeout",
+            ErrorCode::ToolResultTooLarge => "tool_result_too_large",
             ErrorCode::Internal => "internal",
         }
     }
@@ -160,7 +166,8 @@ impl ErrorCode {
             ErrorCode::NotFound => 404,
             ErrorCode::MethodNotAllowed => 405,
             ErrorCode::PayloadTooLarge => 413,
-            ErrorCode::ServerUnavailable => 502,
+            ErrorCode::ServerUnavailable | ErrorCode::ToolResultTooLarge => 502,
+            ErrorCode::ToolTimeout => 504,
             ErrorCode::Internal => 500,
         }
     }
@@ -201,6 +208,8 @@ impl ErrorCode {
             ErrorCode::ApprovalReplayed => "The approval was already used",
             ErrorCode::ToolNotAvailable => "The tool is not available",
             ErrorCode::ToolNotPermitted => "The tool is not permitted",
+            ErrorCode::ToolTimeout => "The tool took too long",
+            ErrorCode::ToolResultTooLarge => "The tool result is too large",
             ErrorCode::Internal => "Something went wrong on the server",
         }
     }
@@ -363,9 +372,11 @@ mod tests {
                 | ErrorCode::ApprovalReplayed
                 | ErrorCode::ToolNotAvailable
                 | ErrorCode::ToolNotPermitted
+                | ErrorCode::ToolTimeout
+                | ErrorCode::ToolResultTooLarge
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 34);
+        assert_eq!(ErrorCode::ALL.len(), 36);
     }
 }

@@ -95,7 +95,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/mcp-gateway/src/permissions.rs` (new), tests.
   Do: the pushed config holds, per user, the permitted tools (`search` and `fetch` off by default, ADR 0019); the front refuses a call to a tool the user does not hold, and `GET /api/mcp-gateway/v1/tools` lists only the user's permitted tools. Deny wins.
   Accept: permission off refuses with its own code; a user with no entry holds nothing; the list shows only permitted tools.
-- [ ] **P5A.11** `feat(mcp-gateway): list tools and run approved calls through the registry` · sonnet · after P5A.10
+- [x] **P5A.11** `feat(mcp-gateway): list tools and run approved calls through the registry` · sonnet · after P5A.10
   Files: `services/mcp-gateway/src/{tools,call}.rs`, `docs/openapi/mcp-gateway.v1.yaml`, tests with a fake tool.
   Do: the registry maps a tool name to a native handler; `GET` tools returns the user's permitted tools (name and argument schema); the call route runs a call that passed the approval, audit and permission checks, applies the tool-call time limit and a result size limit (both from `constants.rs`) and returns the result with `untrusted: true`. An unknown tool is refused.
   Accept: tests with a fake tool: list, call, timeout, oversize result, unknown tool; a call that failed any earlier check never runs the tool.
