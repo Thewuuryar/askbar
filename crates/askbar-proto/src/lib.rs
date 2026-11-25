@@ -9,12 +9,15 @@ mod sse;
 pub use sse::{SseEvent, SseParser};
 
 pub mod alerter;
+pub mod approval;
 pub mod audit;
+pub mod decide;
 pub mod egress;
 pub mod gateway;
 pub mod links;
 pub mod paths;
 pub mod problem;
+pub mod task;
 pub use problem::{ErrorCode, Problem};
 
 #[cfg(feature = "axum")]
