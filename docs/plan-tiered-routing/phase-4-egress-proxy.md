@@ -117,7 +117,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.7e** `docs(adr): amend 0042: cpa reaches providers through the proxy` · haiku · after P4.7d
   Files: `docs/adr/0042-cpa.md` (its network list; ADR 0037's "as today" networks line is history and gets a pointer to this amendment in the same commit). Do: `egress-cpa` replaces `outbound`, and the mechanism P4.3b found. Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.7f** `docs(adr): amend 0040: the admin pushes the egress allowlists` · haiku · after P4.7e
+- [x] **P4.7f** `docs(adr): amend 0040: the admin pushes the egress allowlists` · haiku · after P4.7e
   Files: `docs/adr/0040-admin.md`. Do: the admin joins `egress-admin`, calls the proxy (`admin-egress-proxy`, `ASKBAR_EGRESS_PROXY_URL`), derives and pushes the allowlists, and stores the approvals (P4.4a). Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.8** `docs(docs): update the architecture network table and diagram` · haiku · after P4.7f
