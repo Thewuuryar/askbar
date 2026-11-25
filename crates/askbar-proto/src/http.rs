@@ -60,6 +60,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::KillSwitch => "Replies have been switched off by the administrator.",
         ErrorCode::UserPaused => "Replies are paused for you by the administrator.",
         ErrorCode::ModelNotApproved => "That model is not approved. Pick another one.",
+        ErrorCode::RoleNotPinned => "No model is pinned for that role. Pin one, or send without a role.",
         ErrorCode::AuditKeyMissing => "The administrator has not set up the audit key yet.",
         ErrorCode::BackupKeyMissing => "The administrator has not set up the backup key yet, so nothing can be backed up.",
         ErrorCode::BackupNewerRelease => "This backup was made by a newer release of Askbar. Install that release to restore it.",

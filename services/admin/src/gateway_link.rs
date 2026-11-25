@@ -111,6 +111,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         default_model: catalog.default,
         approval_key: crate::approval_key::signing_key(conn, secrets),
         approval_ttl_secs: crate::constants::APPROVAL_TTL_SECS,
+        role_pins: Default::default(),
     };
     config.version = version_of(&config);
     Ok(config)

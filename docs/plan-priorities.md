@@ -170,7 +170,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 
 #### W4: roles without tiers
 
-- [ ] **W4.1** `feat(proto): add model roles and role pins` · haiku · after O0.1
+- [x] **W4.1** `feat(proto): add model roles and role pins` · haiku · after O0.1
   Files: `crates/askbar-proto/src/gateway.rs`, tests.
   Do: `Role` with `chat.manual`, `search.query` and `search.writer` now, and `research.researcher`, `research.writer` and `judge.review` added in W7; `role_pins: BTreeMap<Role, ModelId>` on `GatewayConfig`; `role` optional on `ChatRequest`. The type names match tiered routing P1.1, so track 4 adds tiers to the same types.
   Accept: old config and request JSON parse unchanged; a request naming an unpinned role is refused with an `ErrorCode`.

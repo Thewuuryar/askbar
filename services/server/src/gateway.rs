@@ -168,6 +168,7 @@ mod tests {
 
     fn request() -> ChatRequest {
         ChatRequest {
+            role: None,
             provider_id: "p".into(),
             model: "m".into(),
             user_id: "u".into(),

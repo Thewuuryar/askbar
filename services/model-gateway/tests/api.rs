@@ -213,6 +213,7 @@ fn provider(rig: &Rig, id: &str, model: &str) -> GatewayProvider {
 
 fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
     GatewayConfig {
+        role_pins: Default::default(),
         version,
         providers: models.iter().map(|(id, m)| provider(rig, id, m)).collect(),
         audit_public_key: Some(audit_key()),
@@ -245,6 +246,7 @@ impl Rig {
 
     fn request(&self, provider_id: &str, generation: &str, text: &str) -> ChatRequest {
         ChatRequest {
+            role: None,
             provider_id: provider_id.into(),
             model: model_of(provider_id).into(),
             user_id: "user1".into(),

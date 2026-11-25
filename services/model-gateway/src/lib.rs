@@ -20,7 +20,7 @@ pub mod seal;
 pub mod usage;
 
 use askbar_proto::audit::{SpanFinish, SpanKind, SpanStart};
-use askbar_proto::gateway::{ChatEvent, ChatRequest, FailureClass, GatewayConfig};
+use askbar_proto::gateway::{pinned_model, ChatEvent, ChatRequest, FailureClass, GatewayConfig, Role};
 use askbar_proto::http::ApiError;
 use askbar_proto::links::{ADMIN_MODEL_GATEWAY, SERVER_MODEL_GATEWAY};
 use askbar_proto::paths::MODEL_GATEWAY_V1;
@@ -78,6 +78,8 @@ struct Applied {
     /// The approval signing key, in memory only (plan step P5.3); none until the admin has pushed one.
     approval_key: Option<askbar_proto::gateway::ApprovalSigningKey>,
     approval_ttl_secs: u32,
+    /// The model each role uses (plan W4.1); a request naming a role with no pin is refused.
+    role_pins: BTreeMap<Role, String>,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -407,6 +409,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         choices: askbar_proto::ModelList { models: choices, default: c.default_model.clone() },
         approval_key: c.approval_key.clone(),
         approval_ttl_secs: c.approval_ttl_secs,
+        role_pins: c.role_pins.clone(),
     })
 }
 
@@ -516,6 +519,11 @@ impl Gateway {
         if cfg.paused.contains(&req.user_id) {
             refuse_at_gate(self, req, "user_pause", "user_paused", serde_json::json!({ "paused": true }));
             return Err(ApiError::new(ErrorCode::UserPaused, "Replies are paused for this user by the administrator."));
+        }
+        // A request for a role needs a model pinned to it. The pin is not used yet: the model named still is (plan W4.1).
+        if let Err(code) = pinned_model(&cfg.role_pins, req.role) {
+            refuse_at_gate(self, req, "role_pin", code.as_str(), serde_json::json!({ "role": req.role }));
+            return Err(ApiError::new(code, "No model is pinned for that role. Pin one, or send without a role."));
         }
         // Only an approved model is called, whatever the server asked (ADR 0014). The model's name is not recorded in the
         // gate: it is the caller's text, and the catalog already says what is approved.
