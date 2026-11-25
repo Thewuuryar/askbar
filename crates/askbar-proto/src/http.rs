@@ -90,6 +90,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::ToolNotPermitted => "The user does not hold this tool.",
         ErrorCode::ToolTimeout => "The tool did not finish in time.",
         ErrorCode::ToolResultTooLarge => "The tool result is over the size limit and was not returned.",
+        ErrorCode::ToolUpstreamFailed => "The tool's backing service failed.",
         ErrorCode::Internal => "Something went wrong on the server.",
     }
 }

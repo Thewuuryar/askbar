@@ -356,6 +356,7 @@ components:
           - tool_not_permitted
           - tool_timeout
           - tool_result_too_large
+          - tool_upstream_failed
           - internal
     ModelsRequest:
       type: object

@@ -68,7 +68,7 @@ async fn start(push_key: bool) -> Rig {
 }
 
 async fn start_with(push_key: bool, mode: Auditor) -> Rig {
-    start_full(push_key, mode, Registry::builtin(), 30).await
+    start_full(push_key, mode, Registry::builtin(None), 30).await
 }
 
 async fn start_full(push_key: bool, mode: Auditor, registry: Registry, timeout_secs: u32) -> Rig {
@@ -421,4 +421,103 @@ async fn an_oversize_result_is_not_returned_and_closes_the_span_as_error() {
     assert!(!r.1.to_string().contains("xxxx"), "the result is not in the answer");
     assert_eq!(finished(&rig).await, (Some("error".into()), Some("tool_result_too_large".into())));
     assert_eq!(rig.g.status().calls.get("tool_error"), Some(&1));
+}
+
+// ---- the native search tool (P5A.14) ----
+
+/// A stand-in `searxng`: what it was sent (content type, URI query, form body), and an answer chosen by the query `q`.
+type Sent = Arc<Mutex<Vec<(String, String, String)>>>;
+
+async fn fake_searxng() -> (String, Sent) {
+    let sent: Sent = Default::default();
+    let s2 = sent.clone();
+    let app = axum::Router::new().route(
+        "/search",
+        axum::routing::post(move |h: axum::http::HeaderMap, uri: axum::http::Uri, b: String| {
+            let s2 = s2.clone();
+            async move {
+                let ct = h.get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                s2.lock().unwrap().push((ct, uri.query().unwrap_or("").to_string(), b.clone()));
+                if b.contains("q=boom") {
+                    return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom".to_string());
+                }
+                if b.contains("q=garbage") {
+                    return (axum::http::StatusCode::OK, "<html>not json".to_string());
+                }
+                if b.contains("q=slow") {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                }
+                let mut results = vec![json!({"title": "bad", "url": "javascript:alert(1)", "content": "x"})];
+                results.extend(
+                    (0..12).map(|i| json!({"title": "t".repeat(300), "url": format!("https://r.example/{i}"), "content": "c".repeat(900)})),
+                );
+                (axum::http::StatusCode::OK, json!({"results": results}).to_string())
+            }
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (addr, sent)
+}
+
+async fn search(rig: &Rig, task: &str, query: &str, id: &str) -> (u16, Value) {
+    let args = json!({"query": query});
+    let act = ToolAction {
+        tool: "search".into(),
+        arguments: args.clone(),
+        destination: "searxng".into(),
+        provenance: Provenance::User,
+        query_data: false,
+    };
+    let a = sign(&act, task, "alice", id, now() + 60, &rig.sk).unwrap();
+    let body = json!({"arguments": args, "destination": "searxng", "provenance": "user", "approval": a});
+    let r = reqwest::Client::new().post(format!("{}/tools/search/call", rig.url)).bearer_auth(SERVER).json(&body).send().await.unwrap();
+    (r.status().as_u16(), r.json().await.unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn search_returns_at_most_n_trimmed_untrusted_results_sent_as_a_post_form() {
+    let (addr, sent) = fake_searxng().await;
+    let rig = start_full(true, Auditor::Up, Registry::builtin(Some(addr)), 30).await;
+    let secret_query = "very private question";
+    let (st, v) = search(&rig, "task-a", secret_query, "s1").await;
+    assert_eq!(st, 200);
+    assert_eq!(v["untrusted"], true);
+    let results = v["result"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 8, "the configured count, and the javascript: result is dropped");
+    assert_eq!(results[0]["url"], "https://r.example/0");
+    assert_eq!(results[0]["title"].as_str().unwrap().chars().count(), 200);
+    assert_eq!(results[0]["snippet"].as_str().unwrap().chars().count(), 500);
+
+    let sent = sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].0.starts_with("application/x-www-form-urlencoded"));
+    assert_eq!(sent[0].1, "", "the query is in no URL");
+    assert!(sent[0].2.contains("q=very+private+question") && sent[0].2.contains("format=json"));
+
+    let (st, _) = search(&rig, "task-a", "again", "s2").await;
+    assert_eq!(st, 200);
+    let text = serde_json::to_string(&rig.g.status().calls).unwrap();
+    assert!(!text.contains(secret_query) && !text.contains("r.example"), "status leaked search content");
+}
+
+#[tokio::test]
+async fn search_failures_are_typed_and_a_long_query_is_refused() {
+    let (addr, _) = fake_searxng().await;
+    let rig = start_full(true, Auditor::Up, Registry::builtin(Some(addr)), 5).await;
+    for (q, id) in [("boom", "e1"), ("garbage", "e2"), ("slow", "e3")] {
+        let r = search(&rig, "t", q, id).await;
+        assert_eq!(code(&r), (502, "tool_upstream_failed"), "{q}");
+        assert!(!r.1.to_string().contains(q) || q == "slow", "the answer repeats the query");
+    }
+    assert_eq!(code(&search(&rig, "t", &"x".repeat(201), "e4").await), (400, "bad_request"));
+    assert_eq!(code(&search(&rig, "t", "  ", "e5").await), (400, "bad_request"));
+    assert_eq!(search(&rig, "t", &"x".repeat(200), "e6").await.0, 200);
+}
+
+#[tokio::test]
+async fn search_without_searxng_is_not_available() {
+    let rig = start_full(true, Auditor::Up, Registry::builtin(None), 30).await;
+    assert_eq!(code(&search(&rig, "t", "q", "n1").await), (501, "tool_not_available"));
 }
