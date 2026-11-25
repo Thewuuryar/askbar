@@ -105,7 +105,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.7a** `docs(adr): amend 0022: the egress proxy API prefix` · haiku · after P4.7
   Files: `docs/adr/0022-api-path-conventions.md`. Do: a table row: Egress proxy, `/api/egress-proxy/v1`, `egress-proxy`, `admin`, internal; an Amendments line. Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.7b** `docs(adr): amend 0049: the admin-egress-proxy link` · haiku · after P4.7a
+- [x] **P4.7b** `docs(adr): amend 0049: the admin-egress-proxy link` · haiku · after P4.7a
   Files: `docs/adr/0049-bootstrap.md`. Do: a built-so line: link `admin-egress-proxy` (`admegr_`), volume `egress-proxy-token`, uid 10006, made in P4.1c. Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7c** `docs(adr): amend 0054: the gateway reaches providers through the proxy` · haiku · after P4.7b
