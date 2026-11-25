@@ -210,11 +210,13 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
         (
             M::PUT,
             "/api/admin/v1/settings",
-            Some(json!({ "system_prompt": "changed", "display": askbar_proto::DisplaySettings::default(), "quick_search_enabled": false })),
+            Some(
+                json!({ "system_prompt": "changed", "display": askbar_proto::DisplaySettings::default(), "quick_search_enabled": false, "research_enabled": false }),
+            ),
         ),
         (M::POST, "/api/admin/v1/keys", Some(json!({ "name": "ci" }))),
         (M::PUT, "/api/admin/v1/mcp/permissions/U1", Some(json!({ "allowed": ["search"] }))),
-        (M::PUT, "/api/admin/v1/limits", Some(json!({ "max_queries": 5 }))),
+        (M::PUT, "/api/admin/v1/limits", Some(json!({ "max_queries": 5, "tool_calls": 9 }))),
         (M::PUT, "/api/admin/v1/roles/chat.manual", Some(json!({ "provider_id": "p", "model": "m" }))),
         (M::POST, "/api/admin/v1/providers", Some(json!({ "name": "p", "type": "openai", "base_url": "http://x/v1", "model": "m" }))),
     ] {
@@ -235,7 +237,11 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
     assert_eq!(count("SELECT COUNT(*) FROM role_pins"), 0);
     assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key LIKE 'limit.%'"), 0, "no limit was saved");
     assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key = 'system_prompt'"), 0, "the setting was not saved");
-    assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key = 'quick_search_enabled'"), 0, "the switch was not saved");
+    assert_eq!(
+        count("SELECT COUNT(*) FROM settings WHERE key IN ('quick_search_enabled', 'research_enabled')"),
+        0,
+        "the switches were not saved"
+    );
     drop(db);
     // Reading still works: the admin does not go dark with the auditor.
     let r = http.get(format!("{adm}/api/admin/v1/providers")).header("cookie", &cookie).send().await.unwrap();

@@ -1,5 +1,5 @@
 //! `GET /api/admin/v1/usage/roles`: what quick search used per day (searches, fetches, refusals) and what its two model roles
-//! (`search.query`, `search.writer`) used in tokens and cost. Read from the auditor like the Audit pages (ADR 0051), never from the
+//! (`search.query`, `search.writer`) and the research roles used in tokens and cost. Read from the auditor like the Audit pages (ADR 0051), never from the
 //! server's tables: the newest [`TRACES`] traces, then each one's spans. Counts, tokens and cost only; a span's attributes and
 //! sealed payloads are never forwarded, so no query, URL or page text can appear.
 //! Cost is priced here from the admin's prices, as everywhere else (`cost.rs`).
@@ -18,7 +18,7 @@ const MAX_DAYS: u32 = 30;
 const DEFAULT_DAYS: u32 = 7;
 /// The most traces read per call (the auditor's own page maximum): one list and at most this many span reads.
 const TRACES: usize = 200;
-const ROLES: [&str; 2] = ["search.query", "search.writer"];
+const ROLES: [&str; 5] = ["search.query", "search.writer", "research.researcher", "research.writer", "judge.review"];
 
 #[derive(Deserialize)]
 pub struct UsageQuery {

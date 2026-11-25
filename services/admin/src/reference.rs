@@ -45,6 +45,7 @@ pub const SETTING_ANCHORS: &[(&str, &str)] = &[
     ("settings/egress#approvals", "egress-approvals-title"),
     ("settings/egress#blocked-outbound-requests", "denied-title"),
     ("settings/search#quick-search", "search-quick-title"),
+    ("settings/search#research", "search-research-title"),
     ("settings/search#search-engine", "search-searxng-title"),
     ("settings/search#mcp-limits", "search-mcp-title"),
     ("settings/search#usage", "search-usage-title"),

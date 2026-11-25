@@ -22,7 +22,20 @@ async fn pins_round_trip_need_an_approved_model_are_audited_and_only_approved_on
     let roles = "/api/admin/v1/roles";
     let none = |r: &str| json!({ "role": r, "pin": null, "approved": false });
     let (st, list) = t.call(M::GET, roles, json!(null)).await;
-    assert_eq!((st, &list), (200, &json!([none("chat.manual"), none("search.query"), none("search.writer")])));
+    assert_eq!(
+        (st, &list),
+        (
+            200,
+            &json!([
+                none("chat.manual"),
+                none("search.query"),
+                none("search.writer"),
+                none("research.researcher"),
+                none("research.writer"),
+                none("judge.review")
+            ])
+        )
+    );
     assert!(config(&t).await.role_pins.is_empty());
     assert_eq!(config(&t).await.quick_search, askbar_proto::quick_search::QuickSearchLimits::DEFAULT, "the pushed defaults");
 
@@ -43,11 +56,20 @@ async fn pins_round_trip_need_an_approved_model_are_audited_and_only_approved_on
     let before = config(&t).await;
     assert_eq!(before.role_pins.get(&Role::SearchQuery).map(String::as_str), Some(format!("{pid}/gpt-x").as_str()));
 
+    // The three research roles pin like the others, are listed, and reach the gateway.
+    for r in ["research.researcher", "research.writer", "judge.review"] {
+        assert_eq!(t.call(M::PUT, &format!("{roles}/{r}"), pin.clone()).await.0, 200, "{r}");
+    }
+    let (_, list) = t.call(M::GET, roles, json!(null)).await;
+    assert_eq!(list[5], json!({ "role": "judge.review", "pin": pin, "approved": true }));
+    let pins = config(&t).await.role_pins;
+    assert_eq!(pins.len(), 4);
+    assert!([Role::ResearchResearcher, Role::ResearchWriter, Role::JudgeReview].iter().all(|r| pins.contains_key(r)));
+
     // Audited with the role and the model, no more.
     let rows = t.rig.rows("SELECT outcome, detail_json FROM admin_actions WHERE category = 'roles' ORDER BY at, rowid");
-    let done = rows.last().unwrap();
-    assert!(rows.iter().any(|r| r[0] == "refused") && done[0] == "done", "{rows:?}");
-    assert!(done[1].as_str().unwrap().contains("search.query"));
+    assert!(rows.iter().any(|r| r[0] == "refused"), "{rows:?}");
+    assert!(rows.iter().any(|r| r[0] == "done" && r[1].as_str().unwrap().contains("search.query")), "{rows:?}");
 
     // The model leaves the catalog: the pin stays listed, marked not approved, and is not pushed.
     let off = json!({ "models": [], "default": null });

@@ -12,12 +12,29 @@
         <label class="check" for="search-on"><input type="checkbox" id="search-on"> Quick search is on</label>
         <p class="hint">Off stops web search for everyone at once; answers say the search is off. Each person's own permission is on the <a href="/admin/mcp/">MCP</a> page, and the kill switch is separate.</p>
       </div>
+      <div class="field">
+        <label class="check" for="research-on"><input type="checkbox" id="research-on"> Research reports are on</label>
+        <p class="hint">Off stops research reports for everyone at once; answers say research is off. The kill switch and quick search are separate.</p>
+      </div>
       <p class="hint">Models: <span id="search-pins"></span> Change them under Model for each job on the <a href="/admin/providers/">Providers</a> page.</p>
       <div class="table-wrap">
         <table class="table" id="search-limits-quick-table">
           <caption class="visually-hidden">Quick search limits</caption>
           {% call c::table_head(["Limit", "Value", ">Default", "Range", ""]) %}{% endcall %}
           <tbody id="search-limits-quick"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="search-research-section" aria-labelledby="search-research-title">
+      <div class="sect-head">
+        {% call c::section_title("search-research-title", "Research", "settings/search#research") %}{% endcall %}
+      </div>
+      <p class="hint">Models: <span id="research-pins"></span> Change them under Model for each job on the <a href="/admin/providers/">Providers</a> page. The judge should be on a provider other than the researchers'; this is a hint, nothing is enforced.</p>
+      <div class="table-wrap">
+        <table class="table" id="search-limits-research-table">
+          <caption class="visually-hidden">Research limits</caption>
+          {% call c::table_head(["Limit", "Value", ">Default", "Range", ""]) %}{% endcall %}
+          <tbody id="search-limits-research"></tbody>
         </table>
       </div>
     </section>

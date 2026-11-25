@@ -25,6 +25,23 @@ The four quick-search limits are below. Each one shows its value. Save keeps a n
 
 The line above the table names the two models the search jobs use: one writes the query and one writes the answer. Pick them under Model for each job on [Providers](providers.md#model-for-each-job).
 
+## Research
+
+The Research switch beside the quick search switch turns research reports off for everyone at once. It is on by default and separate from the kill switch and from quick search. While it is off, the gateway refuses research calls and the server answers without research. Each change is an audited admin action.
+
+The line above the table names the three models research uses: the researchers, the one that writes the report and the judge. Pick them under Model for each job on [Providers](providers.md#model-for-each-job). The judge should be on a provider other than the researchers'; this is a hint and nothing is enforced.
+
+| Limit | Name in the API | Default | Minimum | Maximum | Unit |
+|---|---|---|---|---|---|
+| Tool calls per task | `tool_calls` | 8 | 1 | 32 | count |
+| Tokens per task | `token_cap` | 300000 | 20000 | 2000000 | tokens |
+| Researchers per task | `researchers_max` | 4 | 2 | 4 | count |
+| Wait for the rest after two finish | `wait_after_two_secs` | 8 | 1 | 60 | seconds |
+| Research time limit | `stage_secs` | 90 | 10 | 600 | seconds |
+| Tokens per researcher summary | `summary_tokens` | 800 | 100 | 4000 | tokens |
+
+Save, Reset and the range rule are as for the quick-search limits. A change reaches the gateway and the server on the next push.
+
 ## Search engine
 
 Whether the MCP front's last search worked, and the engines searxng asks, each with the egress host it needs. The front records its own last real search; the admin does not probe searxng. So an idle searxng that is down shows as answering until a search runs, and a search that fails shows as down at the next poll, about 12 seconds later. Before any search since the front started it says No search yet. If the front does not answer, the state is Not known.
@@ -57,4 +74,4 @@ The approval lifetime is how long a one-time ID from a search can be used. Each 
 
 ## Usage
 
-Searches, fetches and refusals for each of the last 7 days, and for each model job (writing the query, writing the answer) the turns, tokens in and out, and cost per day. Cost uses the prices set on [Providers](providers.md). The figures come from the audit trail, not the server's database. They are read from the newest 200 conversations at most, and the note above the tables says when older days may be incomplete. Only counts, tokens and cost are shown: no query, address or page text.
+Searches, fetches and refusals for each of the last 7 days, and for each model job (writing the query, writing the answer, and the three research jobs) the turns, tokens in and out, and cost per day. Cost uses the prices set on [Providers](providers.md). The figures come from the audit trail, not the server's database. They are read from the newest 200 conversations at most, and the note above the tables says when older days may be incomplete. Only counts, tokens and cost are shown: no query, address or page text.
