@@ -9,6 +9,7 @@ use askbar_proto::approval::{Approval, Provenance, QuickSearchApprovalRequest, T
 use askbar_proto::audit::SpanKind;
 use askbar_proto::http::ApiError;
 use askbar_proto::quick_search::QuickSearchLimits;
+use askbar_proto::research::ResearchApprovalRequest;
 use askbar_proto::ErrorCode;
 use askbar_service::approval::{sign, ApprovalError};
 use axum::extract::State;
@@ -190,10 +191,24 @@ pub async fn quick_search(
         .reserve(&req.generation_id, &req.user, search, &limits, now)
         .map_err(|(code, attrs)| deny(code, serde_json::json!({ "tool": req.tool, "counts": attrs })))?;
     let release = || gw.quick.lock().unwrap_or_else(|e| e.into_inner()).release(&req.generation_id, &req.user, search);
-    // Signed in memory first: its hash and one-time ID go on the span. It is returned only once the span is acknowledged.
     let action =
         ToolAction { tool: req.tool.clone(), arguments: req.arguments, destination, provenance: Provenance::Search, query_data: false };
-    let (approval, mut attrs) = match approve(&gw, &action, &req.generation_id, &req.user) {
+    signed(&gw, NAME, action, &req.generation_id, &req.user, release).await
+}
+
+/// Sign `action` and put its `gate` span `name` on record, acknowledged by the auditor, before the approval is returned.
+/// `release` takes back the caller's reserved count when no approval is given. The span holds the tool, the action hash
+/// and the one-time ID, never the arguments.
+async fn signed(
+    gw: &Gateway,
+    name: &str,
+    action: ToolAction,
+    task: &str,
+    user: &str,
+    release: impl Fn(),
+) -> Result<Json<serde_json::Value>, Failure> {
+    // Signed in memory first: its hash and one-time ID go on the span. It is returned only once the span is acknowledged.
+    let (approval, mut attrs) = match approve(gw, &action, task, user) {
         Ok(a) => a,
         Err(e) => {
             release();
@@ -208,10 +223,10 @@ pub async fn quick_search(
             });
         }
     };
-    attrs["tool"] = req.tool.clone().into();
+    attrs["tool"] = action.tool.clone().into();
     let span_id = askbar_service::ids::new_id();
-    let mut start = start_of(&span_id, &req.generation_id, None, SpanKind::Gate, NAME);
-    start.user_id = Some(req.user.clone());
+    let mut start = start_of(&span_id, task, None, SpanKind::Gate, name);
+    start.user_id = Some(user.into());
     start.attrs = Some(attrs);
     if let Err(why) = gw.audit.open(&start).await {
         release();
@@ -227,4 +242,46 @@ pub async fn quick_search(
         "provenance": action.provenance,
         "query_data": action.query_data,
     })))
+}
+
+// ------------------------------------------------------------------ POST /approvals/research (plan P5B.2)
+
+/// `POST /approvals/research`: the same fixed rules and the same `shape` as quick search (so the same tool and arguments
+/// codes), held to the task's tool-call limit instead of the quick search counts. Never calls a model, and does not look at
+/// `quick_search_enabled`.
+pub async fn research(
+    State(gw): State<Arc<Gateway>>,
+    Json(req): Json<ResearchApprovalRequest>,
+) -> Result<Json<serde_json::Value>, Failure> {
+    let Some(cfg) = gw.applied() else {
+        return Err(ApiError::new(ErrorCode::NotConfigured, "The gateway has not received its settings yet. Try again in a few seconds.")
+            .retry_after(5));
+    };
+    if !valid_id(&req.task_id) || !valid_id(&req.user) {
+        return Err(ApiError::new(ErrorCode::BadRequest, "task_id and user are 1 to 64 letters, digits, - or _."));
+    }
+    const NAME: &str = "research_approval";
+    // Only counts and flags go on a refusal's span: never the query or the URL.
+    let deny = |code: ErrorCode, attrs: serde_json::Value| {
+        gate_blocked(&gw, &req.task_id, &req.user, None, NAME, code.as_str(), attrs);
+        ApiError::new(code, askbar_proto::http::default_detail(code))
+    };
+    if !cfg.research_enabled {
+        return Err(deny(ErrorCode::ResearchDisabled, serde_json::json!({ "enabled": false })));
+    }
+    if cfg.kill_switch {
+        return Err(deny(ErrorCode::KillSwitch, serde_json::json!({ "kill_switch": true })));
+    }
+    if cfg.paused.contains(&req.user) {
+        return Err(deny(ErrorCode::UserPaused, serde_json::json!({ "paused": true })));
+    }
+    if !askbar_proto::mcp::TOOLS.contains(&req.tool.as_str()) {
+        return Err(deny(ErrorCode::QuickSearchTool, serde_json::json!({ "allowed": false })));
+    }
+    let destination = shape(&req.tool, &req.arguments, cfg.quick_search.max_query_chars)
+        .map_err(|why| deny(ErrorCode::QuickSearchArguments, serde_json::json!({ "tool": req.tool, "reason": why })))?;
+    gw.reserve_tool_call(&req.task_id).map_err(|code| deny(code, serde_json::json!({ "tool": req.tool })))?;
+    let action =
+        ToolAction { tool: req.tool.clone(), arguments: req.arguments, destination, provenance: Provenance::Search, query_data: false };
+    signed(&gw, NAME, action, &req.task_id, &req.user, || gw.release_tool_call(&req.task_id)).await
 }

@@ -14,7 +14,7 @@ info:
     `model-gateway-token/accept/<link>.sha256`, read on every request. Each listener takes only its own link's
     token and serves only its own routes:
 
-    - the server's listener: `POST /chat`, `GET /catalog`, `POST /approvals/quick-search` and `POST /decide`;
+    - the server's listener: `POST /chat`, `GET /catalog`, `POST /approvals/quick-search`, `POST /approvals/research` and `POST /decide`;
     - the admin's listener: `GET /status`, `PUT /config`, `POST /restart`, `POST /models` and
       `POST /providers/{id}/test` (they moved here from the server, which has no keys and no route out).
 
@@ -368,6 +368,86 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /api/model-gateway/v1/approvals/research:
+    post:
+      operationId: approveResearch
+      summary: Sign one research tool call by fixed rules. The server's listener.
+      description: >-
+        The same rules and shape as the quick search approval (plan P5B.2), held to the task's tool-call limit instead of
+        the quick search counts; it does not look at `quick_search_enabled`. No model is called. Refused when research is
+        turned off (`503 research_disabled`), the kill switch is on (`503 kill_switch`), the user is paused
+        (`403 user_paused`), the tool is not `search` or `fetch` (`400 quick_search_tool`), the arguments are not the
+        tool's or a query is over the length limit (`400 quick_search_arguments`), or the task has made its tool calls
+        (`429 task_tool_calls`). A refusal counts for nothing and is a `blocked` `research_approval` gate span; an approval
+        counts once, and the count is taken back if nothing is signed. The approval's span (a `gate`, with the tool, the
+        action hash and the one-time ID, never a query or a URL) is acknowledged by the auditor before the approval is
+        returned, else `503 audit_backlog`. The task ID and trace ID are `task_id`. The caller sends the answer's
+        `destination`, `provenance` and `query_data` to the MCP gateway unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_id, user, tool, arguments]
+              properties:
+                task_id:
+                  type: string
+                user:
+                  type: string
+                tool:
+                  type: string
+                arguments:
+                  type: object
+      responses:
+        '200':
+          description: The signed approval.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approval, destination, provenance, query_data]
+                properties:
+                  approval:
+                    type: object
+                    description: The `Approval` (`action_hash`, `task_id`, `user`, `one_time_id`, `expires_at`, `signature`).
+                  destination:
+                    type: string
+                  provenance:
+                    type: string
+                    enum: [search, user]
+                  query_data:
+                    type: boolean
+        '400':
+          description: The body could not be used (`bad_request`), the tool is not `search` or `fetch` (`quick_search_tool`), or the arguments are not allowed (`quick_search_arguments`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The user is paused (`user_paused`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: The task has made its tool calls (`task_tool_calls`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: No configuration or no approval key yet (`not_configured`), research is turned off (`research_disabled`), the kill switch is on (`kill_switch`), or the span was not acknowledged (`audit_backlog`). Nothing was signed.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /api/model-gateway/v1/decide:
     post:
       operationId: decide
@@ -453,7 +533,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '503':
-          description: No configuration yet (`not_configured`), the kill switch is on (`kill_switch`), or the span was not acknowledged (`audit_backlog`). Nothing was called.
+          description: No configuration yet (`not_configured`), research is turned off (`research_disabled`), the kill switch is on (`kill_switch`), or the span was not acknowledged (`audit_backlog`). Nothing was called.
           headers:
             Retry-After:
               schema:
