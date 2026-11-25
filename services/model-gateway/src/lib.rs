@@ -12,6 +12,7 @@
 //!   public key and goes to the auditor as a payload; the gateway holds no private key.
 
 pub mod approval;
+pub mod decide;
 pub mod llm;
 pub mod models;
 pub mod provider_test;
@@ -233,7 +234,7 @@ fn finish(status: &str) -> SpanFinish {
 
 // ------------------------------------------------------------------ the links
 
-const SERVER_ROUTES: Routes = &[("POST", "/chat"), ("GET", "/catalog"), ("POST", "/approvals/quick-search")];
+const SERVER_ROUTES: Routes = &[("POST", "/chat"), ("GET", "/catalog"), ("POST", "/approvals/quick-search"), ("POST", "/decide")];
 const ADMIN_ROUTES: Routes =
     &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
@@ -276,6 +277,7 @@ pub fn server_router(gw: Arc<Gateway>, links: Links) -> Router {
         .route(&full("/chat"), post(chat))
         .route(&full("/catalog"), get(catalog))
         .route(&full("/approvals/quick-search"), post(approval::quick_search))
+        .route(&full("/decide"), post(decide::decide))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(gw, protected)
 }
@@ -659,8 +661,18 @@ fn valid_id(s: &str) -> bool {
 
 async fn chat(
     State(gw): State<Arc<Gateway>>,
-    Json(mut req): Json<ChatRequest>,
+    Json(req): Json<ChatRequest>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, Failure> {
+    let rx = start_turn(&gw, req, "chat").await?;
+    let stream = futures_util::StreamExt::map(tokio_stream::wrappers::UnboundedReceiverStream::new(rx), |e: ChatEvent| {
+        Ok::<_, Infallible>(Event::default().event(e.name()).json_data(&e).expect("an event is JSON"))
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// A request becomes a turn: the checks, the turn span on record, then the attempts run in a task that sends their
+/// events down the returned channel. `chat` streams them; `decide` reads them to the end.
+async fn start_turn(gw: &Arc<Gateway>, mut req: ChatRequest, name: &str) -> Result<mpsc::UnboundedReceiver<ChatEvent>, Failure> {
     let Some(cfg) = gw.applied() else {
         return Err(ApiError::new(ErrorCode::NotConfigured, "The gateway has not received its settings yet. Try again in a few seconds.")
             .retry_after(5));
@@ -688,7 +700,7 @@ async fn chat(
 
     // The turn span, on record before any provider is called (ADR 0010 rules 1 to 3).
     let turn_id = askbar_service::ids::new_id();
-    let mut turn = start_of(&turn_id, &req.generation_id, None, SpanKind::Turn, "chat");
+    let mut turn = start_of(&turn_id, &req.generation_id, None, SpanKind::Turn, name);
     turn.provider_id = Some(req.provider_id.clone());
     turn.model = Some(provider.model.clone());
     turn.user_id = Some(req.user_id.clone());
@@ -714,10 +726,7 @@ async fn chat(
     let _ = tx.send(ChatEvent::Span { span_id: turn_id.clone(), trace_id: req.generation_id.clone() });
     let (registered, stop_rx) = gw.register(&req.user_id, &turn_id);
     tokio::spawn(run_attempts(gw.clone(), cfg, provider, req, turn_id, messages, tx, stop_rx, registered));
-    let stream = futures_util::StreamExt::map(tokio_stream::wrappers::UnboundedReceiverStream::new(rx), |e: ChatEvent| {
-        Ok::<_, Infallible>(Event::default().event(e.name()).json_data(&e).expect("an event is JSON"))
-    });
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+    Ok(rx)
 }
 
 /// Tries the provider, and up to `MAX_RETRIES` more times when the failure is worth it. Nothing is retried once
