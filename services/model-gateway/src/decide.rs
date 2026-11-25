@@ -58,6 +58,9 @@ pub async fn decide(State(gw): State<Arc<Gateway>>, Json(req): Json<DecideReques
         return Err(ApiError::new(ErrorCode::NotConfigured, "The gateway has not received its settings yet. Try again in a few seconds.")
             .retry_after(5));
     };
+    if !cfg.research_enabled {
+        return Err(ApiError::new(ErrorCode::ResearchDisabled, default_detail(ErrorCode::ResearchDisabled)));
+    }
     if req.decision != Decision::Judge {
         return Err(ApiError::new(ErrorCode::DecisionUnsupported, default_detail(ErrorCode::DecisionUnsupported)));
     }

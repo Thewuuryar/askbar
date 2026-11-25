@@ -88,6 +88,8 @@ struct Applied {
     quick_search_enabled: bool,
     /// The task limits (plan phase 5B): the token cap a task's calls are held to, and its tool-call limit.
     task_limits: askbar_proto::research::TaskLimits,
+    /// Whether research is on for everyone (plan P5B.1); `POST /approvals/research` and `/decide` refuse while off.
+    research_enabled: bool,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -234,7 +236,8 @@ fn finish(status: &str) -> SpanFinish {
 
 // ------------------------------------------------------------------ the links
 
-const SERVER_ROUTES: Routes = &[("POST", "/chat"), ("GET", "/catalog"), ("POST", "/approvals/quick-search"), ("POST", "/decide")];
+const SERVER_ROUTES: Routes =
+    &[("POST", "/chat"), ("GET", "/catalog"), ("POST", "/approvals/quick-search"), ("POST", "/approvals/research"), ("POST", "/decide")];
 const ADMIN_ROUTES: Routes =
     &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
@@ -277,6 +280,7 @@ pub fn server_router(gw: Arc<Gateway>, links: Links) -> Router {
         .route(&full("/chat"), post(chat))
         .route(&full("/catalog"), get(catalog))
         .route(&full("/approvals/quick-search"), post(approval::quick_search))
+        .route(&full("/approvals/research"), post(approval::research))
         .route(&full("/decide"), post(decide::decide))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(gw, protected)
@@ -439,6 +443,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         quick_search: c.quick_search,
         quick_search_enabled: c.quick_search_enabled,
         task_limits: c.task_limits,
+        research_enabled: c.research_enabled,
     })
 }
 
