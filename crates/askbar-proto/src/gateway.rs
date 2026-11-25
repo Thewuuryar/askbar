@@ -96,6 +96,13 @@ pub struct GatewayConfig {
     /// The key approvals are signed with. Absent until the admin has one to push; the gateway then signs nothing.
     #[serde(default)]
     pub approval_key: Option<ApprovalSigningKey>,
+    /// How long a signed approval lasts (plan step P5.4).
+    #[serde(default = "default_approval_ttl")]
+    pub approval_ttl_secs: u32,
+}
+
+fn default_approval_ttl() -> u32 {
+    crate::DEFAULT_APPROVAL_TTL_SECS
 }
 
 fn yes() -> bool {
@@ -292,6 +299,7 @@ mod tests {
             catalog: vec![],
             default_model: None,
             approval_key: Some(ApprovalSigningKey { version: 1, pkcs8: "marker-approval-key".into() }),
+            approval_ttl_secs: 60,
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");

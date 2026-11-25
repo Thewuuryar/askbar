@@ -57,7 +57,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/admin/src/{secrets,gateway_link}.rs`, `services/admin/Cargo.toml` (the `approval` feature), tests, OpenAPI if a route is added.
   Do: the admin makes the Ed25519 key with `generate_keypair`, pushes it to `model-gateway` and holds it in memory there only (like provider keys, ADR 0028); the public key is pushed to the MCP gateway front; rotation re-pushes both; never in logs, `/status`, audit attributes or any API response.
   Accept: tests: key absent from every output; rotation changes the public key version; a service before its first push signs and verifies nothing (fail closed).
-- [ ] **P5.4** `feat(model-gateway): sign approvals` · sonnet · after P5.3
+- [x] **P5.4** `feat(model-gateway): sign approvals` · sonnet · after P5.3
   Files: `services/model-gateway/src/{approval,lib}.rs` (new `approval.rs`), `services/model-gateway/Cargo.toml`, `tests/api.rs`.
   Do: sign the hash of the exact action, task, user, a one-time ID and a 60 s expiry (expiry from `constants.rs`, bounds in `askbar-proto`) with `sign` from P5.5; record each approval in the audit span (hash and ID, no arguments). Signing is called by `/decide` in P5.6; here it is a function with its own tests.
   Accept: a changed argument changes the hash; expiry and one-time ID are present; no key in any output.
