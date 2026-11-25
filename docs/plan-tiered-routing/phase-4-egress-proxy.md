@@ -111,7 +111,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.7c** `docs(adr): amend 0054: the gateway reaches providers through the proxy` · haiku · after P4.7b
   Files: `docs/adr/0054-model-gateway.md`. Do: its "Networks and outbound" and consequences lines: `egress-model-gateway` replaces `outbound`; the gateway has no route out of its own; the risk line about direct outbound ends. Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.7d** `docs(adr): amend 0055: the alerter delivers through the proxy` · haiku · after P4.7c
+- [x] **P4.7d** `docs(adr): amend 0055: the alerter delivers through the proxy` · haiku · after P4.7c
   Files: `docs/adr/0055-alerter.md`. Do: `egress-alerter` replaces `alerter-outbound`; ntfy and the release check use `CONNECT`, mail uses the relay; the checks line. Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7e** `docs(adr): amend 0042: cpa reaches providers through the proxy` · haiku · after P4.7d
