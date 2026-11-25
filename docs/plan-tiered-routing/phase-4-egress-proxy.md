@@ -120,7 +120,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.7f** `docs(adr): amend 0040: the admin pushes the egress allowlists` · haiku · after P4.7e
   Files: `docs/adr/0040-admin.md`. Do: the admin joins `egress-admin`, calls the proxy (`admin-egress-proxy`, `ASKBAR_EGRESS_PROXY_URL`), derives and pushes the allowlists, and stores the approvals (P4.4a). Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.8** `docs(docs): update the architecture network table and diagram` · haiku · after P4.7f
+- [x] **P4.8** `docs(docs): update the architecture network table and diagram` · haiku · after P4.7f
   Files: `docs/architecture.md` (glossary: `egress proxy` leaves the reserved names and gets a row; Picture; Components at a glance; Network map; the "Outbound access" sentence; the networks line of the header comment is `compose.yaml`'s, done in P4.3), `docs/guide.md` (a line on the Services page's blocked outbound requests section where it lists the page; Networks table lines for the gateway, alerter and cpa, and the diagram nodes that say "direct outbound"), `docs/plan-tiered-routing.md` (Phase 4 status to `PR open`).
   Do: describe the proxy as the one service with a route out besides Caddy, its three source networks, `egress-admin`, `egress-outbound`, and remove `outbound` and `alerter-outbound`. Match `compose.yaml`; no new facts.
   Accept: `scripts/check-docs.sh` passes; the network names in the docs equal those in `compose.yaml` (grep).
