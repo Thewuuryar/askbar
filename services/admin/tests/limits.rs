@@ -112,3 +112,37 @@ async fn limits_list_change_reset_and_reach_the_server_the_gateway_and_the_front
     assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
     assert_eq!(front.0.lock().unwrap().last().unwrap()["search_results"], m::DEFAULT_SEARCH_RESULTS);
 }
+
+#[tokio::test]
+async fn quick_search_on_off_round_trips_is_audited_and_changes_what_the_server_and_gateway_are_pushed() {
+    let t = common::start(true).await;
+    let put = |on: Value| {
+        let body = json!({ "system_prompt": "p", "display": askbar_proto::DisplaySettings::default(), "quick_search_enabled": on });
+        async { t.call(M::PUT, "/api/admin/v1/settings", body).await.0 }
+    };
+    let read = || async { t.call(M::GET, "/api/admin/v1/settings", json!(null)).await.1["quick_search_enabled"].clone() };
+    let pushed = || async {
+        let on_server = askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap().quick_search_enabled;
+        let db = t.admin.db.lock().await;
+        let cfg = askbar_admin::gateway_link::build_config(db.conn(), &t.admin.secrets, None).unwrap();
+        (on_server, cfg.quick_search_enabled, cfg.version)
+    };
+    // On by default, apart from the kill switch.
+    assert_eq!(read().await, json!(true));
+    assert_eq!(put(json!(true)).await, 204);
+    let (srv, gw, _) = pushed().await;
+    assert!(srv && gw);
+    let (_, _, v_on) = pushed().await;
+    assert_eq!(put(json!(false)).await, 204);
+    let (srv, gw, v_off) = pushed().await;
+    assert_eq!((read().await, srv, gw), (json!(false), false, false));
+    assert_ne!(v_on, v_off, "the gateway sees a new version and is pushed again");
+    // A save that leaves it out keeps it.
+    let body = json!({ "system_prompt": "p2", "display": askbar_proto::DisplaySettings::default() });
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", body).await.0, 204);
+    assert_eq!(read().await, json!(false));
+    assert_eq!(put(json!(true)).await, 204);
+    assert_eq!(pushed().await, (true, true, v_on));
+    let rows = t.rig.rows("SELECT detail_json FROM admin_actions WHERE category = 'settings' AND outcome = 'done' ORDER BY at, rowid");
+    assert!(rows.iter().any(|r| r[0].as_str().is_some_and(|d| d.contains("\"quick_search_enabled\":false"))), "{rows:?}");
+}

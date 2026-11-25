@@ -396,6 +396,7 @@ components:
           - quick_search_query_count
           - quick_search_fetch_count
           - quick_search_hourly_limit
+          - quick_search_disabled
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
@@ -474,6 +475,9 @@ components:
           type: boolean
         kill_switch_aborts_running:
           type: boolean
+        quick_search_enabled:
+          type: boolean
+          description: Whether quick search is on for everyone. On when absent. While off, a web search message is answered without searching.
         audit_retention_days:
           type: integer
           minimum: 7

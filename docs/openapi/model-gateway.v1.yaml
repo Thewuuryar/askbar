@@ -279,7 +279,7 @@ paths:
       summary: Sign one quick search call by fixed rules. The server's listener.
       description: >-
         No model is called and none judges: the gateway refuses or signs by fixed rules (plan W5.2). Refused when the
-        kill switch is on (`503 kill_switch`), the user is paused (`403 user_paused`), the tool is not `search` or `fetch`
+        quick search is turned off (`503 quick_search_disabled`), the kill switch is on (`503 kill_switch`), the user is paused (`403 user_paused`), the tool is not `search` or `fetch`
         (`400 quick_search_tool`), the arguments are not the tool's or a query is over the length limit
         (`400 quick_search_arguments`), the reply has used its searches (`429 quick_search_query_count`) or its fetches
         (`429 quick_search_fetch_count`), or the user has used the hour's searches (`429 quick_search_hourly_limit`). A refusal
@@ -344,7 +344,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '503':
-          description: No configuration or no approval key yet (`not_configured`), the kill switch is on (`kill_switch`), or the span was not acknowledged (`audit_backlog`). Nothing was signed.
+          description: No configuration or no approval key yet (`not_configured`), quick search is turned off (`quick_search_disabled`), the kill switch is on (`kill_switch`), or the span was not acknowledged (`audit_backlog`). Nothing was signed.
           headers:
             Retry-After:
               schema:
@@ -412,6 +412,7 @@ components:
           - quick_search_query_count
           - quick_search_fetch_count
           - quick_search_hourly_limit
+          - quick_search_disabled
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
@@ -600,6 +601,9 @@ components:
         kill_switch_aborts_running:
           type: boolean
           description: When the switch is on, also stop the replies already running (the default). They end with the error code `kill_switch`.
+        quick_search_enabled:
+          type: boolean
+          description: Whether quick search is on for everyone (default true when left out). While off, `POST /approvals/quick-search` answers `503 quick_search_disabled`.
         paused_users:
           type: array
           description: Users whose replies are refused (`403 user_paused`) and whose running replies are stopped (error code `user_paused`).

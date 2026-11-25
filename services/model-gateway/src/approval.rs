@@ -167,6 +167,9 @@ pub async fn quick_search(
         gate_blocked(&gw, &req.generation_id, &req.user, None, NAME, code.as_str(), attrs);
         ApiError::new(code, askbar_proto::http::default_detail(code))
     };
+    if !cfg.quick_search_enabled {
+        return Err(deny(ErrorCode::QuickSearchDisabled, serde_json::json!({ "enabled": false })));
+    }
     if cfg.kill_switch {
         return Err(deny(ErrorCode::KillSwitch, serde_json::json!({ "kill_switch": true })));
     }

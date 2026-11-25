@@ -66,6 +66,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::QuickSearchQueryCount => "This reply has already searched as many times as it may.",
         ErrorCode::QuickSearchFetchCount => "This reply has already fetched as many pages as it may.",
         ErrorCode::QuickSearchHourlyLimit => "This user has searched as often as an hour allows. Try again later.",
+        ErrorCode::QuickSearchDisabled => "Quick search has been turned off by the administrator.",
         ErrorCode::AuditKeyMissing => "The administrator has not set up the audit key yet.",
         ErrorCode::BackupKeyMissing => "The administrator has not set up the backup key yet, so nothing can be backed up.",
         ErrorCode::BackupNewerRelease => "This backup was made by a newer release of Askbar. Install that release to restore it.",

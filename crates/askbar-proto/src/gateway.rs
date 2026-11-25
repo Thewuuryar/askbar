@@ -130,6 +130,9 @@ pub struct GatewayConfig {
     /// The quick-search limits (plan W5.1), each within its bounds. Absent before the admin pushes them: the defaults.
     #[serde(default)]
     pub quick_search: crate::quick_search::QuickSearchLimits,
+    /// Whether quick search is on for everyone (plan P8.6e). A configuration that leaves it out keeps search on.
+    #[serde(default = "yes")]
+    pub quick_search_enabled: bool,
 }
 
 fn default_approval_ttl() -> u32 {
@@ -336,6 +339,7 @@ mod tests {
             approval_ttl_secs: 60,
             role_pins: BTreeMap::new(),
             quick_search: Default::default(),
+            quick_search_enabled: true,
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
@@ -351,6 +355,7 @@ mod tests {
             (cfg.budget, cfg.kill_switch, cfg.kill_switch_aborts_running, cfg.paused_users),
             (Budget::default(), false, true, vec![])
         );
+        assert!(cfg.quick_search_enabled, "a configuration that leaves it out keeps quick search on");
         assert_eq!((cfg.catalog, cfg.default_model), (vec![], None), "no catalog approves no model");
         let p: GatewayProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();
         assert_eq!(p.billing, Billing::Metered, "metered unless it says it is a subscription");

@@ -210,7 +210,7 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
         (
             M::PUT,
             "/api/admin/v1/settings",
-            Some(json!({ "system_prompt": "changed", "display": askbar_proto::DisplaySettings::default() })),
+            Some(json!({ "system_prompt": "changed", "display": askbar_proto::DisplaySettings::default(), "quick_search_enabled": false })),
         ),
         (M::POST, "/api/admin/v1/keys", Some(json!({ "name": "ci" }))),
         (M::PUT, "/api/admin/v1/mcp/permissions/U1", Some(json!({ "allowed": ["search"] }))),
@@ -235,6 +235,7 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
     assert_eq!(count("SELECT COUNT(*) FROM role_pins"), 0);
     assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key LIKE 'limit.%'"), 0, "no limit was saved");
     assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key = 'system_prompt'"), 0, "the setting was not saved");
+    assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key = 'quick_search_enabled'"), 0, "the switch was not saved");
     drop(db);
     // Reading still works: the admin does not go dark with the auditor.
     let r = http.get(format!("{adm}/api/admin/v1/providers")).header("cookie", &cookie).send().await.unwrap();

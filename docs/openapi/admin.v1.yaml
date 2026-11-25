@@ -2358,6 +2358,7 @@ components:
           - quick_search_query_count
           - quick_search_fetch_count
           - quick_search_hourly_limit
+          - quick_search_disabled
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
@@ -3026,6 +3027,13 @@ components:
           type: string
           maxLength: 300
           description: Its wording ("AI can make mistakes. Check important information." by default).
+        quick_search_enabled:
+          type: boolean
+          description: >-
+            Whether quick search is on for everyone, apart from the kill switch. On by default. While off, the gateway refuses
+            quick search approvals (`503 quick_search_disabled`), the server answers a web search message without searching and says
+            so, and `GET /client/v1/settings` reports `web_search` false. Each user's own permission to search is separate. A save
+            that leaves it out keeps it; the change is audited.
     NetworkInput:
       type: object
       required: [tls_enabled, hostname, admin_cidr, acme_staging]

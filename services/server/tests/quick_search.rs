@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 const MESSAGE: &str = "what is new in rust?";
 const ANSWER: &str = "Rust is fine [1].";
 const OFF: &str = "Web search is not turned on for you";
+const DISABLED: &str = "Search is turned off by your administrator";
 const DOWN: &str = "Web search is unavailable right now";
 
 #[derive(Default)]
@@ -304,4 +305,40 @@ async fn a_proposal_that_is_not_a_json_array_gives_a_plain_reply_with_a_note() {
     assert!(!names(&events).contains(&"search"));
     assert!(text_of(&events).starts_with("No web search could be made"), "{}", text_of(&events));
     assert!(t.fake.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn while_search_is_off_a_message_is_answered_plain_without_asking_anyone_and_a_new_snapshot_turns_it_on() {
+    let t = start(&["search", "fetch"], r#"["a"]"#, None).await;
+    let set = |on: bool| {
+        let db = t.state.db.lock().unwrap();
+        let mut snap = askbar_server::snapshot::current(&db).unwrap().unwrap();
+        snap.quick_search_enabled = on;
+        askbar_server::snapshot::apply(&db, &snap).unwrap();
+        drop(db);
+        t.rig.sync(&t.state);
+    };
+    let settings = || async {
+        let url = format!("http://{}/api/client/v1/settings", t.addr);
+        client().get(url).bearer_auth(&t.token).send().await.unwrap().json::<askbar_proto::Settings>().await.unwrap().web_search
+    };
+    assert!(settings().await);
+    set(false);
+    assert!(!settings().await, "the client hides the toggle");
+    let events = t.chat().await;
+    assert!(!names(&events).contains(&"search"));
+    let text = text_of(&events);
+    assert!(text.starts_with(DISABLED) && text.ends_with(ANSWER), "{text}");
+    assert_eq!(t.model_calls().len(), 1, "a plain reply: no query call");
+    assert!(t.fake.calls.lock().unwrap().is_empty(), "the front was not called");
+    let gates = t.rig.rows("SELECT status, error_code, attrs_json FROM spans WHERE kind = 'gate' AND name = 'quick_search_refused'");
+    assert_eq!(gates.len(), 1);
+    assert!(gates[0][2].as_str().unwrap().contains("disabled"), "{gates:?}");
+    assert!(t.rig.rows("SELECT 1 FROM spans WHERE name IN ('search', 'fetch', 'quick_search_approval')").is_empty());
+    // On again: search works with no restart.
+    set(true);
+    assert!(settings().await);
+    let events = t.chat().await;
+    assert!(names(&events).contains(&"search"), "{events:?}");
+    assert!(!t.tool_calls("search").is_empty());
 }

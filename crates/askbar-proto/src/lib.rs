@@ -241,6 +241,9 @@ pub struct Snapshot {
     /// The quick-search limits (plan W5.1), each within its bounds. Absent in an older snapshot: the defaults.
     #[serde(default)]
     pub quick_search: quick_search::QuickSearchLimits,
+    /// Whether quick search is on for everyone (plan P8.6e). Absent in an older snapshot: on.
+    #[serde(default = "default_true")]
+    pub quick_search_enabled: bool,
     /// Seconds a generation may run before it is stopped (30 to 3600). Read when it starts.
     #[serde(default = "default_generation_timeout_secs")]
     pub generation_timeout_secs: u32,
@@ -881,6 +884,7 @@ mod tests {
     fn a_snapshot_without_the_abort_setting_aborts_running_replies() {
         let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30}"#).unwrap();
         assert!(s.kill_switch_aborts_running, "the safer default: the switch really stops things");
+        assert!(s.quick_search_enabled, "a snapshot that leaves it out keeps quick search on");
         let s: Snapshot = serde_json::from_str(r#"{"audit_retention_days": 30, "kill_switch_aborts_running": false}"#).unwrap();
         assert!(!s.kill_switch_aborts_running);
     }

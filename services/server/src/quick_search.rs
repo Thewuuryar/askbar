@@ -37,6 +37,7 @@ const MAX_PROPOSAL_BYTES: usize = 16 * 1024;
 const MARKER: &str = "untrusted_web_content";
 
 const NOTE_OFF: &str = "Web search is not turned on for you, so this answer is not from the web.\n\n";
+const NOTE_DISABLED: &str = "Search is turned off by your administrator, so this answer is not from the web.\n\n";
 const NOTE_DOWN: &str = "Web search is unavailable right now, so this answer is not from the web.\n\n";
 const NOTE_NO_QUERIES: &str = "No web search could be made for this message, so this answer is not from the web.\n\n";
 
@@ -157,6 +158,16 @@ fn refuse(cx: &Ctx, reason: &str, code: &str) {
 /// would (kill switch, budget, no gateway): the reply fails the same way. Anything else is a note and a plain reply.
 pub(crate) async fn prepare(cx: &Ctx<'_>, message: &str) -> Result<Prepared, Failed> {
     let mut out = Prepared::default();
+    // Off for everyone: no gateway or front is asked (the gateway refuses too).
+    let on = {
+        let db = cx.state.db.lock().unwrap_or_else(|e| e.into_inner());
+        crate::snapshot::current(&db).ok().flatten().is_none_or(|s| s.quick_search_enabled)
+    };
+    if !on {
+        refuse(cx, "disabled", "quick_search_disabled");
+        out.notice = NOTE_DISABLED.into();
+        return Ok(out);
+    }
     let held = match &cx.state.mcp {
         Some(mcp) => mcp.tools(cx.user_id).await,
         None => None,
