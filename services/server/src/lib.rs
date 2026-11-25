@@ -19,6 +19,7 @@ pub mod server_api;
 pub mod snapshot;
 pub mod space;
 pub mod store;
+pub mod tasks;
 #[doc(hidden)]
 pub mod testing;
 

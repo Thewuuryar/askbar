@@ -40,7 +40,7 @@ Runs in track 1 as stage W7 of [plan-priorities.md](../plan-priorities.md). Need
   - `ErrorCode`s `task_token_cap` (402), `task_tool_calls`, `research_busy` (409), `research_disabled`, each with its default detail; additive `research_enabled: bool` (reads true when absent) on `GatewayConfig` and the server snapshot.
 
   Accept: old requests, configs and tasks parse unchanged; `MIN <= DEFAULT <= MAX`; a role outside the list still fails; the OpenAPI test passes; the served constants JSON has no secret-looking key.
-- [ ] **P5.9** `feat(server): add task tables and mark running tasks interrupted on start` · sonnet · after P5B.1
+- [x] **P5.9** `feat(server): add task tables and mark running tasks interrupted on start` · sonnet · after P5B.1
   Files: `services/server/src/{space,db}.rs` (a new appended space migration), the conversation-delete path, `docs/architecture.md` if it lists the space tables, tests.
   Do: the `tasks` and `task_steps` tables of "How it works", with `kind`; a step row is written before it starts and updated at its end; the conversation's delete removes its tasks and steps; on start every `running` task becomes `interrupted` (in each space file, with the other start-up work); a helper that says whether a user has a running task of a kind. Never edit an earlier migration.
   Accept: migration test on an old file; a conversation delete removes the rows; a killed running task reads `interrupted` after restart; the backup test still passes with the new tables.
