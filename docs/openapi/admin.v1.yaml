@@ -1829,7 +1829,7 @@ paths:
   /api/admin/v1/limits:
     get:
       operationId: getLimits
-      summary: The quick search and MCP front limits, each with its value, default and range.
+      summary: The quick search, research and MCP front limits, each with its value, default and range.
       security:
         - adminSession: []
         - adminApiKey: []
@@ -1875,7 +1875,7 @@ paths:
     get:
       operationId: listRoles
       summary: The model pinned to each role.
-      description: "The three roles (`chat.manual`, `search.query`, `search.writer`), each with its pin or none. `approved` is false when the pinned model is no longer approved: the gateway is not given that pin."
+      description: "The six roles (`chat.manual`, `search.query`, `search.writer`, `research.researcher`, `research.writer`, `judge.review`), each with its pin or none. `approved` is false when the pinned model is no longer approved: the gateway is not given that pin."
       security:
         - adminSession: []
         - adminApiKey: []
@@ -1897,7 +1897,7 @@ paths:
         required: true
         schema:
           type: string
-          enum: [chat.manual, search.query, search.writer]
+          enum: [chat.manual, search.query, search.writer, research.researcher, research.writer, judge.review]
     put:
       operationId: putRolePin
       summary: Pin an approved model to a role.
@@ -2621,10 +2621,15 @@ components:
           type: integer
     LimitsView:
       type: object
-      required: [quick_search, mcp]
+      required: [quick_search, research, mcp]
       properties:
         quick_search:
           type: array
+          items:
+            $ref: '#/components/schemas/LimitRow'
+        research:
+          type: array
+          description: The research task limits (`tool_calls`, `token_cap`, `researchers_max`, `wait_after_two_secs`, `stage_secs`, `summary_tokens`), pushed to the gateway and the server.
           items:
             $ref: '#/components/schemas/LimitRow'
         mcp:
@@ -2646,7 +2651,7 @@ components:
       properties:
         role:
           type: string
-          enum: [chat.manual, search.query, search.writer]
+          enum: [chat.manual, search.query, search.writer, research.researcher, research.writer, judge.review]
         pin:
           oneOf:
             - $ref: '#/components/schemas/RolePin'
@@ -3105,6 +3110,12 @@ components:
             quick search approvals (`503 quick_search_disabled`), the server answers a web search message without searching and says
             so, and `GET /client/v1/settings` reports `web_search` false. Each user's own permission to search is separate. A save
             that leaves it out keeps it; the change is audited.
+        research_enabled:
+          type: boolean
+          description: >-
+            Whether research reports are on for everyone, apart from the kill switch and quick search. On by default. While off, the
+            gateway refuses research approvals and decisions (`503 research_disabled`) and the server answers without research.
+            A save that leaves it out keeps it; the change is audited.
     NetworkInput:
       type: object
       required: [tls_enabled, hostname, admin_cidr, acme_staging]

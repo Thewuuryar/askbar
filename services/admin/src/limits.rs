@@ -8,6 +8,7 @@ use crate::web::Failure;
 use crate::AdminState;
 use askbar_proto::http::{ApiError, ApiJson};
 use askbar_proto::quick_search::{self as qs, QuickSearchLimits};
+use askbar_proto::research::{self as rs, TaskLimits};
 use askbar_proto::{mcp, ErrorCode};
 use axum::{extract::State, Json};
 use rusqlite::{params, Connection};
@@ -28,8 +29,9 @@ const fn l(name: &'static str, group: &'static str, default: u64, min: u64, max:
 }
 
 const Q: QuickSearchLimits = QUICK_SEARCH_LIMITS;
+const T: TaskLimits = TASK_LIMITS;
 
-pub const LIMITS: [Limit; 12] = [
+pub const LIMITS: [Limit; 18] = [
     l("max_queries", "quick_search", Q.max_queries as u64, qs::MIN_QUERIES as u64, qs::MAX_QUERIES as u64),
     l("max_query_chars", "quick_search", Q.max_query_chars as u64, qs::MIN_QUERY_CHARS as u64, qs::MAX_QUERY_CHARS as u64),
     l("max_pages", "quick_search", Q.max_pages as u64, qs::MIN_PAGES as u64, qs::MAX_PAGES as u64),
@@ -40,6 +42,18 @@ pub const LIMITS: [Limit; 12] = [
         qs::MIN_SEARCHES_PER_HOUR as u64,
         qs::MAX_SEARCHES_PER_HOUR as u64,
     ),
+    l("tool_calls", "research", T.tool_calls as u64, rs::MIN_TOOL_CALLS as u64, rs::MAX_TOOL_CALLS as u64),
+    l("token_cap", "research", T.token_cap as u64, rs::MIN_TOKEN_CAP as u64, rs::MAX_TOKEN_CAP as u64),
+    l("researchers_max", "research", T.researchers_max as u64, rs::MIN_RESEARCHERS as u64, rs::MAX_RESEARCHERS as u64),
+    l(
+        "wait_after_two_secs",
+        "research",
+        T.wait_after_two_secs as u64,
+        rs::MIN_WAIT_AFTER_TWO_SECS as u64,
+        rs::MAX_WAIT_AFTER_TWO_SECS as u64,
+    ),
+    l("stage_secs", "research", T.stage_secs as u64, rs::MIN_STAGE_SECS as u64, rs::MAX_STAGE_SECS as u64),
+    l("summary_tokens", "research", T.summary_tokens as u64, rs::MIN_SUMMARY_TOKENS as u64, rs::MAX_SUMMARY_TOKENS as u64),
     l("fetch_max_bytes", "mcp", MCP_FETCH_MAX_BYTES, mcp::MIN_FETCH_MAX_BYTES, mcp::MAX_FETCH_MAX_BYTES),
     l("fetch_timeout_secs", "mcp", MCP_FETCH_TIMEOUT_SECS as u64, mcp::MIN_FETCH_TIMEOUT_SECS as u64, mcp::MAX_FETCH_TIMEOUT_SECS as u64),
     l("fetch_redirects", "mcp", MCP_FETCH_REDIRECTS as u64, mcp::MIN_FETCH_REDIRECTS as u64, mcp::MAX_FETCH_REDIRECTS as u64),
@@ -87,6 +101,19 @@ pub fn quick_search(conn: &Connection) -> QuickSearchLimits {
     }
 }
 
+/// The research task limits as they run: each override or default, pushed to the gateway and the server.
+pub fn task_limits(conn: &Connection) -> TaskLimits {
+    let g = |n| get(conn, n) as u32;
+    TaskLimits {
+        tool_calls: g("tool_calls"),
+        token_cap: g("token_cap"),
+        researchers_max: g("researchers_max"),
+        wait_after_two_secs: g("wait_after_two_secs"),
+        stage_secs: g("stage_secs"),
+        summary_tokens: g("summary_tokens"),
+    }
+}
+
 #[derive(Serialize)]
 pub struct LimitRow {
     name: &'static str,
@@ -99,6 +126,7 @@ pub struct LimitRow {
 #[derive(Serialize)]
 pub struct LimitsView {
     quick_search: Vec<LimitRow>,
+    research: Vec<LimitRow>,
     mcp: Vec<LimitRow>,
 }
 
@@ -110,7 +138,7 @@ fn view(conn: &Connection) -> LimitsView {
             .map(|l| LimitRow { name: l.name, value: value_of(conn, l), default: l.default, min: l.min, max: l.max })
             .collect()
     };
-    LimitsView { quick_search: rows("quick_search"), mcp: rows("mcp") }
+    LimitsView { quick_search: rows("quick_search"), research: rows("research"), mcp: rows("mcp") }
 }
 
 fn internal<E>(_: E) -> Failure {

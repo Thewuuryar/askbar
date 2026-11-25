@@ -804,7 +804,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   });
   await step('A model is pinned to a job, saved, and cleared again', async () => {
     const row = 'tr[data-role="search.query"]';
-    assert.equal(await page.locator('#roles tr').count(), 3, 'one row per job');
+    assert.equal(await page.locator('#roles tr').count(), 6, 'one row per job');
     assert.match(await page.innerText(row), /None/);
     assert.equal(await page.isDisabled(row + ' button >> text=Clear'), true, 'nothing to clear yet');
     await page.selectOption(row + ' select', { index: 1 });
@@ -1459,6 +1459,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openPage('search');
     await page.waitForSelector('#search-limits-quick tr[data-limit]');
     assert.equal(await page.locator('#search-limits-quick tr[data-limit]').count(), 4);
+    assert.equal(await page.locator('#search-limits-research tr[data-limit]').count(), 6);
     assert.equal(await page.locator('#search-limits-mcp tr[data-limit]').count(), 8);
     await page.waitForFunction(() => /No search yet/.test(document.querySelector('#search-searxng-state').textContent));
     assert.ok(await page.locator('#search-engines tr').count() > 0, 'the engines are listed');
@@ -1471,6 +1472,32 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       assert.equal((await adminJson('GET', '/api/admin/v1/settings')).body.quick_search_enabled, on);
       assert.equal(await page.isChecked('#search-on'), on);
     }
+  });
+  await step('Search: research is switched off and on, and a research limit is edited and reset', async () => {
+    assert.equal(await page.isChecked('#research-on'), true);
+    for (const on of [false, true]) {
+      const put = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/settings') && r.request().method() === 'PUT');
+      await page.setChecked('#research-on', on);
+      assert.equal((await put).status(), 204);
+      const settings = (await adminJson('GET', '/api/admin/v1/settings')).body;
+      assert.equal(settings.research_enabled, on);
+      assert.equal(settings.quick_search_enabled, true, 'quick search is its own switch');
+      assert.equal(await page.isChecked('#research-on'), on);
+    }
+    const lim = async () => (await adminJson('GET', '/api/admin/v1/limits')).body.research.find((l) => l.name === 'stage_secs');
+    const row = '#search-limits-research tr[data-limit="stage_secs"]';
+    const { default: def, max } = await lim();
+    await page.fill(row + ' input', String(def + 1));
+    await page.click(row + ' button:has-text("Save")');
+    await page.waitForFunction((r) => !document.querySelector(r + ' button.btn-quiet').disabled, row);
+    assert.equal((await lim()).value, def + 1);
+    await page.click(row + ' button:has-text("Reset")');
+    await page.waitForFunction((r) => document.querySelector(r + ' button.btn-quiet').disabled, row);
+    assert.equal((await lim()).value, def);
+    await page.fill(row + ' input', String(max + 1));
+    await page.click(row + ' button:has-text("Save")');
+    await page.waitForFunction(() => { const e = document.querySelector('#page-error'); return !e.hidden && e.textContent.length > 0; });
+    assert.equal((await lim()).value, def, 'a refused value changes nothing');
   });
   await step('Search: a limit is edited, reaches the front, is reset, and an out-of-range value is refused as text', async () => {
     const lim = async (name) => (await adminJson('GET', '/api/admin/v1/limits')).body.mcp.find((l) => l.name === name);

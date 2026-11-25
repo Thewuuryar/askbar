@@ -157,3 +157,78 @@ async fn quick_search_on_off_round_trips_is_audited_and_changes_what_the_server_
     let rows = t.rig.rows("SELECT detail_json FROM admin_actions WHERE category = 'settings' AND outcome = 'done' ORDER BY at, rowid");
     assert!(rows.iter().any(|r| r[0].as_str().is_some_and(|d| d.contains("\"quick_search_enabled\":false"))), "{rows:?}");
 }
+
+async fn gateway_task(t: &common::T) -> (askbar_proto::research::TaskLimits, bool, u64) {
+    let db = t.admin.db.lock().await;
+    let cfg = askbar_admin::gateway_link::build_config(db.conn(), &t.admin.secrets, None).unwrap();
+    (cfg.task_limits, cfg.research_enabled, cfg.version)
+}
+
+fn server_task(t: &common::T) -> (askbar_proto::research::TaskLimits, bool) {
+    let s = askbar_server::snapshot::current(&t.server.db.lock().unwrap()).unwrap().unwrap();
+    (s.task_limits, s.research_enabled)
+}
+
+#[tokio::test]
+async fn research_limits_list_change_reset_and_reach_the_server_and_the_gateway_in_one_push() {
+    use askbar_proto::research as r;
+    let t = common::start(true).await;
+    let (_, list) = t.call(M::GET, URL, json!(null)).await;
+    assert_eq!(list["research"].as_array().unwrap().len(), 6);
+    assert_eq!(
+        list["research"][1],
+        json!({ "name": "token_cap", "value": r::DEFAULT_TOKEN_CAP, "default": r::DEFAULT_TOKEN_CAP, "min": r::MIN_TOKEN_CAP, "max": r::MAX_TOKEN_CAP })
+    );
+    let (st, _) = t.call(M::PUT, URL, json!({ "tool_calls": 12, "token_cap": 50_000, "stage_secs": 30 })).await;
+    assert_eq!(st, 200);
+    let want = r::TaskLimits { tool_calls: 12, token_cap: 50_000, stage_secs: 30, ..r::TaskLimits::DEFAULT };
+    assert_eq!(server_task(&t).0, want);
+    assert_eq!(gateway_task(&t).await.0, want);
+    let rows = t.rig.rows("SELECT detail_json FROM admin_actions WHERE category = 'limits' AND action = 'set' AND outcome = 'done'");
+    assert!(rows.iter().any(|r| r[0].as_str().is_some_and(|d| d.contains("token_cap"))), "{rows:?}");
+
+    // Out of range: refused, nothing saved or pushed.
+    let v = gateway_task(&t).await.2;
+    for bad in [
+        json!({ "tool_calls": 33 }),
+        json!({ "token_cap": 19_999 }),
+        json!({ "researchers_max": 5 }),
+        json!({ "summary_tokens": 0, "stage_secs": 40 }),
+    ] {
+        let (st, b) = t.call(M::PUT, URL, bad.clone()).await;
+        assert_eq!((st, b["error"].as_str()), (400, Some("bad_request")), "{bad} {b}");
+    }
+    assert_eq!((server_task(&t).0, gateway_task(&t).await.0, gateway_task(&t).await.2), (want, want, v));
+
+    // null resets to the default.
+    assert_eq!(t.call(M::PUT, URL, json!({ "tool_calls": null, "token_cap": null, "stage_secs": null })).await.0, 200);
+    assert_eq!(server_task(&t).0, r::TaskLimits::DEFAULT);
+    assert_eq!(gateway_task(&t).await.0, r::TaskLimits::DEFAULT);
+}
+
+#[tokio::test]
+async fn research_on_off_round_trips_is_audited_and_changes_the_server_snapshot_and_the_gateway_config() {
+    let t = common::start(true).await;
+    let put = |on: Value| {
+        let body = json!({ "system_prompt": "p", "display": askbar_proto::DisplaySettings::default(), "research_enabled": on });
+        async { t.call(M::PUT, "/api/admin/v1/settings", body).await.0 }
+    };
+    let read = || async { t.call(M::GET, "/api/admin/v1/settings", json!(null)).await.1 };
+    let b = read().await;
+    assert_eq!((b["research_enabled"].clone(), b["quick_search_enabled"].clone()), (json!(true), json!(true)), "on by default");
+    let (_, _, v_on) = gateway_task(&t).await;
+    assert_eq!(put(json!(false)).await, 204);
+    let b = read().await;
+    assert_eq!((b["research_enabled"].clone(), b["quick_search_enabled"].clone()), (json!(false), json!(true)), "apart from quick search");
+    let (_, gw, v_off) = gateway_task(&t).await;
+    assert_eq!((server_task(&t).1, gw), (false, false));
+    assert_ne!(v_on, v_off, "the gateway sees a new version and is pushed again");
+    // A save that leaves it out keeps it.
+    let body = json!({ "system_prompt": "p2", "display": askbar_proto::DisplaySettings::default() });
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", body).await.0, 204);
+    assert_eq!(read().await["research_enabled"], json!(false));
+    assert_eq!(put(json!(true)).await, 204);
+    assert_eq!((server_task(&t).1, gateway_task(&t).await.1, gateway_task(&t).await.2), (true, true, v_on));
+    let rows = t.rig.rows("SELECT detail_json FROM admin_actions WHERE category = 'settings' AND outcome = 'done' ORDER BY at, rowid");
+    assert!(rows.iter().any(|r| r[0].as_str().is_some_and(|d| d.contains("\"research_enabled\":false"))), "{rows:?}");
+}

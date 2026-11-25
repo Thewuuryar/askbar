@@ -109,6 +109,7 @@ async fn auditor_stub(now: i64) -> String {
             span("turn", "chat", "done", now - 60, Some("search.query"), Some((1_000_000, 250_000))),
             attempt,
             span("turn", "chat", "done", now - 30, Some("search.writer"), Some((500_000, 0))),
+            span("turn", "chat", "done", now - 25, Some("judge.review"), Some((200_000, 0))),
             span("turn", "chat", "done", now - 20, None, Some((9_000_000, 9_000_000))),
             span("tool", "search", "ok", now - 50, None, None),
             span("tool", "search", "error", now - 49, None, None),
@@ -181,7 +182,8 @@ async fn usage_counts_per_day_and_prices_each_role_from_the_auditor_with_no_text
     // The refused search and the gate span are refusals; the failed search still counts as a search.
     assert_eq!(v["per_day"], json!([{ "day": day, "searches": 2, "fetches": 1, "refusals": 2 }]));
     let roles = v["roles"].as_array().unwrap();
-    assert_eq!(roles.len(), 2, "the turn without a search role is left out");
+    assert_eq!(roles.len(), 3, "the turn without a role is left out, the research role is counted");
+    assert!(close(&roles.iter().find(|x| x["role"] == "judge.review").unwrap()["cost"], 0.4), "{roles:?}");
     let by = |r: &str| roles.iter().find(|x| x["role"] == r).unwrap();
     // search.query: 1M in x 2.0 + 250k out x 4.0 = 3.0; search.writer: 500k in x 2.0 = 1.0 (priced by the attempt's provider).
     assert_eq!((by("search.query")["tokens_in"].clone(), by("search.query")["tokens_out"].clone()), (json!(1_000_000), json!(250_000)));

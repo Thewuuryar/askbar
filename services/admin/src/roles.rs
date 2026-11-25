@@ -1,4 +1,4 @@
-//! The model pinned to each role (plan W4.2): `chat.manual`, `search.query` and `search.writer` each use one approved model.
+//! The model pinned to each role (plan W4.2, P5B.3): each of the six roles of the `Role` enum uses one approved model.
 //! The pins go to `model-gateway` in `PUT /config` (`role_pins`), which uses them for a request that names a role. A pin
 //! whose model is no longer approved stays listed, marked not approved, and is not pushed. Each change is an audited admin
 //! action (role and `provider/model`, no more), refused when the record cannot be appended.
@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Every role, in the order the page lists them.
-const ROLES: [Role; 3] = [Role::ChatManual, Role::SearchQuery, Role::SearchWriter];
+const ROLES: [Role; 6] =
+    [Role::ChatManual, Role::SearchQuery, Role::SearchWriter, Role::ResearchResearcher, Role::ResearchWriter, Role::JudgeReview];
 
 fn name(r: Role) -> String {
     serde_json::to_value(r).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
@@ -65,7 +66,7 @@ pub fn pushed(conn: &Connection) -> rusqlite::Result<BTreeMap<Role, String>> {
     Ok(out)
 }
 
-/// `GET /api/admin/v1/roles`: the three roles, each with its pin or none.
+/// `GET /api/admin/v1/roles`: every role, each with its pin or none.
 pub async fn list(State(state): St) -> Result<Json<Vec<RoleRow>>, Failure> {
     let db = state.db.lock().await;
     let conn = db.conn();
