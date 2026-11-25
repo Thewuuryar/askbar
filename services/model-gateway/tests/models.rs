@@ -102,6 +102,7 @@ async fn gateway(up: &str) -> G {
         billing: Default::default(),
     };
     let cfg = GatewayConfig {
+        role_pins: Default::default(),
         version: 1,
         providers: vec![mk("saved", "Saved", KEY, format!("{up}/v1")), mk("wrong", "Wrong key", "good-not", format!("{up}/v1"))],
         audit_public_key: Some(audit_key()),

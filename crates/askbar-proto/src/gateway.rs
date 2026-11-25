@@ -4,7 +4,7 @@
 //! (`POST /chat`, a Server-Sent Events stream). A provider's error text is not here: the server gets a
 //! code and a class, and the text goes to the auditor sealed.
 
-use crate::{AuditKey, Billing, Budget, CatalogEntry};
+use crate::{AuditKey, Billing, Budget, CatalogEntry, ErrorCode};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -60,6 +60,30 @@ impl fmt::Debug for ApprovalSigningKey {
     }
 }
 
+/// What a request is for, so the model pinned to it can be used (plan W4.1). The wire strings are the dotted names; the
+/// tiered-routing roles are added to this enum in plan W7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Role {
+    #[serde(rename = "chat.manual")]
+    ChatManual,
+    #[serde(rename = "search.query")]
+    SearchQuery,
+    #[serde(rename = "search.writer")]
+    SearchWriter,
+}
+
+/// The model a request's role is pinned to, as `provider/model`. `Ok(None)` when the request names no role. A role
+/// with no pin is refused: `role_not_pinned`.
+pub fn pinned_model(pins: &BTreeMap<Role, String>, role: Option<Role>) -> Result<Option<&str>, ErrorCode> {
+    match role {
+        None => Ok(None),
+        Some(r) => match pins.get(&r) {
+            Some(model) => Ok(Some(model.as_str())),
+            None => Err(ErrorCode::RoleNotPinned),
+        },
+    }
+}
+
 /// `PUT /config`: everything the gateway needs to run. Replaces the whole of the earlier one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GatewayConfig {
@@ -99,6 +123,10 @@ pub struct GatewayConfig {
     /// How long a signed approval lasts (plan step P5.4).
     #[serde(default = "default_approval_ttl")]
     pub approval_ttl_secs: u32,
+    /// The model each role uses, `provider/model` (plan W4.1). Empty until the admin pins one, and left out of the JSON
+    /// while empty, so a configuration without pins keeps its version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_pins: BTreeMap<Role, String>,
 }
 
 fn default_approval_ttl() -> u32 {
@@ -169,6 +197,9 @@ pub struct ChatRequest {
     pub provider_id: String,
     /// The model to call, one the catalog approves for this provider.
     pub model: String,
+    /// What the request is for. Left out of the JSON when none, so a request without it is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
     pub user_id: String,
     #[serde(default)]
     pub client_id: Option<String>,
@@ -300,6 +331,7 @@ mod tests {
             default_model: None,
             approval_key: Some(ApprovalSigningKey { version: 1, pkcs8: "marker-approval-key".into() }),
             approval_ttl_secs: 60,
+            role_pins: BTreeMap::new(),
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
@@ -334,5 +366,31 @@ mod tests {
             assert_eq!(wire["event"], e.name(), "the tag is the event name");
             assert_eq!(serde_json::from_value::<ChatEvent>(wire).unwrap(), e);
         }
+    }
+
+    #[test]
+    fn a_config_and_request_from_before_roles_parse_unchanged_and_roles_are_dotted_strings() {
+        let cfg: GatewayConfig = serde_json::from_str(r#"{"version":1,"providers":[],"audit_public_key":null}"#).unwrap();
+        assert!(cfg.role_pins.is_empty());
+        let old = r#"{"provider_id":"p","model":"m","user_id":"u","generation_id":"g","system":"","messages":[]}"#;
+        let req: ChatRequest = serde_json::from_str(old).unwrap();
+        assert_eq!(req.role, None);
+        assert!(serde_json::to_value(&req).unwrap().get("role").is_none(), "no role, no key");
+        let pinned: GatewayConfig =
+            serde_json::from_str(r#"{"version":1,"providers":[],"audit_public_key":null,"role_pins":{"search.query":"p/m"}}"#).unwrap();
+        assert_eq!(pinned.role_pins, BTreeMap::from([(Role::SearchQuery, "p/m".to_string())]));
+        for (role, s) in [(Role::ChatManual, "chat.manual"), (Role::SearchQuery, "search.query"), (Role::SearchWriter, "search.writer")] {
+            assert_eq!(serde_json::to_value(role).unwrap(), s);
+            assert_eq!(serde_json::from_value::<Role>(serde_json::json!(s)).unwrap(), role);
+        }
+    }
+
+    #[test]
+    fn a_role_with_no_pin_is_refused_and_a_pinned_role_resolves_to_its_model() {
+        let pins = BTreeMap::from([(Role::SearchQuery, "p/m".to_string())]);
+        assert_eq!(pinned_model(&pins, None), Ok(None), "no role: nothing to resolve");
+        assert_eq!(pinned_model(&pins, Some(Role::SearchQuery)), Ok(Some("p/m")));
+        let refused = pinned_model(&pins, Some(Role::ChatManual)).unwrap_err();
+        assert_eq!((refused, refused.as_str(), refused.status()), (ErrorCode::RoleNotPinned, "role_not_pinned", 400));
     }
 }

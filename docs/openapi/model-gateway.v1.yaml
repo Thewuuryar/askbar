@@ -326,6 +326,7 @@ components:
           - kill_switch
           - user_paused
           - model_not_approved
+          - role_not_pinned
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
@@ -529,6 +530,13 @@ components:
         default_model:
           type: [string, 'null']
           description: The catalog's default, `provider/model`. Present exactly when the catalog is not empty, and one of its models.
+        role_pins:
+          type: object
+          description: The model each role uses, `provider/model`, keyed by role (plan W4.1). Left out while empty.
+          additionalProperties:
+            type: string
+          propertyNames:
+            enum: [chat.manual, search.query, search.writer]
     CatalogEntry:
       type: object
       required: [provider_id, model]
@@ -579,6 +587,10 @@ components:
         model:
           type: string
           description: The model to call. The catalog must approve it for this provider (`400 model_not_approved`).
+        role:
+          type: string
+          enum: [chat.manual, search.query, search.writer]
+          description: What the request is for. A role with no model pinned is refused (`400 role_not_pinned`). Absent means none.
         user_id:
           type: string
         client_id:

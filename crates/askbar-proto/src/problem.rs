@@ -21,6 +21,8 @@ pub enum ErrorCode {
     KillSwitch,
     UserPaused,
     ModelNotApproved,
+    /// The request names a role that has no model pinned (plan W4.1). 400.
+    RoleNotPinned,
     AuditKeyMissing,
     /// No backup key is set (ADR 0013): an export cannot be encrypted, so none is made. 503.
     BackupKeyMissing,
@@ -60,12 +62,13 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 38] = [
+    pub const ALL: [ErrorCode; 39] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
         ErrorCode::UserPaused,
         ErrorCode::ModelNotApproved,
+        ErrorCode::RoleNotPinned,
         ErrorCode::AuditKeyMissing,
         ErrorCode::BackupKeyMissing,
         ErrorCode::BackupNewerRelease,
@@ -109,6 +112,7 @@ impl ErrorCode {
             ErrorCode::KillSwitch => "kill_switch",
             ErrorCode::UserPaused => "user_paused",
             ErrorCode::ModelNotApproved => "model_not_approved",
+            ErrorCode::RoleNotPinned => "role_not_pinned",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
             ErrorCode::BackupKeyMissing => "backup_key_missing",
             ErrorCode::BackupNewerRelease => "backup_newer_release",
@@ -159,7 +163,7 @@ impl ErrorCode {
             | ErrorCode::SetupRequired
             | ErrorCode::NotConfigured => 503,
             ErrorCode::ClientTooOld => 426,
-            ErrorCode::ClientVersionMissing | ErrorCode::BadRequest | ErrorCode::ModelNotApproved => 400,
+            ErrorCode::ClientVersionMissing | ErrorCode::BadRequest | ErrorCode::ModelNotApproved | ErrorCode::RoleNotPinned => 400,
             ErrorCode::Unauthorized => 401,
             ErrorCode::Forbidden
             | ErrorCode::PasswordChangeRequired
@@ -190,6 +194,7 @@ impl ErrorCode {
             ErrorCode::KillSwitch => "Replies are switched off",
             ErrorCode::UserPaused => "Replies are paused for this user",
             ErrorCode::ModelNotApproved => "That model is not approved",
+            ErrorCode::RoleNotPinned => "That role has no model pinned",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
             ErrorCode::BackupKeyMissing => "The backup key has not been set up",
             ErrorCode::BackupNewerRelease => "The backup is from a newer release",
@@ -356,6 +361,7 @@ mod tests {
                 | ErrorCode::KillSwitch
                 | ErrorCode::UserPaused
                 | ErrorCode::ModelNotApproved
+                | ErrorCode::RoleNotPinned
                 | ErrorCode::AuditKeyMissing
                 | ErrorCode::BackupKeyMissing
                 | ErrorCode::BackupNewerRelease
@@ -391,6 +397,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 38);
+        assert_eq!(ErrorCode::ALL.len(), 39);
     }
 }

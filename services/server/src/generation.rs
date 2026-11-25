@@ -999,6 +999,7 @@ async fn via_gateway(
     let request = GatewayRequest {
         provider_id: provider.id.clone(),
         model: model.to_string(),
+        role: None,
         user_id: fin.user_id.clone(),
         client_id: fin.client_id.clone(),
         space_id: Some(fin.space.id.clone()),

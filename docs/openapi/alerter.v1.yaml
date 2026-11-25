@@ -314,6 +314,7 @@ components:
           - kill_switch
           - user_paused
           - model_not_approved
+          - role_not_pinned
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
