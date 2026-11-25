@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block content %}
+    <div id="search-banner"></div>
+    {% call b::error_line("search-error") %}{% endcall %}
+    <section id="search-quick-section" aria-labelledby="search-quick-title">
+      <div class="sect-head">
+        {% call c::section_title("search-quick-title", "Quick search", "settings/search#quick-search") %}{% endcall %}
+      </div>
+      <div class="field">
+        <label class="check" for="search-on"><input type="checkbox" id="search-on"> Quick search is on</label>
+        <p class="hint">Off stops web search for everyone at once; answers say the search is off. Each person's own permission is on the <a href="/admin/mcp/">MCP</a> page, and the kill switch is separate.</p>
+      </div>
+      <p class="hint">Models: <span id="search-pins"></span> Change them under Model for each job on the <a href="/admin/providers/">Providers</a> page.</p>
+      <div class="table-wrap">
+        <table class="table" id="search-limits-quick-table">
+          <caption class="visually-hidden">Quick search limits</caption>
+          {% call c::table_head(["Limit", "Value", ">Default", "Range", ""]) %}{% endcall %}
+          <tbody id="search-limits-quick"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="search-searxng-section" aria-labelledby="search-searxng-title">
+      <div class="sect-head">
+        {% call c::section_title("search-searxng-title", "Search engine", "settings/search#search-engine") %}{% endcall %}
+        <span class="spacer"></span>
+        <span id="search-searxng-state"></span>
+      </div>
+      <p class="hint" id="search-searxng-last"></p>
+      <p class="hint">The engines searxng asks, and the host each one needs through the egress proxy. Fixed with the install; nothing is typed here.</p>
+      <div class="table-wrap">
+        <table class="table" id="search-engines-table">
+          <caption class="visually-hidden">Engines</caption>
+          {% call c::table_head(["Engine", "Egress host"]) %}{% endcall %}
+          <tbody id="search-engines"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="search-mcp-section" aria-labelledby="search-mcp-title">
+      <div class="sect-head">
+        {% call c::section_title("search-mcp-title", "MCP limits", "settings/search#mcp-limits") %}{% endcall %}
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="search-limits-mcp-table">
+          <caption class="visually-hidden">MCP front limits</caption>
+          {% call c::table_head(["Limit", "Value", ">Default", "Range", ""]) %}{% endcall %}
+          <tbody id="search-limits-mcp"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="search-usage-section" aria-labelledby="search-usage-title">
+      <div class="sect-head">
+        {% call c::section_title("search-usage-title", "Usage", "settings/search#usage") %}{% endcall %}
+      </div>
+      <p class="hint" id="search-usage-note"></p>
+      <div class="table-wrap">
+        <table class="table" id="search-usage-days-table">
+          <caption class="visually-hidden">Searches, fetches and refusals per day</caption>
+          {% call c::table_head(["Day", ">Searches", ">Fetches", ">Refusals"]) %}{% endcall %}
+          <tbody id="search-usage-days"></tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="search-usage-roles-table">
+          <caption class="visually-hidden">Tokens and cost per model job</caption>
+          {% call c::table_head(["Day", "Job", ">Turns", ">Tokens in", ">Tokens out", ">Cost"]) %}{% endcall %}
+          <tbody id="search-usage-roles"></tbody>
+        </table>
+      </div>
+    </section>
+{% endblock %}

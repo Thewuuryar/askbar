@@ -110,6 +110,18 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// What the page says of `searxng`, from the front's last search (the admin cannot reach `searxng`): `no_search_yet`, `ok`, `down`
+/// (the last search failed) or `unknown` (the front does not answer, so its last word may be stale). One poll after a search fails.
+fn searxng(online: bool, last: Option<crate::mcp_link::LastSearch>) -> serde_json::Value {
+    let state = match &last {
+        _ if !online => "unknown",
+        None => "no_search_yet",
+        Some(l) if l.outcome == "ok" => "ok",
+        Some(_) => "down",
+    };
+    serde_json::json!({ "state": state, "last_at": last.as_ref().map(|l| l.at), "outcome": last.map(|l| l.outcome) })
+}
+
 /// `GET /api/admin/v1/mcp/status`: what the link to the front keeps, and the approval key's fingerprint and version. Counts and
 /// versions only; no key, user or URL.
 pub async fn status(State(state): St) -> Json<serde_json::Value> {
@@ -122,12 +134,14 @@ pub async fn status(State(state): St) -> Json<serde_json::Value> {
         None => serde_json::json!({
             "online": false, "error": "No link to the MCP gateway is set up.", "configured": false,
             "pushed_version": config.version(), "reported_version": null, "calls": {}, "approval_key": key,
+            "searxng": searxng(false, None),
         }),
         Some(l) => {
             let (reported, calls) = l.reported();
             serde_json::json!({
                 "online": l.online(), "error": l.last_error(), "configured": reported.is_some(),
                 "pushed_version": config.version(), "reported_version": reported, "calls": calls, "approval_key": key,
+                "searxng": searxng(l.online(), l.last_search()),
             })
         }
     })

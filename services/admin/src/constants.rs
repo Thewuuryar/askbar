@@ -81,6 +81,27 @@ pub const CPA_EGRESS_HOSTS: [&str; 5] = ["api.anthropic.com", "platform.claude.c
 /// new trial against this list (add any host that makes an engine return 0 results). `duckduckgo.com` and `lite.duckduckgo.com` from the
 /// earlier provisional list were not needed and are dropped. Used by P5A.19, not before.
 pub const SEARXNG_EGRESS_HOSTS: [&str; 4] = ["api.mwmbl.org", "html.duckduckgo.com", "search.brave.com", "search.yahoo.com"];
+/// The engines `docker/searxng/settings.yml` keeps (`use_default_settings.engines.keep_only`), each with the host it needs.
+/// The admin's image does not hold that file, so this is the copy the Search page shows; `tests/search_page.rs` fails when the
+/// file and this list or [`SEARXNG_EGRESS_HOSTS`] disagree.
+pub const SEARXNG_ENGINES: [(&str, &str); 4] =
+    [("duckduckgo", "html.duckduckgo.com"), ("brave", "search.brave.com"), ("yahoo", "search.yahoo.com"), ("mwmbl", "api.mwmbl.org")];
+
+/// Why `engines` (the enabled ones in the settings file) and `hosts` (the egress hosts) disagree, or `Ok`: an engine with no
+/// host in `pairs` or whose host is not in `hosts`, and a host no engine uses.
+pub fn engine_drift(engines: &[&str], hosts: &[&str], pairs: &[(&str, &str)]) -> Result<(), String> {
+    for e in engines {
+        match pairs.iter().find(|(n, _)| n == e) {
+            Some((_, h)) if hosts.contains(h) => {}
+            _ => return Err(format!("the engine {e} has no egress host")),
+        }
+    }
+    match hosts.iter().find(|h| !pairs.iter().any(|(n, ph)| ph == *h && engines.contains(n))) {
+        Some(h) => Err(format!("the host {h} has no engine")),
+        None => Ok(()),
+    }
+}
+
 /// The limits the admin pushes to the egress proxy; `askbar-proto` bounds them.
 pub const EGRESS_LIMITS: askbar_proto::egress::Limits = askbar_proto::egress::Limits {
     head_bytes: 8 * 1024,
@@ -122,7 +143,7 @@ pub const MAX_BACKUP_KEEP_DAYS: u32 = 3650;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
-pub const PAGE_SLUGS: [&str; 17] = [
+pub const PAGE_SLUGS: [&str; 18] = [
     "home",
     "alerts",
     "audit/calls",
@@ -134,6 +155,7 @@ pub const PAGE_SLUGS: [&str; 17] = [
     "people",
     "mcp",
     "egress",
+    "search",
     "services",
     "network",
     "security",
@@ -151,6 +173,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/people",
     "settings/mcp",
     "settings/egress",
+    "settings/search",
     "settings/services",
     "settings/network",
     "settings/security",
@@ -171,6 +194,10 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/egress#allowlist",
     "settings/egress#approvals",
     "settings/egress#blocked-outbound-requests",
+    "settings/search#quick-search",
+    "settings/search#search-engine",
+    "settings/search#mcp-limits",
+    "settings/search#usage",
     "settings/services#running-services",
     "settings/network#host-name",
     "settings/network#certificate",
@@ -317,7 +344,8 @@ struct Constants {
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
     home_stats_range_days: [u32; 3],
-    page_slugs: [&'static str; 17],
+    page_slugs: [&'static str; 18],
+    searxng_engines: [(&'static str, &'static str); 4],
     landing_page: &'static str,
     help_topics: &'static [&'static str],
 }
@@ -380,6 +408,7 @@ fn current() -> Constants {
         home_stats_window_secs: HOME_STATS_WINDOW_SECS,
         home_stats_range_days: HOME_STATS_RANGE_DAYS,
         page_slugs: PAGE_SLUGS,
+        searxng_engines: SEARXNG_ENGINES,
         landing_page: LANDING_PAGE,
         help_topics: HELP_TOPICS,
     }
@@ -448,6 +477,7 @@ mod tests {
             "PAIR_CODE_TTL_SECS",
             "REFERENCE_ROOT",
             "SEARCH_RESULTS_PER_GROUP",
+            "SEARXNG_ENGINES",
             "SERVICES",
             "SESSION_TTL_SECS",
             "SOURCE_BRANCH",

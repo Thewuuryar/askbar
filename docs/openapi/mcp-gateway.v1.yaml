@@ -316,6 +316,13 @@ components:
           type: object
           additionalProperties:
             type: integer
+        last_search:
+          type: object
+          description: The last search request to searxng; absent until the first one. The time and an outcome word only, never the query or a URL.
+          required: [at, outcome]
+          properties:
+            at: {type: integer, description: Unix seconds.}
+            outcome: {type: string, description: '`ok`, or the error code word of the failure, e.g. `tool_upstream_failed`.'}
     ToolCall:
       type: object
       additionalProperties: false
