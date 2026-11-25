@@ -286,7 +286,7 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 - [x] **[P5A.26](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0032: MCP gateway and searxng container limits · W3
 - [x] **[P5A.27](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0017: the one third-party image is searxng · W3
 - [x] **[P5A.28](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0026: scan third-party images · W3
-- [ ] **[P5A.29](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0016: tool servers as an attack surface · W3
+- [x] **[P5A.29](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0016: tool servers as an attack surface · W3
 - [ ] **[P5A.30](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0056: an any_public entry for fetch · W3
 - [x] **[P5A.32](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0022: the MCP gateway API prefix · W3
 - [x] **[P5A.33](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0049: the MCP gateway links · W3
