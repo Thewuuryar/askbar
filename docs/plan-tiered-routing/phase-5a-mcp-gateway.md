@@ -121,7 +121,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Deferred: not part of W3. Files: `services/admin/src/{mcp,secrets,db}.rs` (new `mcp.rs`), a migration, one route line each in `lib.rs`, `docs/openapi/admin.v1.yaml`, tests; the front gains `rmcp` and the upstream-MCP tool kind (an owner-approved dependency, G16, with its own step).
   Do: when it runs: a table of servers (name, transport, address or command, enabled), an API to create, list, update and delete them, each credential stored as provider keys are and sent only to the front, never returned; each change is an admin action; the G16 checklist in the PR.
   Accept: a credential never appears in any response, log or audit attribute; an unregistered server cannot be called; OpenAPI test passes. Gate: each new server is a separate owner approval.
-- [ ] **P5A.17** `feat(admin): set per-user MCP tool permissions` · sonnet · after P5A.6, G0
+- [x] **P5A.17** `feat(admin): set per-user MCP tool permissions` · sonnet · after P5A.6, G0
   Files: `services/admin/src/mcp.rs`, `db.rs` migration, OpenAPI, tests.
   Do: per user and tool (the built-in names from `askbar-proto`): allow or deny, default off for every tool (ADR 0019); an API to read and set them; each change is an admin action; deleted with the user.
   Accept: a user with no row holds nothing; set and read round-trip; user-delete test removes rows.

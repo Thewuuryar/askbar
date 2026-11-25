@@ -27,6 +27,7 @@ pub mod db;
 pub mod egress_link;
 pub mod gateway_link;
 pub mod link_client;
+pub mod mcp;
 pub mod network;
 pub mod notify;
 pub mod pages;
@@ -243,6 +244,9 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/egress/approvals"), egress_link::list_approvals)
         .put(&v1("/egress/approvals"), egress_link::put_approval)
         .delete(&v1("/egress/approvals"), egress_link::delete_approval)
+        .get(&v1("/mcp/permissions"), mcp::list)
+        .put(&v1("/mcp/permissions/{user}"), mcp::put)
+        .delete(&v1("/mcp/permissions/{user}"), mcp::delete)
         .get(&v1("/network"), network::get_network)
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)

@@ -213,6 +213,7 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
             Some(json!({ "system_prompt": "changed", "display": askbar_proto::DisplaySettings::default() })),
         ),
         (M::POST, "/api/admin/v1/keys", Some(json!({ "name": "ci" }))),
+        (M::PUT, "/api/admin/v1/mcp/permissions/U1", Some(json!({ "allowed": ["search"] }))),
         (M::POST, "/api/admin/v1/providers", Some(json!({ "name": "p", "type": "openai", "base_url": "http://x/v1", "model": "m" }))),
     ] {
         let mut r = http.request(m.clone(), format!("{adm}{path}")).header("x-askbar-admin", "1").header("cookie", &cookie);

@@ -1565,6 +1565,71 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/admin/v1/mcp/permissions:
+    get:
+      operationId: listMcpPermissions
+      summary: The built-in MCP tools each user holds.
+      description: "Off by default (ADR 0019): a user with no entry holds nothing. Keyed by user id."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The users with permissions set.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/McpUserTools'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/v1/mcp/permissions/{user}:
+    parameters:
+      - name: user
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: putMcpPermissions
+      summary: Set the tools one user may and may not use (replaces both lists).
+      description: "A tool in neither list is not held. A tool in both is refused. The change is recorded in the auditor (refused with 503 if it cannot be)."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpUserTools'
+      responses:
+        '200':
+          description: The lists as stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpUserTools'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteMcpPermissions
+      summary: Remove every permission of one user.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/admin/v1/network:
     get:
       operationId: getNetwork
@@ -2207,6 +2272,20 @@ components:
           type: string
           maxLength: 200
           default: ''
+    McpUserTools:
+      type: object
+      additionalProperties: false
+      properties:
+        allowed:
+          type: array
+          items:
+            type: string
+            enum: [search, fetch]
+        denied:
+          type: array
+          items:
+            type: string
+            enum: [search, fetch]
     NewKey:
       type: object
       required: [name]
