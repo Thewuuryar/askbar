@@ -129,7 +129,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/admin/src/mcp_link.rs` (new), tests.
   Do: push permissions, the constants the front uses and the approval public key to the front's `PUT /config` over `admin-mcp-gateway`, re-pushing on a version mismatch at the interval in `constants.rs` (ADR 0028); a rejected push shows its error and does not loop faster than the interval. When P5A.16 lands the push also carries the server registry and credentials.
   Accept: a fake front receives the push; a changed permission changes the version; an old front that ignores new fields still accepts; no key in logs.
-- [ ] **P5A.19** `feat(admin): push the searxng and fetch egress entries` · sonnet · after P5A.18, P5A.13, P4.4
+- [x] **P5A.19** `feat(admin): push the searxng and fetch egress entries` · sonnet · after P5A.18, P5A.13, P4.4
   Files: `services/admin/src/{egress_link,constants}.rs`, tests.
   Do: through the mechanism P4.4 built, the source `searxng` gets one entry per host of `SEARXNG_EGRESS_HOSTS` (port 443) and the source `fetch` gets one `any_public` entry for ports 80 and 443; nothing else is allowed. The proxy refuses an unknown source, so the push includes these sources only when the proxy reports them in `GET /status`. Each future MCP destination is a G16 entry with its own source.
   Accept: tests against a fake proxy: both sources' entries appear; a proxy without the new sources gets none; a removed host disappears; no private address is allowed.
