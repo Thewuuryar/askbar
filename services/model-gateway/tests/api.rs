@@ -225,6 +225,7 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
         catalog: models.iter().map(|(id, m)| CatalogEntry { provider_id: (*id).into(), model: (*m).into() }).collect(),
         default_model: models.first().map(|(id, m)| model_id(id, m)),
         approval_key: None,
+        approval_ttl_secs: askbar_proto::DEFAULT_APPROVAL_TTL_SECS,
     }
 }
 
@@ -1069,4 +1070,52 @@ async fn a_test_waits_for_the_auditor_like_any_model_call_and_an_unknown_provide
     // Only the admin's listener has the route.
     let on_server = rig.http.post(format!("{}/api/model-gateway/v1/providers/p/test", rig.server)).bearer_auth(SRV).send().await.unwrap();
     assert_eq!(on_server.status(), 404);
+}
+
+#[tokio::test]
+async fn approvals_are_signed_fresh_and_leak_nothing_and_fail_closed_without_a_key() {
+    use askbar_model_gateway::approval::{approve, ApproveError};
+    use askbar_proto::approval::{Provenance, ToolAction};
+    use askbar_service::approval::{generate_keypair, verify, OneTimeIds};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    struct Any;
+    impl OneTimeIds for Any {
+        fn consume(&self, _: &str, _: i64) -> bool {
+            true
+        }
+    }
+    let action = |url: &str| ToolAction {
+        tool: "fetch".into(),
+        arguments: json!({"url": url}),
+        destination: "example.com".into(),
+        provenance: Provenance::User,
+        query_data: false,
+    };
+    let rig = rig().await;
+    let mut c = config(&rig, 1, &[("p", "m")]);
+    rig.push(&c).await;
+    assert_eq!(approve(&rig.gw, &action("https://a.example"), "t", "u").unwrap_err(), ApproveError::NoKey);
+
+    let (pkcs8, public) = generate_keypair().unwrap();
+    let b64 = URL_SAFE_NO_PAD.encode(&pkcs8);
+    c.version = 2;
+    c.approval_key = Some(askbar_proto::gateway::ApprovalSigningKey { version: 1, pkcs8: b64.clone() });
+    rig.push(&c).await;
+    let now = askbar_service::audit_client::now_parts().0;
+    let (a, attrs) = approve(&rig.gw, &action("https://a.example"), "t", "u").unwrap();
+    let (b, _) = approve(&rig.gw, &action("https://a.example"), "t", "u").unwrap();
+    let (other, _) = approve(&rig.gw, &action("https://b.example"), "t", "u").unwrap();
+    assert_eq!(a.action_hash, b.action_hash);
+    assert_ne!(a.action_hash, other.action_hash, "a changed argument changes the hash");
+    assert_ne!(a.one_time_id, b.one_time_id);
+    assert!(!a.one_time_id.is_empty() && (now + 59..=now + 61).contains(&a.expires_at), "{}", a.expires_at);
+    verify(&a, &action("https://a.example"), &public, now, &Any).unwrap();
+    assert!(verify(&a, &action("https://b.example"), &public, now, &Any).is_err());
+    let seen = format!("{attrs} {:?} {:?}", rig.gw.approval_key(), approve(&rig.gw, &action("x"), "t", "u").map(|_| ()));
+    assert!(!seen.contains(&b64) && !seen.contains(&a.signature) && !seen.contains("https://a.example"), "{seen}");
+    assert_eq!(attrs["one_time_id"], a.one_time_id.as_str());
+
+    c.version = 3;
+    c.approval_ttl_secs = 0;
+    assert_eq!(rig.push(&c).await.status(), 400, "a TTL out of bounds is refused");
 }

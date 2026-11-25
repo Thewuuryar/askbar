@@ -273,6 +273,12 @@ fn default_true() -> bool {
 /// Five minutes.
 pub const DEFAULT_GENERATION_TIMEOUT_SECS: u32 = 300;
 
+/// How long a signed tool approval is good for, in seconds: the default a service uses until its first push, and the
+/// bounds the admin and the gateway both enforce.
+pub const DEFAULT_APPROVAL_TTL_SECS: u32 = 60;
+pub const MIN_APPROVAL_TTL_SECS: u32 = 5;
+pub const MAX_APPROVAL_TTL_SECS: u32 = 600;
+
 fn default_generation_timeout_secs() -> u32 {
     DEFAULT_GENERATION_TIMEOUT_SECS
 }

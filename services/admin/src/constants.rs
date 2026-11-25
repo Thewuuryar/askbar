@@ -43,6 +43,8 @@ pub const FRESH_SIGNIN_SECS: i64 = 10 * 60;
 pub const MIN_GENERATION_TIMEOUT_SECS: u32 = 30;
 pub const MAX_GENERATION_TIMEOUT_SECS: u32 = 3600;
 pub const DEFAULT_GENERATION_TIMEOUT_SECS: u32 = askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS;
+/// How long a signed tool approval lasts. Pushed to the gateway; bounds in `askbar-proto`.
+pub const APPROVAL_TTL_SECS: u32 = askbar_proto::DEFAULT_APPROVAL_TTL_SECS;
 /// The same floor the server enforces (and the audit database's own trigger): a week.
 pub const MIN_AUDIT_RETENTION_DAYS: u32 = 7;
 pub const MAX_AUDIT_RETENTION_DAYS: u32 = 3650;

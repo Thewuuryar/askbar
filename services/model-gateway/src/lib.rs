@@ -11,6 +11,7 @@
 //! - **No provider words.** The server gets a code and a class. The provider's error text is sealed to the audit
 //!   public key and goes to the auditor as a payload; the gateway holds no private key.
 
+pub mod approval;
 pub mod llm;
 pub mod models;
 pub mod provider_test;
@@ -76,6 +77,7 @@ struct Applied {
     choices: askbar_proto::ModelList,
     /// The approval signing key, in memory only (plan step P5.3); none until the admin has pushed one.
     approval_key: Option<askbar_proto::gateway::ApprovalSigningKey>,
+    approval_ttl_secs: u32,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -355,6 +357,9 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
     if c.approval_key.as_ref().is_some_and(|k| k.pkcs8.is_empty() || k.pkcs8.len() > MAX_KEY_CHARS) {
         return Err(format!("approval_key.pkcs8 must be 1 to {MAX_KEY_CHARS} characters."));
     }
+    if !(askbar_proto::MIN_APPROVAL_TTL_SECS..=askbar_proto::MAX_APPROVAL_TTL_SECS).contains(&c.approval_ttl_secs) {
+        return Err("approval_ttl_secs is out of range.".into());
+    }
     if c.paused_users.len() > 10_000 || c.paused_users.iter().any(|u| !valid_id(u)) {
         return Err("A paused user is an id of 1 to 64 letters, digits, - or _ (at most 10,000 of them).".into());
     }
@@ -401,6 +406,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         catalog,
         choices: askbar_proto::ModelList { models: choices, default: c.default_model.clone() },
         approval_key: c.approval_key.clone(),
+        approval_ttl_secs: c.approval_ttl_secs,
     })
 }
 
@@ -408,6 +414,11 @@ impl Gateway {
     /// The approval signing key, or none before the first push that carried one: a caller with none signs nothing.
     pub fn approval_key(&self) -> Option<askbar_proto::gateway::ApprovalSigningKey> {
         self.applied()?.approval_key.clone()
+    }
+
+    /// How long an approval lasts: the pushed value, or the `askbar-proto` default before the first push.
+    pub fn approval_ttl_secs(&self) -> u32 {
+        self.applied().map_or(askbar_proto::DEFAULT_APPROVAL_TTL_SECS, |a| a.approval_ttl_secs)
     }
 
     /// Put `c` in place of the configuration, or say why not (a sentence for a person). The keys it carries are held in
