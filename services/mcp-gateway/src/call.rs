@@ -99,17 +99,24 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         return Err(audit_down());
     }
     g.tool_runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tool_call = ToolCall { action, task_id: a.task_id.clone(), user: a.user.clone(), config: config.clone() };
+    let tool_call = ToolCall {
+        action,
+        task_id: a.task_id.clone(),
+        user: a.user.clone(),
+        config: config.clone(),
+        audit: Some(audit.clone()),
+        span_id: id.clone(),
+    };
     let run = (g.registry.get(&tool_call.action.tool).expect("checked above"))(tool_call);
     let limit = std::time::Duration::from_secs(u64::from(config.tool_call_timeout_secs));
     // Only the outcome goes to the span; the result is not recorded.
     let (status, code, out) = match tokio::time::timeout(limit, run).await {
         Ok(Ok(result)) if serde_json::to_vec(&result).map_or(usize::MAX, |v| v.len()) as u64 > config.tool_result_max_bytes => {
-            ("error", Some(ErrorCode::ToolResultTooLarge), Err(ErrorCode::ToolResultTooLarge))
+            ("error", Some(ErrorCode::ToolResultTooLarge), Err(ErrorCode::ToolResultTooLarge.into()))
         }
         Ok(Ok(result)) => ("ok", None, Ok(result)),
-        Ok(Err(code)) => ("error", Some(code), Err(code)),
-        Err(_) => ("timeout", Some(ErrorCode::ToolTimeout), Err(ErrorCode::ToolTimeout)),
+        Ok(Err(e)) => ("error", Some(e.code), Err(e)),
+        Err(_) => ("timeout", Some(ErrorCode::ToolTimeout), Err(ErrorCode::ToolTimeout.into())),
     };
     audit.finish(&id, finish(status, code.map(ErrorCode::as_str)));
     g.count(match (status, code) {
@@ -120,7 +127,13 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
     });
     match out {
         Ok(result) => Ok(Json(serde_json::json!({ "result": result, "untrusted": true }))),
-        Err(code) => Err(ApiError::new(code, "The tool did not return a result.")),
+        Err(e) => {
+            let mut err = ApiError::new(e.code, "The tool did not return a result.");
+            if let Some(reason) = e.reason {
+                err.problem = err.problem.with("reason", reason);
+            }
+            Err(err)
+        }
     }
 }
 
@@ -128,7 +141,7 @@ fn audit_down() -> ApiError {
     ApiError::new(ErrorCode::AuditBacklog, "The call could not be recorded, so nothing was run. Try again in a few seconds.").retry_after(5)
 }
 
-fn finish(status: &str, error_code: Option<&str>) -> SpanFinish {
+pub(crate) fn finish(status: &str, error_code: Option<&str>) -> SpanFinish {
     let (at, ms) = now_parts();
     SpanFinish {
         status: status.into(),

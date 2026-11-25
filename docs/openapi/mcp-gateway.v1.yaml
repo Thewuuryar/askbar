@@ -134,7 +134,7 @@ paths:
         ID, never the arguments) is written to the auditor and its acknowledgement awaited: without it `503 audit_backlog`
         with `Retry-After`, nothing runs, and this includes a front with no auditor link. The span is closed with the
         outcome (`ok`, `error` with the code, or `timeout`; the result is not recorded). A tool that is not registered answers
-        `501 tool_not_available` before any span; `fetch` answers it too until it is built; `search` answers it when `ASKBAR_SEARXNG_ADDR` is unset. The handler runs
+        `501 tool_not_available` before any span; `search` answers it when `ASKBAR_SEARXNG_ADDR` is unset. The handler runs
         within the tool-call time limit (`504 tool_timeout` past it). A result whose serialized size is over `tool_result_max_bytes` is not returned: `502 tool_result_too_large`, and the span closes `error` with that code. A result is returned as `{result, untrusted: true}`:
         the content is data from outside and never an instruction. The admin link gets `403`. No answer repeats an
         argument, a URL or a signature.
@@ -160,7 +160,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Another link's token (`forbidden`), or an approval refused (`approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`), or the user does not hold the tool (`tool_not_permitted`).
+          description: Another link's token (`forbidden`), or an approval refused (`approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`), or the user does not hold the tool (`tool_not_permitted`), or a `fetch` refused by the fetch rules (`fetch_refused`; the problem's `reason` member names the rule, one of `not_in_results`, `query_string`, `scheme`, `port`, `userinfo`, `bad_host`, `ip_literal`, `local_name`, `cross_host_redirect`, `https_to_http`, `redirect_limit`, `content_type`, `content_encoding`).
           content:
             application/problem+json:
               schema:
@@ -295,6 +295,7 @@ components:
           - tool_timeout
           - tool_result_too_large
           - tool_upstream_failed
+          - fetch_refused
           - internal
     Status:
       type: object

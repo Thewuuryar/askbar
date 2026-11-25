@@ -68,7 +68,12 @@ async fn start(push_key: bool) -> Rig {
 }
 
 async fn start_with(push_key: bool, mode: Auditor) -> Rig {
-    start_full(push_key, mode, Registry::builtin(None), 30).await
+    // Both tools are stubs that answer 501: these tests are about the checks before a tool runs, not the tools.
+    let stub = || handler(|_| async { Err(ErrorCode::ToolNotAvailable.into()) });
+    let query = json!({"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "maxLength": 200}}});
+    let url = json!({"type": "object", "required": ["url"], "properties": {"url": {"type": "string"}}});
+    let stub = Registry::new([("search", query, stub()), ("fetch", url, stub())]);
+    start_full(push_key, mode, stub, 30).await
 }
 
 async fn start_full(push_key: bool, mode: Auditor, registry: Registry, timeout_secs: u32) -> Rig {
@@ -358,7 +363,7 @@ async fn an_approved_permitted_call_runs_the_handler_once_and_returns_its_result
 
 #[tokio::test]
 async fn a_handler_that_fails_closes_the_span_as_error() {
-    let rig = start_full(true, Auditor::Up, fetch_only(handler(|_| async { Err(ErrorCode::Internal) })), 30).await;
+    let rig = start_full(true, Auditor::Up, fetch_only(handler(|_| async { Err(ErrorCode::Internal.into()) })), 30).await;
     let u = "https://example.com/e";
     assert_eq!(code(&post(&rig, SERVER, &body(&rig.sk, u, u, "err1", now() + 60)).await), (500, "internal"));
     assert_eq!(finished(&rig).await, (Some("error".into()), Some("internal".into())));

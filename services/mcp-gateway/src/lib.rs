@@ -11,6 +11,8 @@ pub mod approval;
 mod call;
 pub mod config;
 mod constants;
+pub mod fetch;
+pub mod fetch_rules;
 pub mod permissions;
 pub mod registry;
 pub mod search;
