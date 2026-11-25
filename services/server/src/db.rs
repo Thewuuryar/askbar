@@ -229,6 +229,9 @@ const MIGRATIONS: &[&str] = &[
     // v9: a user's chosen model, `provider/model` from the catalog (ADR 0014), in place of the provider they used to
     // choose. `active_provider_id` stays in the table, unused.
     "ALTER TABLE user_prefs ADD COLUMN active_model TEXT;",
+    // v10: the role a reply was for (plan W4.2), so usage can be read per role. Null for a reply that names none. The budget
+    // still sums every row of the user.
+    "ALTER TABLE token_usage ADD COLUMN role TEXT;",
 ];
 
 /// A provider whose credentials were refused: its id, status, since when (unix seconds) and error code.

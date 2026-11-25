@@ -154,6 +154,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/providers#providers",
     "settings/providers#claude-and-chatgpt-accounts",
     "settings/providers#models-people-can-use",
+    "settings/providers#model-for-each-job",
     "settings/people#users",
     "settings/people#paired-clients",
     "settings/services#running-services",

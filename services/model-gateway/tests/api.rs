@@ -6,7 +6,7 @@ use askbar_audit::{AuditDb, Recorder};
 use askbar_auditor::{disk::FreeSpace, Auditor, Limits};
 use askbar_model_gateway::{admin_links, admin_router, server_links, server_router, Gateway};
 use askbar_proto::audit::{SpanKind, SpanStart};
-use askbar_proto::gateway::{ChatEvent, ChatMessage, ChatRequest, FailureClass, GatewayConfig, GatewayProvider};
+use askbar_proto::gateway::{ChatEvent, ChatMessage, ChatRequest, FailureClass, GatewayConfig, GatewayProvider, Role};
 use askbar_proto::{model_id, AuditKey, CatalogEntry, ModelList, SseParser};
 use askbar_service::audit_client::AuditClient;
 use askbar_service::restart::Restarter;
@@ -1011,6 +1011,36 @@ async fn the_model_called_is_the_one_asked_for_not_the_providers_own() {
     assert!(matches!(rig.chat(&req).await.last(), Some(ChatEvent::Done { .. })));
     let rows = rig.wait_rows("SELECT DISTINCT model FROM spans WHERE trace_id = 'gen-second' AND kind IN ('turn', 'attempt')").await;
     assert_eq!(rows, vec![vec![json!("m-second")]]);
+}
+
+#[tokio::test]
+async fn a_request_with_a_role_uses_the_pinned_model_and_its_spans_carry_the_role() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.catalog.push(CatalogEntry { provider_id: "p".into(), model: "m-pinned".into() });
+    cfg.role_pins.insert(Role::SearchQuery, "p/m-pinned".into());
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+
+    // The pin wins over the model the request names; the turn and the attempt record the role.
+    let mut req = rig.request("p", "gen-role", "hello");
+    req.role = Some(Role::SearchQuery);
+    assert!(matches!(rig.chat(&req).await.last(), Some(ChatEvent::Done { .. })));
+    rig.wait_rows("SELECT 1 FROM spans WHERE trace_id = 'gen-role' AND kind = 'attempt' AND status = 'done'").await;
+    let rows = rig.rows("SELECT model, attrs_json FROM spans WHERE trace_id = 'gen-role' AND kind IN ('turn', 'attempt')");
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    for r in &rows {
+        assert_eq!(r[0], json!("m-pinned"));
+        assert!(r[1].as_str().unwrap().contains(r#""role":"search.query""#), "{r:?}");
+    }
+
+    // No role: unchanged, the named model is used and no span names a role.
+    let mut plain = rig.request("p", "gen-norole", "hello");
+    plain.model = "m".into();
+    assert!(matches!(rig.chat(&plain).await.last(), Some(ChatEvent::Done { .. })));
+    let rows = rig.wait_rows("SELECT DISTINCT model FROM spans WHERE trace_id = 'gen-norole' AND kind IN ('turn', 'attempt')").await;
+    assert_eq!(rows, vec![vec![json!("m")]]);
+    let attrs = rig.rows("SELECT attrs_json FROM spans WHERE trace_id = 'gen-norole'");
+    assert!(!format!("{attrs:?}").contains("role"), "{attrs:?}");
 }
 
 // ------------------------------------------------------------------ the provider test (plan step 3.4, ADR 0014)

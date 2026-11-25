@@ -174,7 +174,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   Files: `crates/askbar-proto/src/gateway.rs`, tests.
   Do: `Role` with `chat.manual`, `search.query` and `search.writer` now, and `research.researcher`, `research.writer` and `judge.review` added in W7; `role_pins: BTreeMap<Role, ModelId>` on `GatewayConfig`; `role` optional on `ChatRequest`. The type names match tiered routing P1.1, so track 4 adds tiers to the same types.
   Accept: old config and request JSON parse unchanged; a request naming an unpinned role is refused with an `ErrorCode`.
-- [ ] **W4.2** `feat(admin): pin a model for each role` · sonnet · after W4.1
+- [x] **W4.2** `feat(admin): pin a model for each role` · sonnet · after W4.1
   Files: `services/admin/src/{db,gateway_link,admin_api}.rs`, the providers settings template, `app.js`, `docs/openapi/admin.v1.yaml`.
   Do: each pin must be an approved model; usage is counted per role against the user's token budget.
   Accept: pins push with the gateway config; the step span for each call records its role.

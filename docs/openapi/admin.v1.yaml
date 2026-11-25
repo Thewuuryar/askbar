@@ -1630,6 +1630,72 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/admin/v1/roles:
+    get:
+      operationId: listRoles
+      summary: The model pinned to each role.
+      description: "The three roles (`chat.manual`, `search.query`, `search.writer`), each with its pin or none. `approved` is false when the pinned model is no longer approved: the gateway is not given that pin."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The roles.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RolePinRow'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/v1/roles/{role}:
+    parameters:
+      - name: role
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [chat.manual, search.query, search.writer]
+    put:
+      operationId: putRolePin
+      summary: Pin an approved model to a role.
+      description: "The model has to be in the approved catalog (`model_not_approved` otherwise). The change is recorded in the auditor (refused with 503 if it cannot be), and the gateway has the pin within a moment."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RolePin'
+      responses:
+        '200':
+          description: The pin as stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolePin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteRolePin
+      summary: Remove the pin of a role.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/admin/v1/network:
     get:
       operationId: getNetwork
@@ -2287,6 +2353,28 @@ components:
           items:
             type: string
             enum: [search, fetch]
+    RolePin:
+      type: object
+      additionalProperties: false
+      required: [provider_id, model]
+      properties:
+        provider_id:
+          type: string
+        model:
+          type: string
+    RolePinRow:
+      type: object
+      required: [role, pin, approved]
+      properties:
+        role:
+          type: string
+          enum: [chat.manual, search.query, search.writer]
+        pin:
+          oneOf:
+            - $ref: '#/components/schemas/RolePin'
+            - type: 'null'
+        approved:
+          type: boolean
     NewKey:
       type: object
       required: [name]

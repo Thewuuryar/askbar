@@ -214,6 +214,7 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
         ),
         (M::POST, "/api/admin/v1/keys", Some(json!({ "name": "ci" }))),
         (M::PUT, "/api/admin/v1/mcp/permissions/U1", Some(json!({ "allowed": ["search"] }))),
+        (M::PUT, "/api/admin/v1/roles/chat.manual", Some(json!({ "provider_id": "p", "model": "m" }))),
         (M::POST, "/api/admin/v1/providers", Some(json!({ "name": "p", "type": "openai", "base_url": "http://x/v1", "model": "m" }))),
     ] {
         let mut r = http.request(m.clone(), format!("{adm}{path}")).header("x-askbar-admin", "1").header("cookie", &cookie);
@@ -230,6 +231,7 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
     assert_eq!(count("SELECT COUNT(*) FROM users"), 0);
     assert_eq!(count("SELECT COUNT(*) FROM providers"), 0);
     assert_eq!(count("SELECT COUNT(*) FROM admin_api_keys"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM role_pins"), 0);
     assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key = 'system_prompt'"), 0, "the setting was not saved");
     drop(db);
     // Reading still works: the admin does not go dark with the auditor.

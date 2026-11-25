@@ -72,6 +72,21 @@
       {% call c::save_bar("catalog-form") %}{% endcall %}
     </section>
 
+    <section id="roles-section" aria-labelledby="roles-title">
+      <div class="sect-head">
+        {% call c::section_title("roles-title", "Model for each job", "settings/providers#model-for-each-job") %}{% endcall %}
+      </div>
+      <p class="hint">Each job uses the one approved model pinned to it. A job with no model pinned is refused.</p>
+      <div class="table-wrap">
+        <table class="table" id="roles-table">
+          <caption class="visually-hidden">Model for each job</caption>
+          <thead><tr><th scope="col">Job</th><th scope="col">Pinned model</th><th scope="col">Choose</th><th scope="col" class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="roles"></tbody>
+        </table>
+      </div>
+      {% call b::error_line("roles-error") %}{% endcall %}
+    </section>
+
     {% call c::side_panel("provider-panel", "Add provider", "") %}
       <form id="provider-form" class="panel-form">
         <h3>Connection</h3>

@@ -1376,6 +1376,7 @@
     openFromAddress();
     await liveProviders.start();
     await loadCatalog();
+    loadRoles();
     loadCpa();
   }
 
@@ -1399,6 +1400,46 @@
     show($('catalog-error'), false);
     renderPicker();
     renderProviders();
+    renderRoles();
+  }
+
+  // ---- the model for each job (plan W4.2): one approved model pinned per role, saved a row at a time.
+  const ROLE_NAMES = { 'chat.manual': 'Chat', 'search.query': 'Search: write the query', 'search.writer': 'Search: write the answer' };
+  let roleRows = [];
+
+  async function loadRoles() {
+    roleRows = await api('GET', '/api/admin/v1/roles');
+    renderRoles();
+  }
+
+  async function saveRole(role, pin) {
+    const err = $('roles-error');
+    show(err, false);
+    try {
+      await (pin ? api('PUT', '/api/admin/v1/roles/' + role, pin) : api('DELETE', '/api/admin/v1/roles/' + role));
+      ui.toast(pin ? 'Model pinned.' : 'Pin cleared.');
+      await loadRoles();
+    } catch (ex) { ui.inlineError(err, ex.message); }
+  }
+
+  function renderRoles() {
+    const options = catalogSaved.models.map((m) => ui.el('option', { value: modelId(m), text: m.model + ' · ' + providerName(m.provider_id) }));
+    $('roles').replaceChildren(...roleRows.map((r) => {
+      const id = r.pin ? modelId(r.pin) : '';
+      const pick = ui.el('select', { 'aria-label': 'Model for ' + (ROLE_NAMES[r.role] || r.role), disabled: !options.length }, ui.el('option', { value: '', text: 'Choose a model' }), ...options.map((o) => o.cloneNode(true)));
+      pick.value = id;
+      const shown = !r.pin ? ui.el('span', { class: 'hint', text: 'None' })
+        : ui.el('span', null, ui.el('code', { text: r.pin.model }), ' ', ui.el('small', { class: 'hint', text: providerName(r.pin.provider_id) + (r.approved ? '' : ' · Not approved') }));
+      const save = ui.el('button', { type: 'button', class: 'btn btn-secondary btn-s', text: 'Save', 'aria-label': 'Save ' + r.role, onclick: () => {
+        const m = catalogSaved.models.find((x) => modelId(x) === pick.value);
+        if (m) saveRole(r.role, { provider_id: m.provider_id, model: m.model });
+      } });
+      const clear = ui.el('button', { type: 'button', class: 'btn btn-secondary btn-s', text: 'Clear', 'aria-label': 'Clear ' + r.role, disabled: !r.pin, onclick: () => saveRole(r.role) });
+      return ui.el('tr', { 'data-role': r.role },
+        ui.el('td', null, ui.el('strong', { text: ROLE_NAMES[r.role] || r.role }), ui.el('div', { class: 'sub' }, ui.el('code', { text: r.role }))),
+        ui.el('td', null, shown), ui.el('td', null, pick),
+        ui.el('td', { class: 'actions' }, ui.el('div', { class: 'row-actions' }, save, clear)));
+    }));
   }
 
   // The save bar text says what changed in the draft, since the tracked field is only a summary of it.

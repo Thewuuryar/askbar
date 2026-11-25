@@ -248,6 +248,12 @@ const MIGRATIONS: &[&str] = &[
          version    INTEGER NOT NULL,
          created_at INTEGER NOT NULL
      );",
+    // The model pinned to each role (plan W4.2). A pin whose model is no longer approved stays here but is not pushed.
+    "CREATE TABLE role_pins (
+         role        TEXT PRIMARY KEY,
+         provider_id TEXT NOT NULL,
+         model       TEXT NOT NULL
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).
