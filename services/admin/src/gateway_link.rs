@@ -114,6 +114,8 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         role_pins: crate::roles::pushed(conn)?,
         quick_search: crate::limits::quick_search(conn),
         quick_search_enabled: snap.quick_search_enabled,
+        task_limits: snap.task_limits,
+        research_enabled: snap.research_enabled,
     };
     config.version = version_of(&config);
     Ok(config)

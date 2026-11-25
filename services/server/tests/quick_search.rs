@@ -115,6 +115,7 @@ impl T {
     async fn chat(&self) -> Vec<(String, ChatEvent)> {
         let req = ChatRequest {
             web_search: true,
+            research: false,
             conversation_id: None,
             model: Some("p1/m".into()),
             text: MESSAGE.into(),

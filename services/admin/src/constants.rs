@@ -123,6 +123,8 @@ pub const MCP_SEARCH_RESULTS: u32 = askbar_proto::mcp::DEFAULT_SEARCH_RESULTS;
 pub const MCP_REMEMBERED_URLS: u32 = askbar_proto::mcp::DEFAULT_REMEMBERED_URLS;
 // Quick search limits (plan W5.1). Pushed to model-gateway and the server; the bounds live in `askbar-proto::quick_search`.
 pub const QUICK_SEARCH_LIMITS: askbar_proto::quick_search::QuickSearchLimits = askbar_proto::quick_search::QuickSearchLimits::DEFAULT;
+// Research task limits (plan P5B.1). Pushed to model-gateway and the server; the bounds live in `askbar-proto::research`.
+pub const TASK_LIMITS: askbar_proto::research::TaskLimits = askbar_proto::research::TaskLimits::DEFAULT;
 /// At most this many service actions in a minute.
 pub const MAX_RESTARTS_PER_MINUTE: usize = 6;
 

@@ -70,6 +70,19 @@ pub enum Role {
     SearchQuery,
     #[serde(rename = "search.writer")]
     SearchWriter,
+    #[serde(rename = "research.researcher")]
+    ResearchResearcher,
+    #[serde(rename = "research.writer")]
+    ResearchWriter,
+    #[serde(rename = "judge.review")]
+    JudgeReview,
+}
+
+impl Role {
+    /// The roles of a research task: their calls count against the task's token cap, keyed by the generation id.
+    pub fn is_task(self) -> bool {
+        matches!(self, Role::ResearchResearcher | Role::ResearchWriter | Role::JudgeReview)
+    }
 }
 
 /// The model a request's role is pinned to, as `provider/model`. `Ok(None)` when the request names no role. A role
@@ -133,6 +146,12 @@ pub struct GatewayConfig {
     /// Whether quick search is on for everyone (plan P8.6e). A configuration that leaves it out keeps search on.
     #[serde(default = "yes")]
     pub quick_search_enabled: bool,
+    /// The research task limits (plan P5B.1), each within its bounds. Absent before the admin pushes them: the defaults.
+    #[serde(default)]
+    pub task_limits: crate::research::TaskLimits,
+    /// Whether research is on for everyone (plan P5B.1). A configuration that leaves it out keeps research on.
+    #[serde(default = "yes")]
+    pub research_enabled: bool,
 }
 
 fn default_approval_ttl() -> u32 {
@@ -340,6 +359,8 @@ mod tests {
             role_pins: BTreeMap::new(),
             quick_search: Default::default(),
             quick_search_enabled: true,
+            task_limits: Default::default(),
+            research_enabled: true,
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
@@ -356,6 +377,8 @@ mod tests {
             (Budget::default(), false, true, vec![])
         );
         assert!(cfg.quick_search_enabled, "a configuration that leaves it out keeps quick search on");
+        assert!(cfg.research_enabled, "a configuration that leaves it out keeps research on");
+        assert_eq!(cfg.task_limits, crate::research::TaskLimits::DEFAULT);
         assert_eq!((cfg.catalog, cfg.default_model), (vec![], None), "no catalog approves no model");
         let p: GatewayProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();
         assert_eq!(p.billing, Billing::Metered, "metered unless it says it is a subscription");
@@ -388,10 +411,20 @@ mod tests {
         let pinned: GatewayConfig =
             serde_json::from_str(r#"{"version":1,"providers":[],"audit_public_key":null,"role_pins":{"search.query":"p/m"}}"#).unwrap();
         assert_eq!(pinned.role_pins, BTreeMap::from([(Role::SearchQuery, "p/m".to_string())]));
-        for (role, s) in [(Role::ChatManual, "chat.manual"), (Role::SearchQuery, "search.query"), (Role::SearchWriter, "search.writer")] {
+        let roles = [
+            (Role::ChatManual, "chat.manual", false),
+            (Role::SearchQuery, "search.query", false),
+            (Role::SearchWriter, "search.writer", false),
+            (Role::ResearchResearcher, "research.researcher", true),
+            (Role::ResearchWriter, "research.writer", true),
+            (Role::JudgeReview, "judge.review", true),
+        ];
+        for (role, s, task) in roles {
             assert_eq!(serde_json::to_value(role).unwrap(), s);
             assert_eq!(serde_json::from_value::<Role>(serde_json::json!(s)).unwrap(), role);
+            assert_eq!(role.is_task(), task);
         }
+        assert!(serde_json::from_value::<Role>(serde_json::json!("research.editor")).is_err(), "a role outside the list fails");
     }
 
     #[test]

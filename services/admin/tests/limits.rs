@@ -114,6 +114,17 @@ async fn limits_list_change_reset_and_reach_the_server_the_gateway_and_the_front
 }
 
 #[tokio::test]
+async fn the_task_limits_and_the_research_switch_ride_the_snapshot_and_the_gateway_config_as_defaults() {
+    let t = common::start(true).await;
+    let db = t.admin.db.lock().await;
+    let snap = askbar_admin::server_link::build_snapshot(db.conn()).unwrap();
+    let cfg = askbar_admin::gateway_link::build_config(db.conn(), &t.admin.secrets, None).unwrap();
+    assert_eq!((snap.task_limits, cfg.task_limits), (askbar_admin::constants::TASK_LIMITS, askbar_admin::constants::TASK_LIMITS));
+    assert_eq!(askbar_admin::constants::TASK_LIMITS, askbar_proto::research::TaskLimits::DEFAULT);
+    assert!(snap.research_enabled && cfg.research_enabled);
+}
+
+#[tokio::test]
 async fn quick_search_on_off_round_trips_is_audited_and_changes_what_the_server_and_gateway_are_pushed() {
     let t = common::start(true).await;
     let put = |on: Value| {
