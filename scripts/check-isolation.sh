@@ -904,6 +904,7 @@ def up(h, p):
     except Exception: return 0
 print("proxy", up("egress-searxng-host", 3128), "searxng", up(os.environ["X_IP"], 8080))' 2>/dev/null | tail -1)
   [ "$got" = "proxy 1 searxng 0" ] && pass "on egress-searxng the proxy answers and searxng does not" || fail "on egress-searxng: '$got'"
+  docker exec "$SEARX" "$SXPY" -c 'import socket; socket.create_connection(("127.0.0.1", 8080), timeout=4)' >/dev/null 2>&1 && fail "searxng listens on loopback" || pass "searxng binds only its mcp-searxng address (nothing on loopback)"
   # No direct route out; the proxy is the one thing it reaches there; it holds no route to the other services.
   docker exec "$SEARX" "$SXPY" -c 'import socket; socket.create_connection(("1.1.1.1", 443), timeout=4)' >/dev/null 2>&1 && fail "searxng reached the internet directly" || pass "searxng has no direct route out"
   docker exec "$SEARX" "$SXPY" -c 'import socket; socket.create_connection(("egress-searxng-host", 3128), timeout=4)' >/dev/null 2>&1 && pass "searxng reaches the egress proxy on egress-searxng" || fail "searxng cannot reach the egress proxy"

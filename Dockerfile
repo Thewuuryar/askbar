@@ -205,12 +205,11 @@ ENTRYPOINT ["askbar-server"]
 # --------------------------------------------------------------- searxng
 # The upstream SearXNG image (AGPL-3.0, unmodified), pinned by digest, with only our settings file and a start script
 # (docker/searxng, ADR 0057). Upstream's image has no USER and starts as root; its `searxng` user is uid 977, which we run as.
-# GRANIAN_HOST is the web server's bind address: upstream's `::` fails where a container has no IPv6. The start script makes the
-# random secret_key in tmpfs, then runs upstream's own entrypoint. To update: take the tag's current index digest, run
+# The start script binds the web server (GRANIAN_HOST) to the container's address on mcp-searxng only, makes the random
+# secret_key in tmpfs, then runs upstream's own entrypoint. To update: take the tag's current index digest, run
 # scripts/check-searxng-image.sh and update scripts/third-party-notices.images.md.
 FROM docker.io/searxng/searxng:2026.11.21-c6ee3e9fd@sha256:fc1d81d7e9d04d3c8b3e23c7162feddf5c3d6aecd32e67a56eaabcb8d8747f79 AS searxng
 COPY docker/searxng/settings.yml /usr/local/searxng/askbar-settings.yml
 COPY --chmod=0755 docker/searxng/start.sh /usr/local/searxng/askbar-start.sh
 USER 977:977
-ENV GRANIAN_HOST=0.0.0.0
 ENTRYPOINT ["/usr/local/searxng/askbar-start.sh"]

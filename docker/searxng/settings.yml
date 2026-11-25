@@ -4,7 +4,7 @@
 
 use_default_settings:
   engines:
-    keep_only: [duckduckgo, brave, wikipedia, mwmbl]
+    keep_only: [duckduckgo, brave, yahoo, mwmbl]
 
 general:
   instance_name: askbar-searxng
@@ -18,8 +18,6 @@ search:
 
 server:
   secret_key: "@SECRET@"
-  bind_address: "0.0.0.0"
-  port: 8080
   limiter: false
   image_proxy: false
 
@@ -36,9 +34,12 @@ plugins:
   searx.plugins.tracker_url_remover.SXNGPlugin:
     active: true
 
-# brave and mwmbl are off in upstream's defaults. mojeek (in the plan) is `inactive` upstream: it needs a proof-of-work captcha.
+# brave, yahoo and mwmbl are off in upstream's defaults. Not in the plan's list: mojeek is `inactive` upstream (proof-of-work captcha),
+# and wikipedia refuses to load without general.contact_url, which would send a project URL to an outside service.
 engines:
   - name: brave
+    disabled: false
+  - name: yahoo
     disabled: false
   - name: mwmbl
     disabled: false
