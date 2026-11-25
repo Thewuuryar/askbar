@@ -108,7 +108,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.7b** `docs(adr): amend 0049: the admin-egress-proxy link` · haiku · after P4.7a
   Files: `docs/adr/0049-bootstrap.md`. Do: a built-so line: link `admin-egress-proxy` (`admegr_`), volume `egress-proxy-token`, uid 10006, made in P4.1c. Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.7c** `docs(adr): amend 0054: the gateway reaches providers through the proxy` · haiku · after P4.7b
+- [x] **P4.7c** `docs(adr): amend 0054: the gateway reaches providers through the proxy` · haiku · after P4.7b
   Files: `docs/adr/0054-model-gateway.md`. Do: its "Networks and outbound" and consequences lines: `egress-model-gateway` replaces `outbound`; the gateway has no route out of its own; the risk line about direct outbound ends. Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7d** `docs(adr): amend 0055: the alerter delivers through the proxy` · haiku · after P4.7c
