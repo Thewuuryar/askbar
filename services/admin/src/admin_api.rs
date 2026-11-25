@@ -684,6 +684,7 @@ pub async fn delete_user(State(state): St, headers: axum::http::HeaderMap, Path(
     mutate(&state, vec![], move |c| {
         c.execute("DELETE FROM display_defaults WHERE user_id = ?1", [&id]).map_err(internal)?;
         c.execute("DELETE FROM pair_codes WHERE user_id = ?1", [&id]).map_err(internal)?;
+        c.execute("DELETE FROM mcp_permissions WHERE user_id = ?1", [&id]).map_err(internal)?;
         c.execute("DELETE FROM users WHERE id = ?1", [&id]).map_err(internal)?;
         Ok(())
     })

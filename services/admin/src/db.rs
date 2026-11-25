@@ -232,6 +232,13 @@ const MIGRATIONS: &[&str] = &[
          note       TEXT NOT NULL DEFAULT '',
          PRIMARY KEY (source, host, port)
      );",
+    // Per-user MCP tool permissions (plan step P5A.17, ADR 0019): no row means the user does not hold the tool.
+    "CREATE TABLE mcp_permissions (
+         user_id TEXT NOT NULL,
+         tool    TEXT NOT NULL,
+         state   TEXT NOT NULL CHECK (state IN ('allow', 'deny')),
+         PRIMARY KEY (user_id, tool)
+     );",
     // The approval signing key (plan step P5.3): the PKCS#8 private key encrypted with `admin.key` like a provider key, so
     // the backup (`admin.db` and `admin.key`, ADR 0013) holds it only under the backup encryption. `version` rises on rotation.
     "CREATE TABLE approval_keys (

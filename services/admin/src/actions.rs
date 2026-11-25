@@ -214,6 +214,8 @@ pub fn classify(method: &Method, template: &str) -> Option<(&'static str, &'stat
         ("POST", "/services/{name}/restart") => ("restart", "restart"),
         ("PUT", "/egress/approvals") => ("egress", "approval_add"),
         ("DELETE", "/egress/approvals") => ("egress", "approval_remove"),
+        ("PUT", "/mcp/permissions/{user}") => ("mcp", "permissions_set"),
+        ("DELETE", "/mcp/permissions/{user}") => ("mcp", "permissions_remove"),
         ("POST", "/keys") => ("secret", "api_key_create"),
         ("DELETE", "/keys/{id}") => ("secret", "api_key_revoke"),
         ("GET", "/backup") => ("backup", "download"),
