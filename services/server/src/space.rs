@@ -103,6 +103,36 @@ const SPACE_MIGRATIONS: &[&str] = &[
     // The generation's own `model` column holds what each send asked for from the start (it used to be filled in only
     // once a provider served the reply, with the same value).
     "ALTER TABLE conversations ADD COLUMN model TEXT;",
+    // 5: tasks (research, later agents) and their steps. A step's `content` (summaries, the draft) is conversation-class
+    // text and goes with the conversation. `note` is a code word, never text.
+    "CREATE TABLE tasks (
+         id              TEXT PRIMARY KEY,
+         kind            TEXT    NOT NULL,
+         user_id         TEXT    NOT NULL,
+         conversation_id TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+         status          TEXT    NOT NULL CHECK (status IN ('running','done','stopped','interrupted')),
+         created_at      INTEGER NOT NULL,
+         ended_at        INTEGER,
+         tool_calls      INTEGER NOT NULL DEFAULT 0,
+         tokens_used     INTEGER NOT NULL DEFAULT 0,
+         token_cap       INTEGER NOT NULL DEFAULT 0,
+         note            TEXT
+     );
+     CREATE INDEX idx_tasks_user_kind ON tasks(user_id, kind, status);
+     CREATE INDEX idx_tasks_conversation ON tasks(conversation_id);
+     CREATE TABLE task_steps (
+         id         TEXT PRIMARY KEY,
+         task_id    TEXT    NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+         ord        INTEGER NOT NULL,
+         kind       TEXT    NOT NULL,
+         role       TEXT    NOT NULL,
+         status     TEXT    NOT NULL CHECK (status IN ('running','done','stopped','interrupted')),
+         started_at INTEGER NOT NULL,
+         ended_at   INTEGER,
+         content    TEXT,
+         tokens     INTEGER NOT NULL DEFAULT 0
+     );
+     CREATE INDEX idx_task_steps_task ON task_steps(task_id, ord);",
 ];
 
 /// The provider and model that wrote a reply, as they were when it was written.
@@ -973,6 +1003,30 @@ mod tests {
         db.mark_question_failed(&queued, "interrupted", "x").unwrap();
         db.mark_question_failed("no-such-generation", "interrupted", "x").unwrap();
         assert_eq!(db.get_messages(&c).unwrap(), msgs);
+    }
+
+    #[test]
+    fn a_space_file_from_before_the_task_tables_is_migrated_and_keeps_its_rows() {
+        let dir = std::env::temp_dir().join(format!("askbar-space-v4-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.db", new_id()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &SPACE_MIGRATIONS[..4] {
+                conn.execute_batch(m).unwrap();
+            }
+            conn.execute_batch(&format!("PRAGMA application_id = {SPACE_APPLICATION_ID}; PRAGMA user_version = 4;")).unwrap();
+            conn.execute_batch("INSERT INTO conversations (id, created_by, title, created_at, updated_at) VALUES ('c1','u1','old',1,1);")
+                .unwrap();
+        }
+        assert_eq!(SPACE_MIGRATIONS.len(), 5, "the task tables are migration 5");
+        let db = SpaceStore::open(&path).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 5);
+        assert_eq!(db.list_conversations().unwrap().len(), 1);
+        db.create_task("research", "u1", "c1", 10).unwrap();
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
