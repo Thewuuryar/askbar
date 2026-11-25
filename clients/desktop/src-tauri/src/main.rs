@@ -194,6 +194,8 @@ struct Bootstrap {
     notice: Option<String>,
     /// The privacy notice and the AI warning (ADR 0012), or `null` when the server was not asked or does not send them.
     policy: Option<askbar_proto::Policy>,
+    /// Whether to offer the "Search the web" toggle.
+    web_search: bool,
 }
 
 #[tauri::command]
@@ -205,7 +207,15 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
     if let Some(n) = lock(&state.notice).take() {
         notice = Some(n);
     }
-    Ok(Bootstrap { ui: cfg.ui, hotkey: cfg.hotkey, provider: cfg.provider, model: cfg.model, notice, policy: cfg.policy })
+    Ok(Bootstrap {
+        ui: cfg.ui,
+        hotkey: cfg.hotkey,
+        provider: cfg.provider,
+        model: cfg.model,
+        notice,
+        policy: cfg.policy,
+        web_search: cfg.web_search,
+    })
 }
 
 /// `null` when the backend is fine; otherwise what is wrong and (for a missing model) the alternatives.
@@ -270,6 +280,7 @@ async fn ask(
     conversation_id: Option<String>,
     text: String,
     model: Option<String>,
+    web_search: Option<bool>,
     on_event: Channel<StreamEvent>,
 ) -> Result<(), String> {
     let text = text.trim().to_string();
@@ -279,7 +290,7 @@ async fn ask(
     let backend = state.backend();
     with_cancel(&state, |rx| async move {
         backend
-            .ask_with(model, conversation_id, text, rx, &|e| {
+            .ask_with(model, web_search.unwrap_or(false), conversation_id, text, rx, &|e| {
                 let _ = on_event.send(e);
             })
             .await

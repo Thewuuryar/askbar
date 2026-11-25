@@ -450,6 +450,10 @@ pub struct Settings {
     /// from an older server, reads as the default).
     #[serde(default)]
     pub policy: Policy,
+    /// Whether the caller holds the web search permission, so the popup offers its toggle. Added after 1.0 (additive: an older
+    /// client ignores it, and a response without it reads as `false`).
+    #[serde(default)]
+    pub web_search: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -650,6 +654,7 @@ mod tests {
     fn a_settings_or_snapshot_from_before_the_policy_still_reads_and_says_the_default() {
         let old: Settings = serde_json::from_str(r#"{"display":{}}"#).unwrap();
         assert_eq!(old.policy, Policy::default());
+        assert!(!old.web_search);
         let snap: Snapshot = serde_json::from_str(r#"{"audit_retention_days":30}"#).unwrap();
         assert_eq!(snap.policy, None, "the server then serves the defaults for the snapshot's retention");
         // And the policy round-trips on the wire with the names a client reads.

@@ -14,6 +14,7 @@
     thread: $('thread'),
     foot: $('foot'),
     stop: $('stop'),
+    searchToggle: $('search-toggle'),
     histToggle: $('history-toggle'),
     history: $('history'),
     histList: $('history-list'),
@@ -62,6 +63,7 @@
     armed: null,         // { id, timer } for two-step delete
     pinned: true,        // thread follows new output until the user scrolls away from it
     newestFirst: false,  // the display setting: newest turn first, under the bar
+    webSearch: false,    // the "Search the web" toggle: for the next message only
   };
 
   // ------------------------------------------------------------ helpers
@@ -139,6 +141,48 @@
     state.newestFirst = !!ui.newest_first;
     el.thread.dataset.order = state.newestFirst ? 'newest' : 'oldest';
     orderTurns();
+  }
+
+  // The toggle is offered only to a user who holds the permission, and is off again after every send.
+  function setWebSearch(on) {
+    state.webSearch = on;
+    el.searchToggle.setAttribute('aria-pressed', String(on));
+  }
+
+  // The queries and the pages a quick-search reply is built from, under the reply. Text only; a link is made only for http(s)
+  // (the thread's click handler then asks before opening it in the system browser).
+  function showSearch(reply, queries, sources) {
+    const box = document.createElement('div');
+    box.className = 'sources';
+    const q = document.createElement('div');
+    q.className = 'search-queries';
+    q.textContent = 'Searched: ' + (queries || []).join(' · ');
+    box.appendChild(q);
+    const list = document.createElement('ol');
+    for (const s of sources || []) {
+      const li = document.createElement('li');
+      let host = '';
+      try { host = new URL(s.url).host; } catch (_) { /* not a URL: no host */ }
+      const title = s.title || host || s.url;
+      if (openableUrl(s.url)) {
+        const a = document.createElement('a');
+        a.setAttribute('href', s.url);
+        a.textContent = title;
+        li.appendChild(a);
+      } else {
+        li.appendChild(document.createTextNode(title));
+      }
+      if (host && openableUrl(s.url)) li.appendChild(document.createTextNode(' (' + host + ')'));
+      if (!s.fetched) {
+        const n = document.createElement('span');
+        n.className = 'not-read';
+        n.textContent = 'not read';
+        li.appendChild(n);
+      }
+      list.appendChild(li);
+    }
+    if (list.children.length) box.appendChild(list);
+    reply.bodyNode.after(box);
   }
 
   function syncChrome() {
@@ -504,6 +548,9 @@
             // and its model, as a reopened conversation will.
             setProvider(reply, { id: m.id, name: m.name, model: m.model });
             break;
+          case 'search':
+            showSearch(reply, m.queries, m.sources);
+            break;
           case 'delta':
             reply.content += m.text;
             scheduleRender(reply);
@@ -570,7 +617,9 @@
   async function askText(text) {
     hideNotice();
     state.pinned = true;
-    await startTurn(text, (channel) => invoke('ask', { conversationId: state.convId, text, model: state.model, onEvent: channel }));
+    const webSearch = state.webSearch;
+    setWebSearch(false);
+    await startTurn(text, (channel) => invoke('ask', { conversationId: state.convId, text, model: state.model, webSearch, onEvent: channel }));
   }
 
   // ------------------------------------------------------- messages not sent
@@ -931,6 +980,7 @@
   el.histToggle.addEventListener('click', () => toggleHistory());
   el.newChat.addEventListener('click', newChat);
   el.stop.addEventListener('click', cancel);
+  el.searchToggle.addEventListener('click', () => { setWebSearch(!state.webSearch); el.input.focus(); });
   el.noticeClose.addEventListener('click', hideNotice);
   el.pair.addEventListener('submit', submitPairing);
   el.pairCancel.addEventListener('click', closePairing);
@@ -1021,6 +1071,8 @@
     if (b === FAILED) return;
     applyUi(b.ui);
     applyPolicy(b.policy);
+    el.searchToggle.hidden = !b.web_search;
+    if (!b.web_search) setWebSearch(false);
     el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
     if (b.notice) showNotice(b.notice);
     await refreshModels();

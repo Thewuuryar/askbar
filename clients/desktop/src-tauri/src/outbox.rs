@@ -19,6 +19,9 @@ pub struct OutboxEntry {
     pub model: String,
     pub text: String,
     pub created_at: i64,
+    /// Search the web for this send. In memory only (`skip`): a message sent again from "Not sent" goes without it.
+    #[serde(skip)]
+    pub web_search: bool,
 }
 
 pub struct Outbox {
@@ -60,6 +63,7 @@ impl Outbox {
             model: model.to_string(),
             text: text.to_string(),
             created_at: now(),
+            web_search: false,
         };
         let mut entries = self.entries();
         entries.push(entry.clone());

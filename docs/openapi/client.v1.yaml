@@ -821,6 +821,11 @@ components:
           $ref: '#/components/schemas/DisplaySettings'
         policy:
           $ref: '#/components/schemas/Policy'
+        web_search:
+          type: boolean
+          description: >-
+            Whether the caller holds the web search permission (the `search` tool of the MCP front), so an app may offer its
+            per-message toggle. Added after 1.0; absent from an older server, read as `false`.
     Policy:
       type: object
       required: [notice, ai_warning]

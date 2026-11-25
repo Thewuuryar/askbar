@@ -93,7 +93,8 @@ Both follow the signed-in user, so all of a user's clients see the same values.
   `newest_first` (absent from an older server: `false`) shows a conversation newest first.
   A client may override any field locally; a local override wins, and removing it returns
   the server's default.
-- `GET /api/client/v1/settings` returns `{"display": {...}, "policy": {...}}`: the server-wide display defaults, and the
+- `GET /api/client/v1/settings` returns `{"display": {...}, "policy": {...}, "web_search": bool}`: the server-wide display defaults, whether the caller
+  holds the web search permission (`web_search`, asked of the MCP front on each call; `false` when it cannot say; absent from an older server), and the
   **policy** (ADR 0012), which is what an app tells its person about the service. `policy.notice` is
   `{"enabled", "text", "retention_days", "version"}`: the privacy notice, with how many days audit records are kept and a
   `version` that is a hash of the wording and that number. An app shows it after pairing and whenever the `version` differs from

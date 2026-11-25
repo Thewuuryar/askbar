@@ -283,6 +283,21 @@ async fn without_the_search_permission_or_the_front_the_reply_is_plain_with_a_no
 }
 
 #[tokio::test]
+async fn settings_tell_the_client_whether_the_user_may_search() {
+    for (tools, mcp, want) in [
+        (&["search"][..], None, true),
+        (&["fetch"][..], None, false),
+        (&["search"][..], Some("http://127.0.0.1:1"), false),
+        (&["search"][..], Some(""), false),
+    ] {
+        let t = start(tools, "[]", mcp).await;
+        let url = format!("http://{}/api/client/v1/settings", t.addr);
+        let s: askbar_proto::Settings = client().get(url).bearer_auth(&t.token).send().await.unwrap().json().await.unwrap();
+        assert_eq!(s.web_search, want, "{tools:?} {mcp:?}");
+    }
+}
+
+#[tokio::test]
 async fn a_proposal_that_is_not_a_json_array_gives_a_plain_reply_with_a_note() {
     let t = start(&["search", "fetch"], "Sure! Here are some queries", None).await;
     let events = t.chat().await;
