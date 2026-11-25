@@ -6,7 +6,7 @@
 //! (see `generation`), so this stream going away does not stop it.
 
 use crate::error::{ApiError, ApiJson};
-use crate::generation::{self, GenEvent};
+use crate::generation;
 use crate::{auth::ClientAuth, client_api::MemberSpace, AppState};
 use askbar_proto::problem::ErrorCode;
 use askbar_proto::{ChatEvent, ChatRequest};
@@ -77,7 +77,8 @@ pub async fn chat(
     };
     let (provider_id, model) = (chosen.provider_id.clone(), chosen.model.clone());
 
-    let sub = generation::submit(
+    let web_search = req.web_search;
+    let sub = generation::submit_with(
         &state,
         generation::Submit {
             space,
@@ -89,17 +90,11 @@ pub async fn chat(
             prompt: text,
             client_request_id: req.client_request_id,
         },
+        web_search,
     )
     .map_err(IntoResponse::into_response)?;
     let meta = ChatEvent::Meta { conversation_id: sub.conversation_id, generation_id: Some(sub.generation_id), queued: sub.queued };
     let meta = futures_util::stream::once(async move { Ok(sse_event(&meta)) });
-    let events = sub.live.subscribe(0).map(|e| {
-        Ok(match e {
-            GenEvent::Provider { id, name, model } => sse_event(&ChatEvent::Provider { id, name, model: Some(model) }),
-            GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
-            GenEvent::Done => sse_event(&ChatEvent::Done),
-            GenEvent::Error { message, code } => sse_event(&ChatEvent::Error { message, code: Some(code.into()) }),
-        })
-    });
+    let events = sub.live.subscribe(0).map(generation::to_sse);
     Ok(Sse::new(Box::pin(meta.chain(events)) as generation::EventStream).keep_alive(KeepAlive::default()))
 }
