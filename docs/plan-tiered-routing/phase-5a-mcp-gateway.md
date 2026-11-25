@@ -141,7 +141,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/mcp-gateway/tests/{audit,permissions}.rs`.
   Do: an auditor that is down, slow or answers an error; a permitted and a not-permitted user; a permission removed by a config push between two calls; a front before its first push.
   Accept: the call is refused in each failing case and the tool runs in none; the allowed case passes.
-- [ ] **P5A.22** `test(mcp-gateway): the fetch SSRF matrix at the front` · sonnet · after P5A.15
+- [x] **P5A.22** `test(mcp-gateway): the fetch SSRF matrix at the front` · sonnet · after P5A.15
   Files: `services/mcp-gateway/tests/fetch.rs`.
   Do: a fake proxy and a fake origin; the matrix of URLs and answers: provenance (not from search, from the user), query data, scheme, port, userinfo, IDN, IP literals in decimal, octal, hex, short, mixed and IPv6 forms, `localhost`, a compose service name; redirects (to a private literal, to a service name, to another scheme, a loop, past the hop cap); size (over the cap, exact, a stream that never ends), time (slow headers, slow body), content type (allowed, `application/octet-stream`, a missing type, a wrong type that sniffs as HTML), `Content-Encoding`; and that the proxy, not the front, resolves: the request leaves as a `CONNECT` on the hostname.
   Accept: each refused with its own code; the full URL appears in a span before every allowed hop; no URL or page text in any log.
