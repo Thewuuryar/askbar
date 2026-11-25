@@ -282,7 +282,7 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 - [x] **[P5A.22](plan-tiered-routing/phase-5a-mcp-gateway.md)** the fetch SSRF matrix at the front · W3
 - [x] **[P5A.23](plan-tiered-routing/phase-5a-mcp-gateway.md)** search and fetch end to end · W3
 - [x] **[P5A.24](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0019: the MCP gateway is an own front with native tools · W3
-- [ ] **[P5A.25](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0028: MCP gateway config and the approval public key · W3
+- [x] **[P5A.25](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0028: MCP gateway config and the approval public key · W3
 - [ ] **[P5A.26](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0032: MCP gateway and searxng container limits · W3
 - [ ] **[P5A.27](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0017: the one third-party image is searxng · W3
 - [ ] **[P5A.28](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0026: scan third-party images · W3
