@@ -460,7 +460,7 @@ async fn no_provider_is_called_when_the_auditor_refuses_and_the_refusal_is_recor
 
     // When the auditor is back, the record of the refusal arrives.
     rig.free.store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
-    let row = rig.wait_rows("SELECT status, error_code, trace_id FROM spans WHERE trace_id = 'gen-refused'").await;
+    let row = rig.wait_rows("SELECT status, error_code, trace_id FROM spans WHERE trace_id = 'gen-refused' AND status != 'running'").await;
     assert_eq!(row[0], vec![json!("refused"), json!("audit_backlog"), json!("gen-refused")]);
 }
 
@@ -712,7 +712,9 @@ async fn the_kill_switch_refuses_a_new_reply_before_any_call_and_leaves_a_gate_s
     let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-killed", "hello")).await).await;
     assert_eq!((status, body["error"].as_str()), (503, Some("kill_switch")));
     assert_eq!(rig.provider_calls(), 0, "no provider was called");
-    let rows = rig.wait_rows("SELECT kind, name, status, error_code, user_id FROM spans WHERE trace_id = 'gen-killed'").await;
+    let rows = rig
+        .wait_rows("SELECT kind, name, status, error_code, user_id FROM spans WHERE trace_id = 'gen-killed' AND status != 'running'")
+        .await;
     assert_eq!(rows[0], vec![json!("gate"), json!("kill_switch"), json!("blocked"), json!("kill_switch"), json!("user1")]);
     assert_eq!(
         rig.rows("SELECT COUNT(*) FROM spans WHERE trace_id = 'gen-killed' AND kind IN ('turn', 'attempt')")[0][0],
@@ -736,7 +738,7 @@ async fn a_paused_user_is_refused_and_everyone_else_is_not() {
     let (status, body) = problem_of(rig.chat_raw(&rig.request("p", "gen-paused", "hello")).await).await;
     assert_eq!((status, body["error"].as_str()), (403, Some("user_paused")));
     assert_eq!(rig.provider_calls(), 0);
-    let rows = rig.wait_rows("SELECT name, status, error_code FROM spans WHERE trace_id = 'gen-paused'").await;
+    let rows = rig.wait_rows("SELECT name, status, error_code FROM spans WHERE trace_id = 'gen-paused' AND status != 'running'").await;
     assert_eq!(rows[0], vec![json!("user_pause"), json!("blocked"), json!("user_paused")]);
     assert!(
         matches!(rig.chat(&as_user(rig.request("p", "gen-other", "hello"), "user2")).await.last(), Some(ChatEvent::Done { .. })),
@@ -965,7 +967,8 @@ async fn a_model_outside_the_catalog_is_refused_with_a_gate_span_and_no_provider
     let (status, body) = problem_of(rig.chat_raw(&req).await).await;
     assert_eq!((status, body["error"].as_str()), (400, Some("model_not_approved")));
     assert_eq!(rig.provider_calls(), 0, "no provider was called");
-    let rows = rig.wait_rows("SELECT kind, name, status, error_code FROM spans WHERE trace_id = 'gen-unapproved'").await;
+    let rows =
+        rig.wait_rows("SELECT kind, name, status, error_code FROM spans WHERE trace_id = 'gen-unapproved' AND status != 'running'").await;
     assert_eq!(rows[0], vec![json!("gate"), json!("model_catalog"), json!("blocked"), json!("model_not_approved")]);
     assert_eq!(rig.rows("SELECT COUNT(*) FROM spans WHERE trace_id = 'gen-unapproved' AND kind IN ('turn', 'attempt')")[0][0], 0);
     // The approved one still works.
