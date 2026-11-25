@@ -110,7 +110,7 @@ So each call is approved by fixed rules instead of a model:
 - `model-gateway` signs the approval on a dedicated route;
 - the MCP gateway front checks the signature, the user's permission and the fetch rules as it does for every call.
 
-The judge arrives with research reports (W7), which loop, and every tool call there goes through it as the design says.
+The judge arrives with research reports (W7). They are linear too, so their searches and fetches are approved by the same fixed rules (owner decision 2026-11-25), and the judge reviews the finished draft against the summaries instead of each call ([Phase 5B](plan-tiered-routing/phase-5b-research-judge.md)).
 
 Residual risk: search queries are a way for data to leave the house. A compromised `server` could encode data in queries, and a judge would not reliably catch that either. The fixed limits (query length, count per turn and per hour) bound it. Track 2 adds PII checks on every query.
 
@@ -136,7 +136,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 | W4 | Roles pinned to models | W4.1 and W4.2 below |
 | W5 | Quick search | W5.1 to W5.6 below |
 | W6 | Admin pages for search | Tiered routing [Phase 8](plan-tiered-routing/phase-8-admin-ui.md) P8.6a (MCP permissions, front status, approval key, egress status), P8.6c (egress page), P8.6d (editable quick search and MCP limits), P8.6e (quick search on and off), P8.6f (search page), P8.8a and P8.9a. P8.6g (server registry) waits for P5A.16 and is not part of W6. The admin UI overhaul is merged (`services/admin/src/constants.rs` is on `main`), so gate G0 is cleared |
-| W7 | Research reports and the judge | Tiered routing [Phase 5B](plan-tiered-routing/phase-5b-research-judge.md): P5.6, P5.9, P5.10 (token cap), P5.13, P5.17 and P5.18. P5.7 and P5.8 move to track 4. Research roles are added to the W4 role pins |
+| W7 | Research reports and the judge | Tiered routing [Phase 5B](plan-tiered-routing/phase-5b-research-judge.md): P5B.1, P5.9, P5.10 (token cap), P5.6, P5B.2 to P5B.8, P5.13, P5.17 and P5.18. P5.7 and P5.8 move to track 4; P5.14 and P5.15 are replaced by the W4 role pins (the three research roles are added there) and the research limits in P5B.3 |
 
 #### W0: records
 
@@ -159,7 +159,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   Also record:
   - roles use admin-pinned models until tiered routing;
   - quick search runs without the judge, under the fixed rules in this file, because nothing it fetches can cause another tool call;
-  - the judge ships with research reports, the first feature with a tool loop.
+  - the judge ships with research reports; in W7 it reviews the draft report, not each tool call (owner decision 2026-11-25).
 
   Accept: `scripts/check-docs.sh` passes; the Amendments section names this file.
 - [x] **O0.2** `docs(docs): point the tiered routing plan at the new order` · haiku · after O0.1
@@ -247,7 +247,7 @@ Gate definitions are in the [tiered routing plan](plan-tiered-routing.md#owner-g
 | Search queries and PII | Until track 2, search is off by default and every reply shows its queries. Track 2 runs detection on queries and fetch URLs: secrets refuse the search; other PII is removed from the query and the user is told |
 | Injection markers | Track 1 datamarks fetched text. Track 3's injection canaries are now a Later item |
 | Roles | Track 1 adds roles pinned to models, with the type names tiered routing uses; track 4 adds tiers, weights and the decider |
-| Judge | Quick search: fixed rules, no judge. Research reports: the judge on a pinned model. Track 4: the decider cascade in front of it (P5.7) |
+| Judge | Quick search: fixed rules, no judge. Research reports: fixed rules for each call, and the judge on a pinned model reviews the draft. Track 4: the decider cascade in front of it (P5.7) |
 | ADR numbers | 0056: egress proxy (phase 4). Tiered routing and the MCP gateway take the next free numbers when written (the gateway at P5A.2). Everything else is an amendment |
 | Agents with MCP tools | End of track 4. Web search doesn't depend on them |
 

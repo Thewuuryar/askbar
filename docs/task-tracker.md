@@ -15,14 +15,14 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 3: Auto](plan-tiered-routing/phase-3-auto.md) | 0 | 0 | 28 | 28 |
 | [Tiered routing Phase 4: egress proxy](plan-tiered-routing/phase-4-egress-proxy.md) | 23 | 0 | 0 | 23 |
 | [Tiered routing Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | 41 | 0 | 1 | 42 |
-| [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 0 | 0 | 10 | 10 |
+| [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 0 | 0 | 18 | 18 |
 | [Tiered routing Phase 6: agents](plan-tiered-routing/phase-6-agents.md) | 0 | 0 | 31 | 31 |
 | [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 7 | 0 | 3 | 10 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 0 | 0 | 11 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **125** | **0** | **178** | **303** |
+| **Total** | **125** | **0** | **186** | **311** |
 
 ## Completed (125)
 
@@ -176,7 +176,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (178)
+## Not started (186)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -300,12 +300,20 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P5.7](plan-tiered-routing/phase-5b-research-judge.md)** run the decider cascade for the judge in shadow
 - [ ] **[P5.8](plan-tiered-routing/phase-5b-research-judge.md)** add step_check and research decisions to /decide
 - [ ] **[P5.9](plan-tiered-routing/phase-5b-research-judge.md)** add task tables and mark running tasks interrupted on start · W7
-- [ ] **[P5.10](plan-tiered-routing/phase-5b-research-judge.md)** enforce the tool-call limit and task cost cap · W7
+- [ ] **[P5.10](plan-tiered-routing/phase-5b-research-judge.md)** enforce the tool-call limit and the task token cap · W7
 - [ ] **[P5.13](plan-tiered-routing/phase-5b-research-judge.md)** run research reports · W7
 - [ ] **[P5.14](plan-tiered-routing/phase-5b-research-judge.md)** add role pins and the role table
 - [ ] **[P5.15](plan-tiered-routing/phase-5b-research-judge.md)** set roles, decider thresholds and task caps
 - [ ] **[P5.17](plan-tiered-routing/phase-5b-research-judge.md)** amend 0004 and 0049, 0023 · W7
 - [ ] **[P5.18](plan-tiered-routing/phase-5b-research-judge.md)** amend 0054, 0039, 0040 for research and the judge · W7
+- [ ] **[P5B.1](plan-tiered-routing/phase-5b-research-judge.md)** add the research flag, the research roles and the task limits · W7
+- [ ] **[P5B.2](plan-tiered-routing/phase-5b-research-judge.md)** approve research calls by fixed rules · W7
+- [ ] **[P5B.3](plan-tiered-routing/phase-5b-research-judge.md)** pin the research roles and edit the research limits · W7
+- [ ] **[P5B.4](plan-tiered-routing/phase-5b-research-judge.md)** alert when a task passes 75% and 90% of its token cap · W7
+- [ ] **[P5B.5](plan-tiered-routing/phase-5b-research-judge.md)** split a question and gather summaries with researchers · W7
+- [ ] **[P5B.6](plan-tiered-routing/phase-5b-research-judge.md)** research toggle, progress and sources · W7
+- [ ] **[P5B.7](plan-tiered-routing/phase-5b-research-judge.md)** research report with the mock model and fixture pages · W7
+- [ ] **[P5B.8](plan-tiered-routing/phase-5b-research-judge.md)** research reports in the user and admin guides · W7
 
 ### Tiered routing Phase 6: agents (track 4)
 
