@@ -19,6 +19,9 @@ This is the reference for the admin site: one page for each page of the admin (H
 
 - [Providers & models](settings/providers.md)
 - [People & clients](settings/people.md)
+- [MCP](settings/mcp.md)
+- [Egress](settings/egress.md)
+- [Search](settings/search.md)
 - [Services](settings/services.md)
 - [Network](settings/network.md)
 - [Security](settings/security.md)
