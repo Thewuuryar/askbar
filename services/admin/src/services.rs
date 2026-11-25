@@ -6,6 +6,7 @@
 //! | `server` | `GET /api/server/v1/status` | `POST /api/server/v1/restart`, then wait for a new boot ID |
 //! | `model-gateway` | `GET /api/model-gateway/v1/status` | `POST /api/model-gateway/v1/restart`, wait for a new boot ID, push the configuration again |
 //! | `alerter` | `GET /api/alerter/v1/status` | `POST /api/alerter/v1/restart`, wait for a new boot ID, push the settings again |
+//! | `egress-proxy` | `GET /api/egress-proxy/v1/status` | `POST /api/egress-proxy/v1/restart`, wait for a new boot ID, push the allowlists again |
 //! | `admin` | this process | exit after answering; Docker starts it again |
 //! | `caddy` | its admin socket | push its configuration again (a live reload) |
 //! | `cpa` | its management API (accounts) | ask its supervisor through `restart-request`, wait for `restart-done` and the API |
@@ -96,6 +97,20 @@ async fn alerter_state(state: &Arc<AdminState>) -> Value {
     }
 }
 
+async fn egress_state(state: &Arc<AdminState>) -> Value {
+    let Some(link) = state.egress.get().cloned() else { return card("egress-proxy", false, "No link to the egress proxy is set up.") };
+    match link.status_now().await {
+        Some(st) if st.configured => card("egress-proxy", true, "Answers and runs the allowlists it was given."),
+        Some(_) => card(
+            "egress-proxy",
+            true,
+            link.last_error()
+                .unwrap_or_else(|| "Answers, but has not received its allowlists yet. Nothing leaves the stack until it does.".into()),
+        ),
+        None => card("egress-proxy", false, link.last_error().unwrap_or_else(|| "Does not answer.".into())),
+    }
+}
+
 async fn caddy_state(state: &Arc<AdminState>) -> Value {
     if crate::caddy::reachable(state).await {
         card("caddy", true, "Its admin socket answers.")
@@ -127,11 +142,17 @@ fn recent(db: &crate::AdminDb) -> Value {
 
 /// `GET /api/admin/v1/services`: how each service is doing, and the last ten actions.
 pub async fn list(State(state): St) -> Result<Json<Value>, Failure> {
-    let (server, gateway, alerter, caddy, cpa) =
-        tokio::join!(server_state(&state), gateway_state(&state), alerter_state(&state), caddy_state(&state), cpa_state(&state));
+    let (server, gateway, alerter, egress, caddy, cpa) = tokio::join!(
+        server_state(&state),
+        gateway_state(&state),
+        alerter_state(&state),
+        egress_state(&state),
+        caddy_state(&state),
+        cpa_state(&state)
+    );
     let admin = card("admin", true, "This page is served by it.");
     let recent = recent(&*state.db.lock().await);
-    Ok(Json(json!({ "services": [server, gateway, alerter, admin, caddy, cpa], "recent": recent })))
+    Ok(Json(json!({ "services": [server, gateway, alerter, egress, admin, caddy, cpa], "recent": recent })))
 }
 
 /// `POST /api/admin/v1/services/{name}/restart`.
@@ -164,6 +185,7 @@ pub async fn restart(State(state): St, Path(name): Path<String>) -> Result<(Stat
         "server" => restart_server(&state).await,
         "model-gateway" => restart_gateway(&state).await,
         "alerter" => restart_alerter(&state).await,
+        "egress-proxy" => restart_egress(&state).await,
         "admin" => restart_admin(&state).await,
         "caddy" => restart_caddy(&state).await,
         _ => restart_cpa(&state).await,
@@ -257,6 +279,28 @@ async fn restart_alerter(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Va
         }
     }
     Err(unreachable("The alerter was asked to restart but has not come back within a minute. Check it from the host."))
+}
+
+/// Ask the egress proxy to restart, wait for a new process, then give it its allowlists again: it holds them in memory only.
+async fn restart_egress(state: &Arc<AdminState>) -> Result<(StatusCode, Json<Value>), Failure> {
+    let link = state.egress.get().cloned().ok_or_else(|| unreachable("No link to the egress proxy is set up."))?;
+    let old = link.restart().await?;
+    let started = Instant::now();
+    while started.elapsed() < SERVER_BACK_WITHIN {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if link.status_now().await.is_some_and(|st| st.boot_id != old) {
+            let pushed = link.sync(state).await;
+            let secs = started.elapsed().as_secs();
+            let said = match pushed {
+                crate::egress_link::Sync::Pushed(_) | crate::egress_link::Sync::Current => {
+                    format!("Restarted; back after {secs}s, with its allowlists.")
+                }
+                _ => format!("Restarted; back after {secs}s. It has no allowlists yet; the admin keeps trying."),
+            };
+            return Ok((StatusCode::OK, Json(card("egress-proxy", true, said))));
+        }
+    }
+    Err(unreachable("The egress proxy was asked to restart but has not come back within a minute. Check it from the host."))
 }
 
 /// Answer, then exit; Docker starts the admin again. This page reconnects when it is back.

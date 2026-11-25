@@ -54,6 +54,7 @@
     { id: 'home', load: loadHome },
     { id: 'providers', load: loadProviders },
     { id: 'mcp', load: loadMcp },
+    { id: 'egress', load: loadEgress },
     { id: 'services', load: loadServices },
     { id: 'people', load: loadClients },
     { id: 'general', load: loadSettings },
@@ -1074,6 +1075,7 @@
 
   const SERVICE_INFO = {
     server: { title: 'Server', does: 'Chats, history and provider calls', warn: 'Replies being written end as interrupted, and apps say "server offline" until it is back (under a minute).' },
+    'egress-proxy': { title: 'Egress proxy', does: 'Outbound internet access', warn: 'Nothing leaves the stack for a few seconds, and the admin gives it its allowlists again.' },
     alerter: { title: 'Alerter', does: 'Delivers alerts', warn: 'Alerts wait or are lost for a few seconds, and the admin gives it its delivery settings again.' },
     'model-gateway': { title: 'Model gateway', does: 'Provider calls and provider keys', warn: 'Its provider keys leave its memory, and the admin gives them back within seconds.' },
     admin: { title: 'Admin', does: 'This site', warn: 'This page stops answering for a few seconds, then reloads, and you sign in again.' },
@@ -1140,28 +1142,7 @@
     },
     onError: pageFailed,
   });
-  // The egress proxy's recent denied attempts (the admin's last read of its status). A host is attacker-influenced: text only.
-  const DENIED_REASONS = {
-    not_listed: 'Not on the allowlist', bad_host: 'Not a valid host name', ip_literal: 'An IP address, not a name',
-    port: 'Port not allowed', private_address: 'Private address', plain_http: 'Plain HTTP not allowed',
-  };
-  const liveDenied = ui.live(() => api('GET', '/api/admin/v1/egress/denied'), {
-    every: 'STATUS_EVERY_SECS',
-    when: appShownNow,
-    render(data, ctx) {
-      // A proxy that does not answer is said so; an empty list would claim nothing was blocked.
-      const note = $('denied-note');
-      note.textContent = data.online ? '' : (data.error || 'The egress proxy does not answer.') + ' Nothing leaves the stack until it does.';
-      note.hidden = data.online;
-      $('denied-table').hidden = !data.online;
-      ui.rows($('denied'), data.online ? data.denied : [], (d) => ui.el('tr', null,
-        ui.el('td', null, ui.time(d.at)), ui.el('td', { text: d.source }), ui.el('td', { text: d.host }),
-        ui.el('td', { text: d.port == null ? '' : String(d.port) }), ui.el('td', { text: DENIED_REASONS[d.reason] || d.reason })),
-        { key: (d) => d.source + '|' + d.host + '|' + d.port + '|' + d.reason + '|' + d.at, force: ctx.force, empty: 'Nothing has been blocked.' });
-    },
-    onError: pageFailed,
-  });
-  function loadServices() { liveDenied.start(); return liveServices.start(); }
+  function loadServices() { return liveServices.start(); }
   // ------------------------------------------------------------------ MCP page
   // Every value from a service (outcomes, hosts, errors) is written with textContent only.
   const MCP_TOOLS = ['search', 'fetch'];
@@ -1231,6 +1212,97 @@
     liveMcp.refresh({ force: true });
   });
   function loadMcp() { return liveMcp.start(); }
+  // ------------------------------------------------------------------ Egress page
+  // Hosts, notes and errors come from outside: text only.
+  const DENIED_REASONS = {
+    not_listed: 'Not on the allowlist', bad_host: 'Not a valid host name', ip_literal: 'An IP address, not a name',
+    port: 'Port not allowed', private_address: 'Private address', plain_http: 'Plain HTTP not allowed',
+  };
+  const EGRESS_ORIGINS = {
+    provider: 'A provider URL', alerts: 'The alert settings', cpa_hosts: 'CPA_EGRESS_HOSTS', searxng_hosts: 'SEARXNG_EGRESS_HOSTS',
+    fetch_rule: 'The fetch rule', approval: 'An approval',
+  };
+  const egressEntry = (e) => (e.any_public ? 'any public host, port ' + e.port : e.host + ':' + e.port) + (e.plain_http ? ' (plain HTTP)' : '')
+    + (e.relay ? ' (mail relay)' : '') + (e.allow_private ? ' (private addresses allowed)' : '');
+  const approvalKey = (a) => a.source + '|' + a.host + '|' + a.port;
+  function approvalRow(a) {
+    const remove = ui.el('button', { type: 'button', class: 'btn btn-danger btn-s', 'data-action': 'remove', text: 'Remove', 'aria-label': 'Remove the approval for ' + a.host });
+    const row = ui.el('tr', null,
+      ui.el('td', { text: a.source }), ui.el('td', { text: a.host }), ui.el('td', { class: 'num', text: String(a.port) }),
+      ui.el('td', { text: a.plain_http ? 'Yes' : 'No' }), ui.el('td', { text: a.note }), ui.el('td', { class: 'actions' }, remove));
+    remove.addEventListener('click', () => ui.rowConfirm(row, {
+      text: 'Remove the approval for ' + a.host + ':' + a.port + '? ' + a.source + ' can no longer reach it.', action: 'Remove', busy: 'Removing…', trigger: remove,
+      onConfirm: async () => {
+        pageError('');
+        try {
+          await api('DELETE', '/api/admin/v1/egress/approvals?source=' + encodeURIComponent(a.source) + '&host=' + encodeURIComponent(a.host) + '&port=' + a.port);
+          ui.toast('Approval removed.');
+        } catch (ex) { pageError(ex.message); }
+        liveEgress.refresh({ force: true });
+      },
+    }));
+    return row;
+  }
+  const liveEgress = ui.live(() => Promise.all([
+    api('GET', '/api/admin/v1/egress/status'), api('GET', '/api/admin/v1/egress/approvals'), api('GET', '/api/admin/v1/egress/denied'),
+  ]), {
+    every: 'STATUS_EVERY_SECS',
+    when: appShownNow,
+    render([st, approvals, denied], ctx) {
+      // A proxy that does not answer is said so; an empty list would claim nothing was blocked.
+      const note = $('egress-note');
+      note.textContent = st.online ? '' : (st.error || 'The egress proxy does not answer.') + ' Nothing leaves the stack until it does.';
+      note.hidden = st.online;
+      $('egress-state').replaceChildren(ui.status(st.online ? 'ok' : 'warning', st.online ? 'Answering' : 'Not answering'));
+      $('egress-summary').textContent = (st.configured ? 'Configured' : 'Not configured') + ' · version ' + (st.version == null ? 'none' : st.version)
+        + ' · ' + st.open_tunnels + ' open tunnel(s)';
+      const sources = Object.entries(st.sources);
+      ui.rows($('egress-counts'), sources, ([n, s]) => ui.el('tr', null,
+        ui.el('td', { text: n }), ui.el('td', { class: 'num', text: String(s.allowed) }), ui.el('td', { class: 'num', text: String(mcpDeniedTotal(s.denied)) })),
+        { key: ([n, s]) => n + '|' + JSON.stringify([s.allowed, s.denied]), force: ctx.force, empty: 'No source reported yet.' });
+      const entries = sources.flatMap(([n, s]) => s.entries.map((e) => [n, e]));
+      ui.rows($('egress-allow'), entries, ([n, e]) => ui.el('tr', null,
+        ui.el('td', { text: n }), ui.el('td', { text: egressEntry(e) }), ui.el('td', { text: EGRESS_ORIGINS[e.origin] || e.origin })),
+        { key: ([n, e]) => n + '|' + JSON.stringify(e), force: ctx.force, empty: 'Nothing is allowed yet.' });
+      ui.rows($('approvals'), approvals, approvalRow, { key: (a) => approvalKey(a) + '|' + a.plain_http + '|' + a.note, force: ctx.force, empty: 'No approvals.' });
+      const dn = $('denied-note');
+      dn.textContent = denied.online ? '' : (denied.error || 'The egress proxy does not answer.') + ' Nothing leaves the stack until it does.';
+      dn.hidden = denied.online;
+      $('denied-table').hidden = !denied.online;
+      ui.rows($('denied'), denied.online ? denied.denied : [], (d) => ui.el('tr', null,
+        ui.el('td', null, ui.time(d.at)), ui.el('td', { text: d.source }), ui.el('td', { text: d.host }),
+        ui.el('td', { text: d.port == null ? '' : String(d.port) }), ui.el('td', { text: DENIED_REASONS[d.reason] || d.reason })),
+        { key: (d) => d.source + '|' + d.host + '|' + d.port + '|' + d.reason + '|' + d.at, force: ctx.force, empty: 'Nothing has been blocked.' });
+    },
+    onError: pageFailed,
+  });
+  on('approval-add', 'click', () => {
+    $('approval-form').reset();
+    $('a-port').value = '443';
+    show($('approval-add-error'), false);
+    ui.openBox('approval-box');
+    $('a-host').focus();
+  });
+  on('approval-cancel', 'click', () => ui.closeBox('approval-box'));
+  on('approval-form', 'submit', async (e) => {
+    e.preventDefault();
+    const err = $('approval-add-error');
+    show(err, false);
+    const host = $('a-host').value.trim();
+    if (!host) { ui.fieldError('a-host', 'Enter a host.').focus(); return; }
+    ui.fieldError('a-host', '');
+    try {
+      await api('PUT', '/api/admin/v1/egress/approvals', {
+        source: $('a-source').value, host, port: Number($('a-port').value), plain_http: $('a-plain').checked, note: $('a-note').value.trim(),
+      });
+      ui.closeBox('approval-box');
+      ui.toast('Approval saved.');
+      liveEgress.refresh({ force: true });
+    } catch (ex) {
+      ui.inlineError(err, ex.message);
+    }
+  });
+  function loadEgress() { return liveEgress.start(); }
   // -------------------------------------------------------- providers and models (plan step 5.5)
 
   // ---- Claude and ChatGPT accounts (CLIProxyAPI): connect an account without a terminal. The paste step (the

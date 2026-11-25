@@ -17,10 +17,12 @@ use crate::web::{err, Failure};
 use crate::AdminState;
 use askbar_proto::egress::{normalize_host, Host};
 use askbar_proto::egress::{Denied, EgressConfig, EgressStatus, Entry, SourceRules};
+use askbar_proto::http::ApiError;
+use askbar_proto::problem::ErrorCode;
 use axum::{extract::Query, extract::State, http::StatusCode, Json};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -105,20 +107,42 @@ pub fn read_approvals(conn: &Connection) -> rusqlite::Result<Vec<Approval>> {
 
 /// An approval's destination becomes `allow_private` on the source's entry for that host and port (the derived one, so a LAN mail
 /// relay keeps `relay`), or is a new entry.
-fn approve(entries: &mut Vec<Entry>, a: &Approval) {
+fn approve(entries: &mut Vec<(Entry, &'static str)>, a: &Approval) {
     let mut found = false;
-    for e in entries.iter_mut().filter(|e| e.host == a.host && e.port == a.port) {
+    for (e, _) in entries.iter_mut().filter(|(e, _)| e.host == a.host && e.port == a.port) {
         (e.allow_private, e.plain_http, found) = (true, e.plain_http || a.plain_http, true);
     }
     if !found {
-        entries.push(Entry { host: a.host.clone(), port: a.port, plain_http: a.plain_http, allow_private: true, ..plain_entry() });
+        entries.push((
+            Entry { host: a.host.clone(), port: a.port, plain_http: a.plain_http, allow_private: true, ..plain_entry() },
+            "approval",
+        ));
     }
+}
+
+/// Every entry of a source with where it comes from: `provider`, `alerts`, `cpa_hosts`, `searxng_hosts`, `fetch_rule` or
+/// `approval` (an approval that only lifts the private ban on a derived entry leaves that entry's origin; `allow_private` shows it).
+type Tagged = Vec<(Entry, &'static str)>;
+
+fn tag(entries: Vec<Entry>, origin: &'static str) -> Tagged {
+    entries.into_iter().map(|e| (e, origin)).collect()
 }
 
 /// What the proxy should run, from `admin.db`. `searxng` and `fetch` (P5A.19) are included only when the proxy reports a listener
 /// for them in `status`: it refuses a config naming a source it does not have.
 pub fn build_config(conn: &Connection, secrets: &crate::secrets::AdminSecrets, status: &EgressStatus) -> EgressConfig {
-    let gateway = crate::server_link::build_snapshot(conn)
+    EgressConfig {
+        sources: build_tagged(conn, secrets, status)
+            .into_iter()
+            .map(|(n, t)| (n, rules(t.into_iter().map(|(e, _)| e).collect())))
+            .collect(),
+        limits: crate::constants::EGRESS_LIMITS,
+    }
+}
+
+/// [`build_config`]'s entries per source, each with its origin (read only, for the Egress page).
+fn build_tagged(conn: &Connection, secrets: &crate::secrets::AdminSecrets, status: &EgressStatus) -> BTreeMap<String, Tagged> {
+    let gateway: Vec<Entry> = crate::server_link::build_snapshot(conn)
         .map(|s| s.providers.iter().filter_map(|p| entry_of_url(&p.base_url)).collect())
         .unwrap_or_default();
     let mut alerter: Vec<Entry> = read_ntfy(conn, secrets).and_then(|n| entry_of_url(&n.server)).into_iter().collect();
@@ -131,17 +155,22 @@ pub fn build_config(conn: &Connection, secrets: &crate::secrets::AdminSecrets, s
     // The fetch client sends http targets in absolute form (no CONNECT), so port 80 needs `plain_http`. `any_public` takes no host.
     let fetch = vec![Entry { any_public: true, ..plain_entry() }, Entry { any_public: true, port: 80, plain_http: true, ..plain_entry() }];
     let approvals = read_approvals(conn).unwrap_or_default();
-    EgressConfig {
-        sources: [("model-gateway", gateway), ("alerter", alerter), ("cpa", cpa), ("searxng", searxng), ("fetch", fetch)]
-            .into_iter()
-            .filter(|(name, _)| SOURCES[..3].contains(name) || status.sources.contains_key(*name))
-            .map(|(name, mut entries)| {
-                approvals.iter().filter(|a| a.source == name).for_each(|a| approve(&mut entries, a));
-                (name.to_string(), rules(entries))
-            })
-            .collect(),
-        limits: crate::constants::EGRESS_LIMITS,
-    }
+    [
+        ("model-gateway", tag(gateway, "provider")),
+        ("alerter", tag(alerter, "alerts")),
+        ("cpa", tag(cpa, "cpa_hosts")),
+        ("searxng", tag(searxng, "searxng_hosts")),
+        ("fetch", tag(fetch, "fetch_rule")),
+    ]
+    .into_iter()
+    .filter(|(name, _)| SOURCES[..3].contains(name) || status.sources.contains_key(*name))
+    .map(|(name, mut entries)| {
+        approvals.iter().filter(|a| a.source == name).for_each(|a| approve(&mut entries, a));
+        entries.sort_by(|(a, _), (b, _)| (&a.host, a.port, a.plain_http, a.relay).cmp(&(&b.host, b.port, b.plain_http, b.relay)));
+        entries.dedup_by(|(a, _), (b, _)| a == b);
+        (name.to_string(), entries)
+    })
+    .collect()
 }
 
 type St = State<Arc<AdminState>>;
@@ -243,25 +272,34 @@ pub async fn list_denied(State(state): St) -> Json<serde_json::Value> {
 }
 
 /// `GET /api/admin/v1/egress/status`: per source the entries the admin pushed (derived again from `admin.db`, as the next push
-/// would be) and the allowed and denied counts from the proxy's last status. No path, URL or token is in it.
+/// would be, each with its `origin`) and the allowed and denied counts from the proxy's last status. No path, URL or token is in it.
 pub async fn status(State(state): St) -> Json<serde_json::Value> {
     let Some(l) = state.egress.get() else {
-        return Json(serde_json::json!({ "online": false, "error": "No link to the egress proxy is set up.", "sources": {} }));
+        return Json(
+            serde_json::json!({ "online": false, "error": "No link to the egress proxy is set up.", "configured": false, "version": null, "open_tunnels": 0, "sources": {} }),
+        );
     };
     let last = l.last.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let cfg = build_config(state.db.lock().await.conn(), &state.secrets, &last);
+    let cfg = build_tagged(state.db.lock().await.conn(), &state.secrets, &last);
     let sources: serde_json::Map<_, _> = cfg
-        .sources
         .into_iter()
-        .map(|(name, r)| {
+        .map(|(name, entries)| {
             let stats = last.sources.get(&name);
-            (
-                name,
-                serde_json::json!({ "entries": r.entries, "allowed": stats.map_or(0, |s| s.allowed), "denied": stats.map(|s| &s.denied) }),
-            )
+            let entries: Vec<_> = entries
+                .into_iter()
+                .map(|(e, origin)| {
+                    let mut v = serde_json::to_value(e).unwrap_or_default();
+                    v["origin"] = origin.into();
+                    v
+                })
+                .collect();
+            (name, serde_json::json!({ "entries": entries, "allowed": stats.map_or(0, |s| s.allowed), "denied": stats.map(|s| &s.denied) }))
         })
         .collect();
-    Json(serde_json::json!({ "online": l.online(), "error": l.last_error(), "sources": sources }))
+    Json(serde_json::json!({
+        "online": l.online(), "error": l.last_error(), "configured": last.configured, "version": last.version,
+        "open_tunnels": last.open_tunnels, "sources": sources,
+    }))
 }
 
 /// How a check went.
@@ -336,6 +374,22 @@ impl EgressLink {
             }));
         }
         ok
+    }
+
+    /// Ask the proxy to restart. Returns the boot ID of the process that is about to stop, or why not.
+    pub async fn restart(&self) -> Result<String, ApiError> {
+        match self.link.request(reqwest::Method::POST, askbar_service::routes::RESTART, None).await {
+            Ok((202, body)) => Ok(serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v["boot_id"].as_str().map(String::from))
+                .unwrap_or_default()),
+            Ok((429, _)) => Err(ApiError::new(
+                ErrorCode::TooManyAttempts,
+                "The egress proxy started less than 30 seconds ago. Restart it again in a moment.",
+            )
+            .retry_after(askbar_service::restart::COOLDOWN.as_secs())),
+            Ok(_) | Err(()) => Err(ApiError::new(ErrorCode::ServerUnavailable, "The egress proxy did not take the restart request.")),
+        }
     }
 
     /// `PUT /config`, as an action of its own: recorded before it is made (source, count and version, no host), and not made

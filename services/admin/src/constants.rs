@@ -72,7 +72,7 @@ pub const NAME_MAX_CHARS: usize = 60;
 // Pairing and services.
 pub const PAIR_CODE_TTL_SECS: i64 = 10 * 60;
 /// The services the Services page shows and may restart.
-pub const SERVICES: [&str; 6] = ["server", "model-gateway", "alerter", "admin", "caddy", "cpa"];
+pub const SERVICES: [&str; 7] = ["server", "model-gateway", "alerter", "egress-proxy", "admin", "caddy", "cpa"];
 /// What `cpa` may reach through the egress proxy (ADR 0056): the hosts behind the two subscription logins, nothing else.
 pub const CPA_EGRESS_HOSTS: [&str; 5] = ["api.anthropic.com", "platform.claude.com", "auth.openai.com", "chatgpt.com", "api.openai.com"];
 /// What `searxng` may reach through the egress proxy's `searxng` source: measured by the owner's run of
@@ -122,7 +122,7 @@ pub const MAX_BACKUP_KEEP_DAYS: u32 = 3650;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
-pub const PAGE_SLUGS: [&str; 16] = [
+pub const PAGE_SLUGS: [&str; 17] = [
     "home",
     "alerts",
     "audit/calls",
@@ -133,6 +133,7 @@ pub const PAGE_SLUGS: [&str; 16] = [
     "providers",
     "people",
     "mcp",
+    "egress",
     "services",
     "network",
     "security",
@@ -149,6 +150,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/providers",
     "settings/people",
     "settings/mcp",
+    "settings/egress",
     "settings/services",
     "settings/network",
     "settings/security",
@@ -165,8 +167,11 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/mcp#front-status",
     "settings/mcp#approval-key",
     "settings/mcp#egress-status",
+    "settings/egress#status",
+    "settings/egress#allowlist",
+    "settings/egress#approvals",
+    "settings/egress#blocked-outbound-requests",
     "settings/services#running-services",
-    "settings/services#blocked-outbound-requests",
     "settings/network#host-name",
     "settings/network#certificate",
     "settings/network#allowed-addresses-and-networks",
@@ -291,7 +296,7 @@ struct Constants {
     api_key_max_name_chars: usize,
     name_max_chars: usize,
     pair_code_ttl_secs: i64,
-    services: [&'static str; 6],
+    services: [&'static str; 7],
     max_restarts_per_minute: usize,
     backup_run_at_secs: i64,
     backup_missed_after_secs: i64,
@@ -312,7 +317,7 @@ struct Constants {
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
     home_stats_range_days: [u32; 3],
-    page_slugs: [&'static str; 16],
+    page_slugs: [&'static str; 17],
     landing_page: &'static str,
     help_topics: &'static [&'static str],
 }

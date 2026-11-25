@@ -26,6 +26,8 @@ struct FakeProxy {
     denied: Mutex<Vec<Value>>,
     /// Extra source names `GET /status` reports (a proxy that has the `searxng` and `fetch` listeners).
     listeners: Mutex<Vec<&'static str>>,
+    /// Which process this is: a restart makes a new one that runs no config.
+    boot: Mutex<u32>,
 }
 type Fake = Arc<FakeProxy>;
 
@@ -41,8 +43,18 @@ async fn status(State(f): State<Fake>, h: HeaderMap) -> Result<Json<Value>, Stat
     let sources: serde_json::Map<String, Value> =
         f.listeners.lock().unwrap().iter().map(|s| (s.to_string(), json!({ "allowed": 0, "denied": {} }))).collect();
     Ok(Json(
-        json!({ "configured": v.is_some(), "version": v, "boot_id": "b", "open_tunnels": 0, "sources": sources, "recent_denied": *f.denied.lock().unwrap() }),
+        json!({ "configured": v.is_some(), "version": v, "boot_id": format!("boot-{}", f.boot.lock().unwrap()), "open_tunnels": 0, "sources": sources, "recent_denied": *f.denied.lock().unwrap() }),
     ))
+}
+
+async fn restart(State(f): State<Fake>, h: HeaderMap) -> Result<(StatusCode, Json<Value>), StatusCode> {
+    if !authorized(&h) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let old = format!("boot-{}", f.boot.lock().unwrap());
+    *f.boot.lock().unwrap() += 1;
+    *f.running.lock().unwrap() = None;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "boot_id": old }))))
 }
 
 async fn config(State(f): State<Fake>, h: HeaderMap, Json(body): Json<Value>) -> Result<Json<Value>, StatusCode> {
@@ -62,6 +74,7 @@ async fn rig() -> (T, Fake, Arc<EgressLink>) {
         Router::new()
             .route("/api/egress-proxy/v1/status", get(status))
             .route("/api/egress-proxy/v1/config", put(config))
+            .route("/api/egress-proxy/v1/restart", axum::routing::post(restart))
             .with_state(fake.clone()),
     )
     .await;
@@ -330,4 +343,92 @@ async fn searxng_and_fetch_are_pushed_only_to_a_proxy_that_reports_them_and_none
     assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
     let push = fake.pushes.lock().unwrap().last().cloned().unwrap();
     assert!(push["sources"].get("searxng").is_none() && push["sources"].get("fetch").is_some());
+}
+
+#[tokio::test]
+async fn the_status_tags_each_entry_with_where_it_comes_from_and_says_what_the_proxy_runs() {
+    let (t, fake, link) = rig().await;
+    fake.listeners.lock().unwrap().extend(["searxng", "fetch"]);
+    add_provider(&t, "https://api.provider.example/v1").await;
+    t.call(M::PUT, "/api/admin/v1/egress/approvals", json!({ "source": "cpa", "host": "lan-box", "port": 8080 })).await;
+    link.sync(&t.admin).await;
+    link.status_now().await; // the proxy's status after the push
+    let (st, b) = t.call(M::GET, "/api/admin/v1/egress/status", json!(null)).await;
+    assert_eq!((st, b["configured"].clone(), b["open_tunnels"].clone()), (200, json!(true), json!(0)), "{b}");
+    assert!(b["version"].is_u64());
+    let origins = |src: &str| -> Vec<(String, String)> {
+        b["sources"][src]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["host"].as_str().unwrap().to_string(), e["origin"].as_str().unwrap().to_string()))
+            .collect()
+    };
+    assert_eq!(origins("model-gateway"), [("api.provider.example".to_string(), "provider".to_string())]);
+    assert!(origins("alerter").iter().all(|(_, o)| o == "alerts"));
+    assert!(origins("cpa").contains(&("lan-box".into(), "approval".into())));
+    assert!(origins("cpa").iter().filter(|(h, _)| h != "lan-box").all(|(_, o)| o == "cpa_hosts"));
+    assert!(origins("searxng").iter().all(|(_, o)| o == "searxng_hosts") && !origins("searxng").is_empty());
+    assert!(origins("fetch").iter().all(|(_, o)| o == "fetch_rule"));
+    // Read only: asking changes nothing the proxy runs.
+    assert_eq!(fake.pushes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn restarting_the_egress_proxy_is_audited_and_gives_the_new_process_its_allowlists_again() {
+    let (t, fake, link) = rig().await;
+    link.sync(&t.admin).await;
+    let (_, list) = t.call(M::GET, "/api/admin/v1/services", json!(null)).await;
+    let card = list["services"].as_array().unwrap().iter().find(|s| s["name"] == "egress-proxy").unwrap().clone();
+    assert_eq!(card["state"], "running", "{card}");
+    let before = fake.pushes.lock().unwrap().len();
+    let (st, body) = t.call(M::POST, "/api/admin/v1/services/egress-proxy/restart", json!(null)).await;
+    assert_eq!(st, 200, "{body}");
+    assert!(body["status"].as_str().unwrap().contains("with its allowlists"), "{body}");
+    assert_eq!((*fake.boot.lock().unwrap(), fake.pushes.lock().unwrap().len()), (1, before + 1));
+    let rows = t.rig.rows("SELECT outcome FROM admin_actions WHERE action = 'restart'");
+    assert!(rows.len() == 2 && rows[0][0] == "requested" && rows[1][0] == "done", "{rows:?}");
+    // An API key may not restart (session only).
+    let (_, made) = t.call(M::POST, "/api/admin/v1/keys", json!({ "name": "ci" })).await;
+    let r = t
+        .http
+        .post(format!("{}/api/admin/v1/services/egress-proxy/restart", t.adm))
+        .header("x-askbar-admin", "1")
+        .bearer_auth(made["key"].as_str().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn a_restart_of_the_egress_proxy_is_refused_when_the_record_cannot_be_appended() {
+    let db = askbar_admin::AdminDb::open_in_memory().unwrap();
+    askbar_admin::web::init_password(&db, common::PW).unwrap();
+    let admin = askbar_admin::AdminState::new(db);
+    let fake = Fake::default();
+    let proxy = serve(Router::new().route("/api/egress-proxy/v1/restart", axum::routing::post(restart)).with_state(fake.clone())).await;
+    admin.egress.set(EgressLink::new(&proxy, TOKEN.into())).ok().unwrap();
+    let auditor =
+        serve(Router::new().route("/api/audit/v1/admin-actions", axum::routing::post(|| async { StatusCode::SERVICE_UNAVAILABLE }))).await;
+    admin.actions.set(askbar_admin::actions::ActionLog::new(&auditor, "t".into())).ok().unwrap();
+    let adm = serve(askbar_admin::router(admin.clone())).await;
+    let http = reqwest::Client::new();
+    let r = http
+        .post(format!("{adm}/api/admin/v1/session"))
+        .header("x-askbar-admin", "1")
+        .json(&json!({ "password": common::PW }))
+        .send()
+        .await
+        .unwrap();
+    let cookie = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
+    let r = http
+        .post(format!("{adm}/api/admin/v1/services/egress-proxy/restart"))
+        .header("x-askbar-admin", "1")
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 503);
+    assert_eq!(*fake.boot.lock().unwrap(), 0, "the proxy was not asked");
 }
