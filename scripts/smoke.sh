@@ -121,7 +121,7 @@ if [ -z "$URL" ]; then
     ASKBAR_SERVER_API_ADDR="127.0.0.1:$SERVER_API_PORT" ASKBAR_SERVER_TOKEN_HASH_FILE="$WORK/credentials/server-token/accept/admin-server.sha256" \
     ASKBAR_DATA_DIR="$WORK/data" ASKBAR_SERVER_TOKEN_DIR="$WORK/credentials/server-token" \
     ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_SERVER_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
-    ASKBAR_PUBLIC_URL="$URL" "$BIN" >"$WORK/server.log" 2>&1 & PIDS+=($!)
+    ASKBAR_MCP_GATEWAY_URL="http://127.0.0.1:$MCP_SERVER_PORT" ASKBAR_PUBLIC_URL="$URL" "$BIN" >"$WORK/server.log" 2>&1 & PIDS+=($!)
 fi
 URL="${URL%/}"
 
@@ -364,6 +364,82 @@ if [ $LOCAL = 1 ]; then
   if [ "$(json "$WORK/mcp-status.json" "d['config_version'] is not None")" = "True" ]; then pass "the admin pushed its config and the MCP gateway's front is configured"; else fail "the MCP gateway's front is configured" "$(cat "$WORK/mcp-status.json" 2>/dev/null)"; fi
 fi
 
+# 10e2. Quick search end to end (local, W5.5), before 10f swaps the approval key: the model-gateway signs each call with the key the admin
+# pushed, and the front checks it with the public half. The roles are pinned to the mock's model; the stand-in searxng gives three results.
+# Fetch cannot succeed natively (the front takes only dotted DNS names on ports 80 and 443, and a fixture host does not resolve): the two plain
+# sources are listed unread and the reply says so (tests/quick_search.rs covers the injection cases, tests/fetch.rs the fetch itself).
+if [ $LOCAL = 1 ] && [ -n "${TOKEN:-}" ]; then
+  MCP_TOK=$(cat "$WORK/credentials/server-token/call/server-mcp-gateway.token" 2>/dev/null)
+  qs_tools() { curl -fsS -H "Authorization: Bearer $MCP_TOK" "http://127.0.0.1:$MCP_SERVER_PORT/api/mcp-gateway/v1/tools?user=$1" 2>/dev/null; }
+  qs_chat() { # token text out: a chat with web_search on, as a client sends it
+    curl -sS -N --max-time 60 -X POST -H "authorization: Bearer $1" -H "x-askbar-client-version: $CLIENT_VERSION" -H 'content-type: application/json' \
+      -d "{\"model\":\"$MODEL\",\"text\":\"$2\",\"web_search\":true}" "$SP/chat" >"$3" 2>/dev/null
+  }
+  qs_trace() { curl -fsS -H "Authorization: Bearer $(cat "$WORK/credentials/admin-token/call/admin-auditor-read.token")" "http://127.0.0.1:$AUDIT_PORT/api/audit/v1/traces/$1" 2>/dev/null; }
+  QS_Q="smoke w55 question about stripes"
+  for r in search.query search.writer; do admin PUT "/api/admin/v1/roles/$r" "{\"provider_id\":\"$PROVIDER_ID\",\"model\":\"mock-model\"}" >/dev/null 2>&1; done
+  admin PUT "/api/admin/v1/mcp/permissions/$USER_ID" '{"allowed":["search","fetch"],"denied":[]}' >/dev/null 2>&1
+  for _ in $(seq 100); do qs_tools "$USER_ID" | grep -q '"search"' && break; sleep 0.2; done
+  qs_chat "$TOKEN" "$QS_Q" "$WORK/qs.sse"
+  read -r QS_OK QS_CONV QS_GEN < <(py 'import json,sys
+ev=[]; n=None
+for l in open(sys.argv[1], encoding="utf-8"):
+    l=l.rstrip("\n")
+    if l.startswith("event:"): n=l[6:].strip()
+    elif l.startswith("data:") and n: ev.append((n,json.loads(l[5:].strip()))); n=None
+names=[x for x,_ in ev if x!="provider"]
+s=next((d for x,d in ev if x=="search"),{})
+text="".join(d.get("text","") for x,d in ev if x=="delta")
+meta=next(d for x,d in ev if x=="meta")
+ok=(names[:2]==["meta","search"] and set(names[2:-1])=={"delta"} and names[-1]=="done"
+    and s["queries"]==["smoke-w55-query-alpha","smoke-w55-query-beta"] and [x["url"] for x in s["sources"]]==["https://pages.example/a","https://pages.example/b","https://pages.example/c?id=1"]
+    and not any(x["fetched"] for x in s["sources"]) and "[1]" in text and "sources seen 3" in text
+    and text.count("could not be read")==2 and "Source [3]" not in text)
+print("ok" if ok else "bad", meta["conversation_id"], meta["generation_id"])' "$WORK/qs.sse" 2>/dev/null)
+  if [ "${QS_OK:-}" = "ok" ]; then pass "quick search: events meta, search (2 queries, 3 sources, none read), deltas, done; the reply cites [1] and says which sources could not be read"; else fail "quick search reply and events" "$(head -c 600 "$WORK/qs.sse")"; fi
+  if [ "$(curl -fsS "http://127.0.0.1:$SEARX_PORT/_hits")" = "2" ]; then pass "the stand-in searxng saw exactly 2 searches"; else fail "the stand-in searxng saw exactly 2 searches" "$(curl -sS "http://127.0.0.1:$SEARX_PORT/_hits")"; fi
+  api "$SP/conversations/${QS_CONV:-x}" >"$WORK/qs-conv.json"
+  if [ "$(json "$WORK/qs-conv.json" 'len(d["messages"])')" = "2" ] && [ "$(json "$WORK/qs-conv.json" 'd["messages"][0]["content"]')" = "$QS_Q" ] \
+     && [ "$(json "$WORK/qs-conv.json" '"untrusted_web_content" in str(d) or "pages.example" in str(d)')" = "False" ]; then
+    pass "quick search: history holds the question and the answer, no sources text"
+  else fail "quick search: history holds the question and the answer" "$(head -c 300 "$WORK/qs-conv.json")"; fi
+  sleep 1; qs_trace "${QS_GEN:-x}" >"$WORK/qs-trace.json"
+  QS_SPANS=$(json "$WORK/qs-trace.json" "sorted((s['kind'],s['name'],s['status'],(s.get('attrs') or {}).get('role')) for s in d if s['kind'] in ('tool','gate','turn'))")
+  if [ "$(json "$WORK/qs-trace.json" "[(s['kind'],s['name'],s['status']) for s in d].count(('tool','search','ok'))")" = "2" ] \
+     && [ "$(json "$WORK/qs-trace.json" "sum(1 for s in d if s['kind']=='gate' and s['name']=='quick_search_approval')")" -ge 4 ] 2>/dev/null \
+     && [ "$(json "$WORK/qs-trace.json" "sorted((s.get('attrs') or {}).get('role') for s in d if s['kind']=='turn')")" = "['search.query', 'search.writer']" ]; then
+    pass "the trace holds 2 search tool spans, the gateway's approval spans and a turn for each of search.query and search.writer"
+  else fail "the quick search trace" "$QS_SPANS"; fi
+  # A second user without the `search` permission: a plain reply with the fixed note, a refusal span, no search made.
+  if admin POST /api/admin/v1/users '{"name":"smoke no-search user"}' >"$WORK/user2.json" \
+     && admin POST "/api/admin/v1/users/$(json "$WORK/user2.json" 'd["id"]')/pairing-keys" '{"name":"smoke no-search client"}' >"$WORK/pair2.json"; then
+    CODE3=$(py 'import base64,json,sys
+b=sys.argv[1][len("askbar-pair:"):]
+print(json.loads(base64.urlsafe_b64decode(b+"="*(-len(b)%4)))["code"])' "$(json "$WORK/pair2.json" 'd["pairing"]')")
+    TOKEN3=$(curl -fsS -X POST -H "x-askbar-client-version: $CLIENT_VERSION" -H 'content-type: application/json' -d "{\"code\":\"$CODE3\"}" "$URL/api/client/v1/pairings" | py 'import json,sys; print(json.load(sys.stdin)["token"])')
+    curl -fsS -H "authorization: Bearer $TOKEN3" -H "x-askbar-client-version: $CLIENT_VERSION" "$URL/api/client/v1/spaces" >"$WORK/spaces3.json"
+    SP3="$URL/api/client/v1/spaces/$(json "$WORK/spaces3.json" 'next(s["id"] for s in d if s["kind"]=="personal")')"
+    SP_SAVE="$SP"; SP="$SP3"
+    qs_chat "$TOKEN3" "smoke w55 no permission question" "$WORK/qs2.sse"
+    SP="$SP_SAVE"
+    GEN3=$(py 'import json,sys
+for l in open(sys.argv[1], encoding="utf-8"):
+    if l.startswith("data:") and "generation_id" in l: print(json.loads(l[5:])["generation_id"])' "$WORK/qs2.sse")
+    sleep 1; qs_trace "$GEN3" >"$WORK/qs2-trace.json"
+    if grep -q 'event: search' "$WORK/qs2.sse" || ! grep -q 'Web search is not turned on for you' "$WORK/qs2.sse" || ! grep -q 'event: done' "$WORK/qs2.sse"; then
+      fail "a user without the search permission gets a plain reply with the note" "$(head -c 300 "$WORK/qs2.sse")"
+    elif [ "$(json "$WORK/qs2-trace.json" "[(s['kind'],s['name']) for s in d].count(('gate','quick_search_refused'))")" = "1" ] \
+         && [ "$(curl -fsS "http://127.0.0.1:$SEARX_PORT/_hits")" = "2" ]; then
+      pass "a user without the search permission gets a plain reply with the note, a refusal span and no search"
+    else fail "a user without the search permission: refusal span, no search" "$(head -c 300 "$WORK/qs2-trace.json")"; fi
+  else fail "make a user without the search permission"; fi
+  # No query text in any span's attributes or any service log.
+  LEAK=""
+  grep -q -e 'smoke-w55-query' -e "$QS_Q" "$WORK/qs-trace.json" "$WORK/qs2-trace.json" 2>/dev/null && LEAK="$LEAK spans"
+  for f in server gateway mcp-gateway auditor; do grep -q -e 'smoke-w55-query' -e 'smoke w55' -e 'sources seen' "$WORK/$f.log" 2>/dev/null && LEAK="$LEAK $f.log"; done
+  if [ -z "$LEAK" ]; then pass "no query, question or answer text is in any span attribute or in the server, gateway, front or auditor log"; else fail "quick search text in spans or logs" "found in:$LEAK"; fi
+fi
+
 # 10f. MCP search (local, P5A.23): a call with no signature is refused, a signed one returns untrusted results, its tool span is in the
 # audit store, and no query or result is in the front's log. The smoke has no private approval key (only model-gateway holds it, in
 # memory), so it makes its own and writes the PUBLIC half over the throwaway admin.db's, which the admin then pushes to the front.
@@ -391,11 +467,11 @@ del a["tool"]; a["approval"]=ap; print(json.dumps(a))' "$act" "$ap" "$3" \
   done
   mcp_call "$MG_TASK" one-time-unsigned 1 >"$WORK/mcp-unsigned.json" 2>/dev/null
   if [ "$(json "$WORK/mcp-unsigned.json" "d['error']")" = "approval_unsigned" ]; then pass "an MCP tool call with no signature is refused (approval_unsigned)"; else fail "an unsigned MCP call is refused" "$(head -c 200 "$WORK/mcp-unsigned.json")"; fi
-  if [ "$(json "$WORK/mcp-search.json" "d['untrusted'] and len(d['result']['results'])")" = "2" ]; then pass "a signed MCP search returns two results, marked untrusted"; else fail "a signed MCP search returns results" "$(head -c 200 "$WORK/mcp-search.json")"; fi
+  if [ "$(json "$WORK/mcp-search.json" "d['untrusted'] and len(d['result']['results'])")" = "3" ]; then pass "a signed MCP search returns three results, marked untrusted"; else fail "a signed MCP search returns results" "$(head -c 200 "$WORK/mcp-search.json")"; fi
   AUD_TOKEN=$(cat "$WORK/credentials/admin-token/call/admin-auditor-read.token" 2>/dev/null)
   curl -fsS -H "Authorization: Bearer $AUD_TOKEN" "http://127.0.0.1:$AUDIT_PORT/api/audit/v1/traces/$MG_TASK" >"$WORK/mcp-trace.json" 2>/dev/null
   if [ "$(json "$WORK/mcp-trace.json" "[(s['kind'],s['name'],s['status']) for s in d].count(('tool','search','ok'))")" = "1" ]; then pass "the audit store holds the search's tool span"; else fail "the audit store holds the search's tool span" "$(head -c 300 "$WORK/mcp-trace.json")"; fi
-  if grep -q -e 'smoke-query-zebra-91' -e 'page.example' -e 'Snippet' "$WORK/mcp-gateway.log" 2>/dev/null; then fail "no query or result in the front's log"; else pass "no query or result is in the front's log"; fi
+  if grep -q -e 'smoke-query-zebra-91' -e 'pages.example' -e 'Snippet' "$WORK/mcp-gateway.log" 2>/dev/null; then fail "no query or result in the front's log"; else pass "no query or result is in the front's log"; fi
 fi
 
 # 11. What only a person can check.
