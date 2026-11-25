@@ -159,7 +159,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
 - [x] **P5A.32** `docs(adr): amend 0022: the MCP gateway API prefix` · haiku · after P5A.6. Files: `0022-api-path-conventions.md`. A table row: MCP gateway, `/api/mcp-gateway/v1`, `mcp-gateway`, `server` and `admin`, internal.
 - [x] **P5A.33** `docs(adr): amend 0049: the MCP gateway links` · haiku · after P5A.6a. Files: `0049-bootstrap.md`. A built-so line: links `server-mcp-gateway` and `admin-mcp-gateway`, volume `mcp-gateway-token`, uid 10007.
 - [x] **P5A.34** `docs(adr): amend 0010: the mcp-gateway audit link` · haiku · after P5A.9a. Files: `0010-auditor.md`.
-- [ ] **P5A.35** `docs(adr): amend 0051: the mcp-gateway may start tool spans` · haiku · after P5A.9a. Files: `0051-auditor.md` (the `may_start` arm).
+- [x] **P5A.35** `docs(adr): amend 0051: the mcp-gateway may start tool spans` · haiku · after P5A.9a. Files: `0051-auditor.md` (the `may_start` arm).
 
 Phase end: full checks, PR. The orchestrator opens it for the owner. G14 stays open until the host list is approved; G16 opens again for every further server.
 
