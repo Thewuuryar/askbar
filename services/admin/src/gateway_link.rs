@@ -112,6 +112,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         approval_key: crate::approval_key::signing_key(conn, secrets),
         approval_ttl_secs: crate::constants::APPROVAL_TTL_SECS,
         role_pins: crate::roles::pushed(conn)?,
+        quick_search: crate::constants::QUICK_SEARCH_LIMITS,
     };
     config.version = version_of(&config);
     Ok(config)

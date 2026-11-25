@@ -49,6 +49,7 @@ impl T {
             .post(format!("http://{}{}", self.addr, self.sp("/chat")))
             .bearer_auth(&self.token)
             .json(&ChatRequest {
+                web_search: false,
                 conversation_id: conv.map(String::from),
                 // The tests' providers each approve the model "m"; a test may also pass a model id of its own.
                 model: Some(if provider.contains('/') { provider.to_string() } else { format!("{provider}/m") }),
@@ -326,7 +327,13 @@ async fn bad_requests_are_plain_http_errors() {
     assert!(t.messages().is_empty());
     let r = http
         .post(format!("http://{}{}", t.addr, t.sp("/chat")))
-        .json(&ChatRequest { conversation_id: None, model: Some("p1/m".into()), text: "hi".into(), client_request_id: None })
+        .json(&ChatRequest {
+            web_search: false,
+            conversation_id: None,
+            model: Some("p1/m".into()),
+            text: "hi".into(),
+            client_request_id: None,
+        })
         .send()
         .await
         .unwrap();
@@ -388,6 +395,7 @@ async fn another_user_cannot_read_or_continue_my_conversation() {
             .post(format!("http://{}{path}", t.addr))
             .bearer_auth(&token_b)
             .json(&ChatRequest {
+                web_search: false,
                 conversation_id: Some(conversation_id.clone()),
                 model: Some("p1/m".into()),
                 text: "intrusion".into(),
@@ -744,6 +752,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
                 .post(format!("http://{addr}{path}"))
                 .bearer_auth(token)
                 .json(&ChatRequest {
+                    web_search: false,
                     conversation_id: None,
                     model: Some("p1/m".into()),
                     text: text.into(),
@@ -773,6 +782,7 @@ async fn two_posts_with_one_client_request_id_make_one_generation_and_one_user_m
         .post(format!("http://{}{}", t.addr, t.sp("/chat")))
         .bearer_auth(&other)
         .json(&ChatRequest {
+            web_search: false,
             conversation_id: None,
             model: Some("p1/m".into()),
             text: "Hello there".into(),
@@ -809,6 +819,7 @@ async fn a_repeat_while_the_reply_runs_attaches_to_it() {
             .post(format!("http://{}{}", t.addr, t.sp("/chat")))
             .bearer_auth(&t.token)
             .json(&ChatRequest {
+                web_search: false,
                 conversation_id: None,
                 model: Some("p1/m".into()),
                 text: "please be slow".into(),

@@ -191,6 +191,7 @@ impl Rig {
             approval_key: None,
             approval_ttl_secs: askbar_proto::DEFAULT_APPROVAL_TTL_SECS,
             role_pins: Default::default(),
+            quick_search: Default::default(),
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

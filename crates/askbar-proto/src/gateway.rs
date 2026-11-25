@@ -127,6 +127,9 @@ pub struct GatewayConfig {
     /// while empty, so a configuration without pins keeps its version.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub role_pins: BTreeMap<Role, String>,
+    /// The quick-search limits (plan W5.1), each within its bounds. Absent before the admin pushes them: the defaults.
+    #[serde(default)]
+    pub quick_search: crate::quick_search::QuickSearchLimits,
 }
 
 fn default_approval_ttl() -> u32 {
@@ -332,6 +335,7 @@ mod tests {
             approval_key: Some(ApprovalSigningKey { version: 1, pkcs8: "marker-approval-key".into() }),
             approval_ttl_secs: 60,
             role_pins: BTreeMap::new(),
+            quick_search: Default::default(),
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");

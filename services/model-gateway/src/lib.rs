@@ -362,6 +362,9 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
     if !(askbar_proto::MIN_APPROVAL_TTL_SECS..=askbar_proto::MAX_APPROVAL_TTL_SECS).contains(&c.approval_ttl_secs) {
         return Err("approval_ttl_secs is out of range.".into());
     }
+    if c.quick_search.validate().is_err() {
+        return Err("quick_search is out of range.".into());
+    }
     if c.paused_users.len() > 10_000 || c.paused_users.iter().any(|u| !valid_id(u)) {
         return Err("A paused user is an id of 1 to 64 letters, digits, - or _ (at most 10,000 of them).".into());
     }

@@ -141,6 +141,7 @@ fn snapshot() -> Snapshot {
         kill_switch: false,
         kill_switch_aborts_running: true,
         audit_retention_days: 30,
+        quick_search: Default::default(),
         generation_timeout_secs: 300,
         history_turns: 0,
         audit_public_key: None,
@@ -773,4 +774,15 @@ async fn deleting_a_user_removes_their_space_file_clients_and_row_and_leaves_eve
     assert_eq!(list(kept_token, kept_space).await, 200);
     assert_eq!(http.delete(path(&gone)).bearer_auth(TOKEN).send().await.unwrap().status(), 404);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn quick_search_limits_out_of_bounds_are_rejected_and_change_nothing() {
+    let s = start_with_state().await;
+    s.put(&serde_json::to_value(snapshot()).unwrap(), Some(TOKEN)).await;
+    let mut bad = snapshot();
+    bad.quick_search.max_pages = 0;
+    bad.kill_switch = true;
+    let (st, _) = s.put(&serde_json::to_value(bad).unwrap(), Some(TOKEN)).await;
+    assert_eq!(st, 400, "a page limit of zero is refused");
 }

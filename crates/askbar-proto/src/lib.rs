@@ -18,6 +18,7 @@ pub mod links;
 pub mod mcp;
 pub mod paths;
 pub mod problem;
+pub mod quick_search;
 pub mod task;
 pub use problem::{ErrorCode, Problem};
 
@@ -237,6 +238,9 @@ pub struct Snapshot {
     pub kill_switch_aborts_running: bool,
     /// How long audit records are kept. At least 7.
     pub audit_retention_days: u32,
+    /// The quick-search limits (plan W5.1), each within its bounds. Absent in an older snapshot: the defaults.
+    #[serde(default)]
+    pub quick_search: quick_search::QuickSearchLimits,
     /// Seconds a generation may run before it is stopped (30 to 3600). Read when it starts.
     #[serde(default = "default_generation_timeout_secs")]
     pub generation_timeout_secs: u32,
@@ -460,6 +464,19 @@ pub struct ChatRequest {
     /// generation it started instead of starting another, so a retry never doubles a message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_request_id: Option<String>,
+    /// Search the web for this message (quick search, plan W5). Left out of the JSON when off, so a request
+    /// without it is unchanged; a server that has not turned quick search on for this user ignores it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub web_search: bool,
+}
+
+/// A page a quick-search reply cites. `fetched` is false for a result the reply did not read (its URL carries query
+/// data, which quick search never fetches), so the client shows it as a link only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchSource {
+    pub title: String,
+    pub url: String,
+    pub fetched: bool,
 }
 
 /// Server-Sent Event payloads for `POST /api/client/v1/spaces/{space_id}/chat`; the SSE event name is the `event` tag.
@@ -490,6 +507,14 @@ pub enum ChatEvent {
         text: String,
     },
     Done,
+    /// Quick search (plan W5): the queries the reply searched with and the sources it cites, sent once, before the
+    /// answer's first delta. An older client does not know it and ignores it.
+    Search {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        queries: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sources: Vec<SearchSource>,
+    },
     /// `code` is the stable reason (`timed_out`, `interrupted`, `kill_switch`, `provider_error`, `internal`); clients
     /// branch on it and show `message`. Absent from servers that predate it.
     Error {
@@ -895,5 +920,34 @@ mod tests {
         let r: ChatRequest = serde_json::from_str(r#"{"text":"t"}"#).unwrap();
         assert_eq!(r.conversation_id, None);
         assert_eq!(r.client_request_id, None);
+    }
+}
+
+#[cfg(test)]
+mod quick_search_wire {
+    use super::*;
+
+    #[test]
+    fn a_chat_request_without_web_search_is_unchanged_and_the_flag_round_trips() {
+        let old: ChatRequest = serde_json::from_str(r#"{"text":"t"}"#).unwrap();
+        assert!(!old.web_search);
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"text":"t"}"#, "off is left out");
+        let on = ChatRequest { web_search: true, ..old };
+        let back: ChatRequest = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+    }
+
+    #[test]
+    fn the_search_event_is_additive() {
+        let ev = ChatEvent::Search {
+            queries: vec!["q".into()],
+            sources: vec![SearchSource { title: "t".into(), url: "https://e.example/".into(), fetched: true }],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(json, r#"{"event":"search","queries":["q"],"sources":[{"title":"t","url":"https://e.example/","fetched":true}]}"#);
+        assert_eq!(serde_json::from_str::<ChatEvent>(&json).unwrap(), ev);
+        assert_eq!(serde_json::to_string(&ChatEvent::Done).unwrap(), r#"{"event":"done"}"#, "done is unchanged");
+        let bare: ChatEvent = serde_json::from_str(r#"{"event":"search"}"#).unwrap();
+        assert_eq!(bare, ChatEvent::Search { queries: vec![], sources: vec![] });
     }
 }
