@@ -75,11 +75,12 @@ pub const PAIR_CODE_TTL_SECS: i64 = 10 * 60;
 pub const SERVICES: [&str; 6] = ["server", "model-gateway", "alerter", "admin", "caddy", "cpa"];
 /// What `cpa` may reach through the egress proxy (ADR 0056): the hosts behind the two subscription logins, nothing else.
 pub const CPA_EGRESS_HOSTS: [&str; 5] = ["api.anthropic.com", "platform.claude.com", "auth.openai.com", "chatgpt.com", "api.openai.com"];
-/// PROVISIONAL, unapproved (G14) and unmeasured: what `searxng` may reach through the egress proxy's `searxng` source, read from
-/// the source of its four engines (duckduckgo, brave, yahoo, mwmbl) at the pinned version, not from a run. The owner replaces
-/// it with the output of `scripts/searxng-engine-trial.sh` and approves it. Used by P5A.19, not before.
-pub const SEARXNG_EGRESS_HOSTS: [&str; 6] =
-    ["duckduckgo.com", "html.duckduckgo.com", "lite.duckduckgo.com", "search.brave.com", "search.yahoo.com", "api.mwmbl.org"];
+/// What `searxng` may reach through the egress proxy's `searxng` source: measured by the owner's run of
+/// `scripts/searxng-engine-trial.sh` on 2026-11-25 (query "askbar", one denied host per engine), still waiting for the owner's
+/// approval (G14). Limit: an engine that stops at its first denied host hides later ones, so rerun the trial against this
+/// pushed list and add any host that makes an engine return 0 results. `duckduckgo.com` and `lite.duckduckgo.com` from the
+/// earlier provisional list were not needed and are dropped. Used by P5A.19, not before.
+pub const SEARXNG_EGRESS_HOSTS: [&str; 4] = ["api.mwmbl.org", "html.duckduckgo.com", "search.brave.com", "search.yahoo.com"];
 /// The limits the admin pushes to the egress proxy; `askbar-proto` bounds them.
 pub const EGRESS_LIMITS: askbar_proto::egress::Limits = askbar_proto::egress::Limits {
     head_bytes: 8 * 1024,

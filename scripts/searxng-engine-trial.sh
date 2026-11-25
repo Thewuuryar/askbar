@@ -7,8 +7,8 @@
 # services/admin/src/constants.rs. The owner approves the list (G14). Per engine it also prints the result count and the
 # `unresponsive_engines` reasons from SearXNG, so a failure that is not the proxy (CAPTCHA, HTTP error, timeout) shows next to the denials.
 #
-# Limit: an engine that stops at its first denied host hides the hosts it would have gone on to (a redirect, an API call). Treat
-# the output as the first layer; a later run against the pushed list shows what is still missing.
+# Limit: an engine that stops at its first denied host hides the hosts it would have gone on to (a redirect, an API call). A second
+# run against the pushed list is the check that no later host is hidden; add any host that makes an engine return 0 results.
 #
 # Usage (needs Docker; reads nothing from the engines but what they answer, and sends the query "askbar" to each):
 #   1. In services/admin/src/constants.rs set SEARXNG_EGRESS_HOSTS to `pub const SEARXNG_EGRESS_HOSTS: [&str; 0] = [];` for the
@@ -85,4 +85,4 @@ if [ -z "$hosts" ]; then
   [ "$seen" = 1 ] && exit 0 || exit 1
 fi
 echo; echo "Paste into services/admin/src/constants.rs (then the owner approves it, G14):"
-printf 'pub const SEARXNG_EGRESS_HOSTS: [&str; %s] = [%s];\n' "$(printf '%s\n' "$hosts" | wc -l)" "$(printf '%s\n' "$hosts" | sed 's/.*/"&"/' | paste -sd, - | sed 's/,/, /g')"
+printf 'pub const SEARXNG_EGRESS_HOSTS: [&str; %s] = [%s];\n' "$(printf '%s\n' "$hosts" | wc -l | tr -d ' ')" "$(printf '%s\n' "$hosts" | sed 's/.*/"&"/' | paste -sd, - | sed 's/,/, /g')"
