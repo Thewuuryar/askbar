@@ -31,6 +31,14 @@ pub enum ErrorCode {
     QuickSearchHourlyLimit,
     /// The administrator turned quick search off for everyone. 503.
     QuickSearchDisabled,
+    /// A research task has used its token cap (plan P5B.1). 402.
+    TaskTokenCap,
+    /// A research task has made all its tool calls. 429.
+    TaskToolCalls,
+    /// The user already has a running research task. 409.
+    ResearchBusy,
+    /// The administrator turned research off for everyone. 503.
+    ResearchDisabled,
     AuditKeyMissing,
     /// No backup key is set (ADR 0013): an export cannot be encrypted, so none is made. 503.
     BackupKeyMissing,
@@ -70,7 +78,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 45] = [
+    pub const ALL: [ErrorCode; 49] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -83,6 +91,10 @@ impl ErrorCode {
         ErrorCode::QuickSearchFetchCount,
         ErrorCode::QuickSearchHourlyLimit,
         ErrorCode::QuickSearchDisabled,
+        ErrorCode::TaskTokenCap,
+        ErrorCode::TaskToolCalls,
+        ErrorCode::ResearchBusy,
+        ErrorCode::ResearchDisabled,
         ErrorCode::AuditKeyMissing,
         ErrorCode::BackupKeyMissing,
         ErrorCode::BackupNewerRelease,
@@ -133,6 +145,10 @@ impl ErrorCode {
             ErrorCode::QuickSearchFetchCount => "quick_search_fetch_count",
             ErrorCode::QuickSearchHourlyLimit => "quick_search_hourly_limit",
             ErrorCode::QuickSearchDisabled => "quick_search_disabled",
+            ErrorCode::TaskTokenCap => "task_token_cap",
+            ErrorCode::TaskToolCalls => "task_tool_calls",
+            ErrorCode::ResearchBusy => "research_busy",
+            ErrorCode::ResearchDisabled => "research_disabled",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
             ErrorCode::BackupKeyMissing => "backup_key_missing",
             ErrorCode::BackupNewerRelease => "backup_newer_release",
@@ -172,16 +188,22 @@ impl ErrorCode {
     /// The HTTP status that goes with the code.
     pub fn status(self) -> u16 {
         match self {
-            ErrorCode::QueueFull | ErrorCode::ApiKeyExists | ErrorCode::Conflict | ErrorCode::BackupNewerRelease | ErrorCode::NotEmpty => {
-                409
-            }
+            ErrorCode::QueueFull
+            | ErrorCode::ApiKeyExists
+            | ErrorCode::Conflict
+            | ErrorCode::BackupNewerRelease
+            | ErrorCode::NotEmpty
+            | ErrorCode::ResearchBusy => 409,
+            ErrorCode::TaskTokenCap => 402,
             ErrorCode::BudgetExceeded
             | ErrorCode::TooManyAttempts
+            | ErrorCode::TaskToolCalls
             | ErrorCode::QuickSearchQueryCount
             | ErrorCode::QuickSearchFetchCount
             | ErrorCode::QuickSearchHourlyLimit => 429,
             ErrorCode::KillSwitch
             | ErrorCode::QuickSearchDisabled
+            | ErrorCode::ResearchDisabled
             | ErrorCode::AuditKeyMissing
             | ErrorCode::BackupKeyMissing
             | ErrorCode::AuditBacklog
@@ -231,6 +253,10 @@ impl ErrorCode {
             ErrorCode::QuickSearchFetchCount => "This reply has fetched all its pages",
             ErrorCode::QuickSearchHourlyLimit => "This user has used all searches for this hour",
             ErrorCode::QuickSearchDisabled => "Quick search is turned off",
+            ErrorCode::TaskTokenCap => "This task has used its token cap",
+            ErrorCode::TaskToolCalls => "This task has used all its tool calls",
+            ErrorCode::ResearchBusy => "A research task is already running",
+            ErrorCode::ResearchDisabled => "Research is turned off",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
             ErrorCode::BackupKeyMissing => "The backup key has not been set up",
             ErrorCode::BackupNewerRelease => "The backup is from a newer release",
@@ -404,6 +430,10 @@ mod tests {
                 | ErrorCode::QuickSearchFetchCount
                 | ErrorCode::QuickSearchHourlyLimit
                 | ErrorCode::QuickSearchDisabled
+                | ErrorCode::TaskTokenCap
+                | ErrorCode::TaskToolCalls
+                | ErrorCode::ResearchBusy
+                | ErrorCode::ResearchDisabled
                 | ErrorCode::AuditKeyMissing
                 | ErrorCode::BackupKeyMissing
                 | ErrorCode::BackupNewerRelease
@@ -439,6 +469,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 45);
+        assert_eq!(ErrorCode::ALL.len(), 49);
     }
 }

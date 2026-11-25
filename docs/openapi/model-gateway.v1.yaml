@@ -413,6 +413,10 @@ components:
           - quick_search_fetch_count
           - quick_search_hourly_limit
           - quick_search_disabled
+          - task_token_cap
+          - task_tool_calls
+          - research_busy
+          - research_disabled
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
@@ -604,6 +608,21 @@ components:
         quick_search_enabled:
           type: boolean
           description: Whether quick search is on for everyone (default true when left out). While off, `POST /approvals/quick-search` answers `503 quick_search_disabled`.
+        task_limits:
+          type: object
+          description: >-
+            The research task limits, each within its bounds (askbar-proto, `research`). The defaults when left out. A value outside
+            its bounds is refused (400).
+          properties:
+            tool_calls: {type: integer, minimum: 1, maximum: 32, description: Tool calls one task may make in all. Default 8.}
+            token_cap: {type: integer, minimum: 20000, maximum: 2000000, description: Tokens one task may use in all. Default 300000.}
+            researchers_max: {type: integer, minimum: 2, maximum: 4, description: Researchers that run in parallel. Default 4.}
+            wait_after_two_secs: {type: integer, minimum: 1, maximum: 60, description: Seconds to wait for the rest after two summaries. Default 8.}
+            stage_secs: {type: integer, minimum: 10, maximum: 600, description: Seconds the research stage may take. Default 90.}
+            summary_tokens: {type: integer, minimum: 100, maximum: 4000, description: Tokens one researcher's summary may have. Default 800.}
+        research_enabled:
+          type: boolean
+          description: Whether research is on for everyone. On when absent.
         paused_users:
           type: array
           description: Users whose replies are refused (`403 user_paused`) and whose running replies are stopped (error code `user_paused`).
@@ -625,7 +644,7 @@ components:
           additionalProperties:
             type: string
           propertyNames:
-            enum: [chat.manual, search.query, search.writer]
+            enum: [chat.manual, search.query, search.writer, research.researcher, research.writer, judge.review]
     CatalogEntry:
       type: object
       required: [provider_id, model]
@@ -678,7 +697,7 @@ components:
           description: The model to call. The catalog must approve it for this provider (`400 model_not_approved`).
         role:
           type: string
-          enum: [chat.manual, search.query, search.writer]
+          enum: [chat.manual, search.query, search.writer, research.researcher, research.writer, judge.review]
           description: What the request is for. A role with no model pinned is refused (`400 role_not_pinned`). Absent means none.
         user_id:
           type: string

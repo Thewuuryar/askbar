@@ -30,7 +30,7 @@ Runs in track 1 as stage W7 of [plan-priorities.md](../plan-priorities.md). Need
 ## Steps
 
 - **P5.1 to P5.5, P5.11, P5.12, P5.16** moved to 5A: P5.1 became P5A.2 (the MCP gateway ADR); P5.2 to P5.5 keep their IDs there; P5.11 is P5A.6 to P5A.12; P5.12 is P5A.13; P5.16 is P5A.20.
-- [ ] **P5B.1** `feat(proto): add the research flag, the research roles and the task limits` · haiku · after W4.1, W5.1, P5A.5
+- [x] **P5B.1** `feat(proto): add the research flag, the research roles and the task limits` · haiku · after W4.1, W5.1, P5A.5
   Files: `crates/askbar-proto/src/{lib,gateway,research,problem,http,task,decide,approval}.rs` (new `research.rs`), `docs/openapi/{client,model-gateway}.v1.yaml`, `docs/wire-contract.md`, `services/admin/src/{constants,gateway_link,server_link}.rs`, tests.
   Do:
   - `research: bool` on the client `ChatRequest` and on `Settings` (true when the user may research: permissions, pins and `research_enabled`; the additive field the client reads to hide its toggle), a `progress` chat event `{stage, done, total, percent}` (all optional but `stage`);

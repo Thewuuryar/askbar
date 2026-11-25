@@ -166,6 +166,10 @@ components:
           - quick_search_fetch_count
           - quick_search_hourly_limit
           - quick_search_disabled
+          - task_token_cap
+          - task_tool_calls
+          - research_busy
+          - research_disabled
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release

@@ -217,6 +217,8 @@ impl Rig {
             role_pins: [Role::SearchQuery, Role::SearchWriter].into_iter().filter_map(|r| Some((r, default_model.clone()?))).collect(),
             quick_search: snap.quick_search,
             quick_search_enabled: snap.quick_search_enabled,
+            task_limits: snap.task_limits,
+            research_enabled: snap.research_enabled,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }
