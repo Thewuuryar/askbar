@@ -58,6 +58,9 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
     if !(MIN_GENERATION_TIMEOUT_SECS..=MAX_GENERATION_TIMEOUT_SECS).contains(&s.generation_timeout_secs) {
         return Err(format!("generation_timeout_secs must be between {MIN_GENERATION_TIMEOUT_SECS} and {MAX_GENERATION_TIMEOUT_SECS}"));
     }
+    if s.quick_search.validate().is_err() {
+        return Err("quick_search is out of range".into());
+    }
     if s.history_turns > MAX_HISTORY_TURNS {
         return Err(format!("history_turns must be between 0 and {MAX_HISTORY_TURNS}"));
     }

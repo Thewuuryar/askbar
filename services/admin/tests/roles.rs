@@ -24,6 +24,7 @@ async fn pins_round_trip_need_an_approved_model_are_audited_and_only_approved_on
     let (st, list) = t.call(M::GET, roles, json!(null)).await;
     assert_eq!((st, &list), (200, &json!([none("chat.manual"), none("search.query"), none("search.writer")])));
     assert!(config(&t).await.role_pins.is_empty());
+    assert_eq!(config(&t).await.quick_search, askbar_proto::quick_search::QuickSearchLimits::DEFAULT, "the pushed defaults");
 
     // An unapproved model is refused, an unknown role is a 404, and nothing changes.
     let pin = json!({ "provider_id": pid, "model": "gpt-x" });

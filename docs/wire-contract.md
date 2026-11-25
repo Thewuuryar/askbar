@@ -149,7 +149,7 @@ Paths below are relative to `/api/client/v1/spaces/{space_id}`.
 ## Chat stream
 
 `POST /api/client/v1/spaces/{space_id}/chat` with
-`{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional)}`.
+`{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional), "web_search": true (optional, quick search; false or omitted is no search)}`.
 A new conversation is made in that space, and the history sent to the model comes from that space
 only. Empty text is `400`; an unknown provider, a conversation that is not in the space, or a space
 the caller is not a member of is `404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
@@ -176,6 +176,7 @@ the server re-emits its own events. Each SSE message has `event:` naming the typ
 | `provider` | `{"event":"provider","id":"<provider id>","name":"...","model":"..."}` | which provider is serving the reply, and the model it is set to: always the provider asked for. Sent once, before the first delta. No SSE `id:`. `model` is absent from older servers |
 | `delta` | `{"event":"delta","text":"..."}` | the next piece of the reply; zero or more. Carries an SSE `id:` line, see below |
 | `done` | `{"event":"done"}` | the reply is complete (also when it was stopped with cancel: the text so far is kept) |
+| `search` | `{"event":"search","queries":["..."],"sources":[{"title":"...","url":"https://...","fetched":true}]}` | quick search only (`web_search` was sent). The queries used and the pages cited, sent once before the first `delta`. `queries` and `sources` are absent when empty; `fetched` is false for a result the reply did not read. An app that does not know it ignores it |
 | `error` | `{"event":"error","message":"...","code":"timed_out"}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived. `code` is the stable reason: `timed_out`, `interrupted`, `kill_switch`, `provider_error` or `internal` (absent from an older server). Branch on `code`; `message` is for a person |
 
 (Comment lines starting with `:` are keep-alives. A client ignores events it does not know.)

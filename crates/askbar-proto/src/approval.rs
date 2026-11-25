@@ -41,6 +41,17 @@ pub enum Provenance {
     User,
 }
 
+/// A quick-search tool call the gateway is asked to approve (plan W5.2). `generation_id` is the trace id of the reply,
+/// so the approval and the reply's spans can be joined. Not signed as a whole: the gateway signs the action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuickSearchApprovalRequest {
+    pub generation_id: String,
+    pub user: String,
+    pub tool: String,
+    pub arguments: Value,
+}
+
 /// Why [`canonical_bytes`] refused an action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CanonicalError {

@@ -100,6 +100,8 @@ pub const MCP_TOOL_CALL_TIMEOUT_SECS: u32 = askbar_proto::mcp::DEFAULT_TOOL_CALL
 pub const MCP_ONE_TIME_ID_WINDOW_SECS: u32 = askbar_proto::mcp::DEFAULT_ONE_TIME_ID_WINDOW_SECS;
 pub const MCP_SEARCH_RESULTS: u32 = askbar_proto::mcp::DEFAULT_SEARCH_RESULTS;
 pub const MCP_REMEMBERED_URLS: u32 = askbar_proto::mcp::DEFAULT_REMEMBERED_URLS;
+// Quick search limits (plan W5.1). Pushed to model-gateway and the server; the bounds live in `askbar-proto::quick_search`.
+pub const QUICK_SEARCH_LIMITS: askbar_proto::quick_search::QuickSearchLimits = askbar_proto::quick_search::QuickSearchLimits::DEFAULT;
 /// At most this many service actions in a minute.
 pub const MAX_RESTARTS_PER_MINUTE: usize = 6;
 

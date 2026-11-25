@@ -147,6 +147,7 @@ impl ReplyReader {
                     steps.push(Step::Emit(StreamEvent::Delta { text }));
                 }
                 Ok(ChatEvent::Done) => steps.push(Step::Done),
+                Ok(ChatEvent::Search { .. }) => {} // quick search sources: shown by W5.4
                 Ok(ChatEvent::Error { message, code }) => steps.push(Step::Fail { message, code }),
                 Err(_) => {} // unknown event from a newer server: ignore
             }
@@ -826,6 +827,7 @@ impl Remote {
         let req = match i.space_path("/chat").await.and_then(|p| i.request(Method::POST, &p)) {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
                 conversation_id: entry.conversation_id.clone(),
+                web_search: false,
                 model: Some(model).filter(|m| !m.is_empty()),
                 text: entry.text.clone(),
                 client_request_id: Some(entry.client_request_id.clone()),
@@ -1499,6 +1501,7 @@ mod tests {
                 .json(&ChatRequest {
                     conversation_id: None,
                     model: Some("p/mock-model".into()),
+                    web_search: false,
                     text: text.into(),
                     client_request_id: None,
                 })

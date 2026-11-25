@@ -181,7 +181,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 
 #### W5: quick search
 
-- [ ] **W5.1** `feat(proto): add quick search types, limits and constants` · haiku · after W4.1, P5.2
+- [x] **W5.1** `feat(proto): add quick search types, limits and constants` · haiku · after W4.1, P5.2
   Files: `crates/askbar-proto/src/{lib,approval}.rs`, `docs/openapi/client.v1.yaml`, `docs/wire-contract.md`, `services/admin/src/{constants,gateway_link,server_link}.rs`.
   Do:
   - an optional `web_search: bool` on the client's chat request;

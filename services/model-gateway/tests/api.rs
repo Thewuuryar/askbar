@@ -214,6 +214,7 @@ fn provider(rig: &Rig, id: &str, model: &str) -> GatewayProvider {
 fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
     GatewayConfig {
         role_pins: Default::default(),
+        quick_search: Default::default(),
         version,
         providers: models.iter().map(|(id, m)| provider(rig, id, m)).collect(),
         audit_public_key: Some(audit_key()),
@@ -1150,4 +1151,7 @@ async fn approvals_are_signed_fresh_and_leak_nothing_and_fail_closed_without_a_k
     c.version = 3;
     c.approval_ttl_secs = 0;
     assert_eq!(rig.push(&c).await.status(), 400, "a TTL out of bounds is refused");
+    c.approval_ttl_secs = askbar_proto::DEFAULT_APPROVAL_TTL_SECS;
+    c.quick_search.max_queries = askbar_proto::quick_search::MAX_QUERIES + 1;
+    assert_eq!(rig.push(&c).await.status(), 400, "a quick search limit out of bounds is refused");
 }

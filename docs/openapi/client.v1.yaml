@@ -881,6 +881,9 @@ components:
         client_request_id:
           type: string
           description: A random id the app chooses for each send (a UUID). A repeat attaches to the first send.
+        web_search:
+          type: boolean
+          description: Search the web for this message (quick search). Omit it, or send false, for no search. Added in 1.0; a server that has not turned quick search on for this user ignores it.
     ChatEvent:
       description: The `data:` of each stream message; the SSE `event:` name is the `event` value.
       oneOf:
@@ -920,6 +923,31 @@ components:
           properties:
             event:
               const: done
+        - type: object
+          required: [event]
+          description: Quick search. Sent once, before the first delta of the answer. An app that does not know it ignores it.
+          properties:
+            event:
+              const: search
+            queries:
+              type: array
+              items:
+                type: string
+              description: The queries the reply searched with. Absent when there were none.
+            sources:
+              type: array
+              description: The pages the reply cites, in order. Absent when there were none.
+              items:
+                type: object
+                required: [title, url, fetched]
+                properties:
+                  title:
+                    type: string
+                  url:
+                    type: string
+                  fetched:
+                    type: boolean
+                    description: False for a result the reply did not read (shown as a link only).
         - type: object
           required: [event, message]
           properties:
