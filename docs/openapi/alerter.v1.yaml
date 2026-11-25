@@ -369,14 +369,15 @@ components:
         The auditor sends `unsealed`, `unseal_timeouts_changed`, `retention_changed`, `backup_key_changed`,
         `audit_disk_low`, `audit_disk_critical`, `component_silent`, `caddy_silent` and `restart_loop` (the admin's, from
         its hellos). The admin sends `chain_mismatch`, `rejected_token`, `restart_loop` (the other services'),
-        `budget_threshold`, `backup_failed`, `backup_missed` and `restore_performed`. `release_available` and `test` are
+        `budget_threshold`, `task_cap_threshold`, `backup_failed`, `backup_missed` and `restore_performed`. `release_available` and `test` are
         the alerter's own and come over no link.
 
 
         As built, the admin sends `chain_mismatch` (no fields; once for each finding), `rejected_token` (`link`: the
         admin's link whose token was refused, once for each episode), `restart_loop` (`service`, `count`, `minutes`:
         three restarts within ten minutes of `server`, `model-gateway` or `alerter`) and `budget_threshold` (`period`,
-        `percent`: `warning` at 80 and `critical` at 100, once for each period, subscriptions not counted).
+        `percent`: `warning` at 80 and `critical` at 100, once for each period, subscriptions not counted) and `task_cap_threshold` (`percent`: `warning` at 75 and `critical` at 90, once for each time a
+        research task crosses it; nothing says whose task).
       enum:
           - unsealed
           - unseal_timeouts_changed
@@ -390,6 +391,7 @@ components:
           - chain_mismatch
           - rejected_token
           - budget_threshold
+          - task_cap_threshold
           - backup_failed
           - backup_missed
           - restore_performed
@@ -413,7 +415,7 @@ components:
           enum: [day, month]
         percent:
           type: integer
-          enum: [80, 100]
+          enum: [75, 80, 90, 100]
         count:
           type: integer
           minimum: 0
