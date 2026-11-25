@@ -85,6 +85,14 @@ pub const EGRESS_LIMITS: askbar_proto::egress::Limits = askbar_proto::egress::Li
     max_tunnels: 256,
     max_tunnels_per_source: 128,
 };
+// MCP gateway tool bounds (phase 5A). Pushed to the gateway; the bounds live in `askbar-proto::mcp`.
+pub const MCP_FETCH_MAX_BYTES: u64 = askbar_proto::mcp::DEFAULT_FETCH_MAX_BYTES;
+pub const MCP_FETCH_TIMEOUT_SECS: u32 = askbar_proto::mcp::DEFAULT_FETCH_TIMEOUT_SECS;
+pub const MCP_FETCH_REDIRECTS: u32 = askbar_proto::mcp::DEFAULT_FETCH_REDIRECTS;
+pub const MCP_TOOL_CALL_TIMEOUT_SECS: u32 = askbar_proto::mcp::DEFAULT_TOOL_CALL_TIMEOUT_SECS;
+pub const MCP_ONE_TIME_ID_WINDOW_SECS: u32 = askbar_proto::mcp::DEFAULT_ONE_TIME_ID_WINDOW_SECS;
+pub const MCP_SEARCH_RESULTS: u32 = askbar_proto::mcp::DEFAULT_SEARCH_RESULTS;
+pub const MCP_REMEMBERED_URLS: u32 = askbar_proto::mcp::DEFAULT_REMEMBERED_URLS;
 /// At most this many service actions in a minute.
 pub const MAX_RESTARTS_PER_MINUTE: usize = 6;
 
