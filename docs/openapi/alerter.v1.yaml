@@ -341,6 +341,7 @@ components:
           - approval_expired
           - approval_replayed
           - tool_not_available
+          - tool_not_permitted
           - internal
     Severity:
       type: string

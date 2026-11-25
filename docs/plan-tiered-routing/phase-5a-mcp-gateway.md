@@ -91,7 +91,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/mcp-gateway/src/{audit,call}.rs`, `docs/style/logging-and-audit.md`.
   Do: through the Rust `AuditClient` open the span (user, task, tool, approval ID, argument hash, no argument text) and run the tool only after the auditor acknowledges; a fetch records the full URL in a span of its own before each hop (P5A.15); if the auditor does not acknowledge, refuse the call (fail closed); close the span with the outcome.
   Accept: a test with an unreachable auditor refuses the call and the tool never runs; a log grep for a marker argument finds nothing.
-- [ ] **P5A.10** `feat(mcp-gateway): check per-user tool permissions` · sonnet · after P5A.9
+- [x] **P5A.10** `feat(mcp-gateway): check per-user tool permissions` · sonnet · after P5A.9
   Files: `services/mcp-gateway/src/permissions.rs` (new), tests.
   Do: the pushed config holds, per user, the permitted tools (`search` and `fetch` off by default, ADR 0019); the front refuses a call to a tool the user does not hold, and `GET /api/mcp-gateway/v1/tools` lists only the user's permitted tools. Deny wins.
   Accept: permission off refuses with its own code; a user with no entry holds nothing; the list shows only permitted tools.

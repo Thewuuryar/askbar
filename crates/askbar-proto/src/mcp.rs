@@ -38,6 +38,13 @@ pub const MIN_REMEMBERED_URLS: u32 = 10;
 pub const DEFAULT_REMEMBERED_URLS: u32 = 50;
 pub const MAX_REMEMBERED_URLS: u32 = 200;
 
+/// The built-in tools a user can be given. Off by default (ADR 0019): a user holds a tool only when the admin pushes it.
+pub const TOOLS: [&str; 2] = ["search", "fetch"];
+
+/// Users with a permission entry, and the longest user ID. A household or small team never nears 1000 users.
+pub const MAX_PERMISSION_USERS: usize = 1000;
+pub const MAX_PERMISSION_USER_LEN: usize = 128;
+
 #[cfg(test)]
 mod tests {
     use super::*;

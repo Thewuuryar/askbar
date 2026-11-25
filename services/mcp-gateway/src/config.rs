@@ -1,6 +1,7 @@
 //! What the admin pushes in `PUT /config` (ADR 0028): the tool limits, each within the bounds in `askbar_proto::mcp`.
 //! Until the first push the front runs on [`Config::default`] (the `askbar_proto` defaults) and refuses every call.
 
+use crate::permissions::{self, Permissions};
 use askbar_proto::mcp::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -21,6 +22,9 @@ pub struct Config {
     /// The version of that key, for the admin's records. Not checked against anything.
     #[serde(default)]
     pub approval_key_version: u64,
+    /// Per user, the tools held. A user with no entry holds none (ADR 0019).
+    #[serde(default)]
+    pub permissions: Permissions,
 }
 
 impl Default for Config {
@@ -35,6 +39,7 @@ impl Default for Config {
             remembered_urls: DEFAULT_REMEMBERED_URLS,
             approval_public_key: None,
             approval_key_version: 0,
+            permissions: Default::default(),
         }
     }
 }
@@ -49,6 +54,7 @@ impl Config {
             && (MIN_ONE_TIME_ID_WINDOW_SECS..=MAX_ONE_TIME_ID_WINDOW_SECS).contains(&self.one_time_id_window_secs)
             && (MIN_SEARCH_RESULTS..=MAX_SEARCH_RESULTS).contains(&self.search_results)
             && (MIN_REMEMBERED_URLS..=MAX_REMEMBERED_URLS).contains(&self.remembered_urls);
+        let ok = ok && permissions::valid(&self.permissions);
         let ok = ok && self.approval_public_key.as_ref().is_none_or(|k| k.len() == 64 && self.public_key_bytes().is_some());
         if ok {
             Ok(())

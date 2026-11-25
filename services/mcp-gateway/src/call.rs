@@ -1,7 +1,8 @@
 //! `POST /tools/{tool}/call`: the signed approval is checked first (a problem on any failure, ADR 0023, counted by
-//! outcome), then the `tool` span is on record before anything runs (ADR 0010 rules 1 to 3).
+//! outcome), then the user's permission for the tool, then the `tool` span is on record before anything runs (ADR 0010 rules 1 to 3).
 
 use crate::approval::At;
+use crate::permissions;
 use crate::Gateway;
 use askbar_proto::approval::{Approval, Provenance, ToolAction};
 use askbar_proto::audit::{SpanFinish, SpanKind, SpanStart};
@@ -11,7 +12,7 @@ use askbar_service::approval::{verify, ApprovalError};
 use askbar_service::audit_client::now_parts;
 use askbar_service::ids::new_id;
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -58,7 +59,11 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         g.count(outcome);
         return Err(ApiError::new(code, "The approval was refused."));
     }
-    // The permission check is P5A.8. The span carries the approval's hash (which covers the arguments) and ID, never the
+    if !permissions::holds(&config.permissions, &b.approval.user, &action.tool) {
+        g.count("refused_permission");
+        return Err(ApiError::new(ErrorCode::ToolNotPermitted, "The user does not hold this tool."));
+    }
+    // The span carries the approval's hash (which covers the arguments) and ID, never the
     // arguments, a URL or the signature; sealed arguments are not recorded.
     let Some(audit) = g.audit() else {
         g.count("refused_audit_unavailable");
@@ -113,4 +118,18 @@ fn finish(status: &str, error_code: Option<&str>) -> SpanFinish {
         error_code: error_code.map(str::to_string),
         attrs: None,
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolsQuery {
+    user: String,
+}
+
+/// `GET /tools?user=`: the tools the user holds, by name (no tool has a description yet). Nothing for an unknown user.
+pub async fn tools(State(g): State<Arc<Gateway>>, Query(q): Query<ToolsQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let config = g.admit()?;
+    let tools: Vec<_> =
+        permissions::permitted(&config.permissions, &q.user).into_iter().map(|name| serde_json::json!({ "name": name })).collect();
+    Ok(Json(serde_json::json!({ "tools": tools })))
 }

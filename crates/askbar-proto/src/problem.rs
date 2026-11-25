@@ -51,11 +51,12 @@ pub enum ErrorCode {
     ApprovalExpired,
     ApprovalReplayed,
     ToolNotAvailable,
+    ToolNotPermitted,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 33] = [
+    pub const ALL: [ErrorCode; 34] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -88,6 +89,7 @@ impl ErrorCode {
         ErrorCode::ApprovalExpired,
         ErrorCode::ApprovalReplayed,
         ErrorCode::ToolNotAvailable,
+        ErrorCode::ToolNotPermitted,
         ErrorCode::Internal,
     ];
 
@@ -126,6 +128,7 @@ impl ErrorCode {
             ErrorCode::ApprovalExpired => "approval_expired",
             ErrorCode::ApprovalReplayed => "approval_replayed",
             ErrorCode::ToolNotAvailable => "tool_not_available",
+            ErrorCode::ToolNotPermitted => "tool_not_permitted",
             ErrorCode::Internal => "internal",
         }
     }
@@ -146,7 +149,7 @@ impl ErrorCode {
             ErrorCode::ClientTooOld => 426,
             ErrorCode::ClientVersionMissing | ErrorCode::BadRequest | ErrorCode::ModelNotApproved => 400,
             ErrorCode::Unauthorized => 401,
-            ErrorCode::Forbidden | ErrorCode::PasswordChangeRequired | ErrorCode::UserPaused => 403,
+            ErrorCode::Forbidden | ErrorCode::PasswordChangeRequired | ErrorCode::UserPaused | ErrorCode::ToolNotPermitted => 403,
             ErrorCode::ApprovalUnsignable => 400,
             ErrorCode::ApprovalUnsigned
             | ErrorCode::ApprovalSignatureInvalid
@@ -197,6 +200,7 @@ impl ErrorCode {
             ErrorCode::ApprovalExpired => "The approval has expired",
             ErrorCode::ApprovalReplayed => "The approval was already used",
             ErrorCode::ToolNotAvailable => "The tool is not available",
+            ErrorCode::ToolNotPermitted => "The tool is not permitted",
             ErrorCode::Internal => "Something went wrong on the server",
         }
     }
@@ -358,9 +362,10 @@ mod tests {
                 | ErrorCode::ApprovalExpired
                 | ErrorCode::ApprovalReplayed
                 | ErrorCode::ToolNotAvailable
+                | ErrorCode::ToolNotPermitted
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 33);
+        assert_eq!(ErrorCode::ALL.len(), 34);
     }
 }

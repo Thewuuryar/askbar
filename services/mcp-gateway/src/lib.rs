@@ -2,15 +2,16 @@
 //!
 //! - **Config by push.** The admin pushes the tool limits in `PUT /config` (ADR 0028). A bad push is refused and the old
 //!   config stays live. Until the first push every tool call is refused ([`Gateway::admit`]) and the defaults apply.
-//! - **One tool route.** `POST /tools/{tool}/call` checks the signed approval, then writes a `tool` span and waits for
+//! - **One tool route.** `POST /tools/{tool}/call` checks the signed approval, then the user's tool permission, then writes a `tool` span and waits for
 //!   the auditor's acknowledgement (no acknowledgement: `503 audit_backlog`, nothing runs), then refuses
-//!   (`tool_not_available`): the permission check and the tools follow.
+//!   (`tool_not_available`): the tools follow. `GET /tools?user=` lists the tools a user holds.
 //! - **Links.** One listener, two token links ([`LINKS`]): the admin's (status, config) and the server's (the tool call). A token that matches no link, or a route the link may not call, is refused.
 
 pub mod approval;
 mod call;
 pub mod config;
 mod constants;
+pub mod permissions;
 pub mod status;
 
 use askbar_proto::http::ApiError;
@@ -107,7 +108,7 @@ impl Gateway {
     }
 }
 
-const SERVER_ROUTES: Routes = &[("POST", "/tools/*/call")];
+const SERVER_ROUTES: Routes = &[("POST", "/tools/*/call"), ("GET", "/tools")];
 const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config")];
 
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
@@ -145,6 +146,7 @@ pub fn router(g: Arc<Gateway>, links: Links) -> Router {
         .route(&full("/status"), get(status))
         .route(&full("/config"), put(put_config))
         .route(&full("/tools/{tool}/call"), post(call::call))
+        .route(&full("/tools"), get(call::tools))
         .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     links::shell(MCP_GATEWAY_V1, MAX_BODY, g, protected)
