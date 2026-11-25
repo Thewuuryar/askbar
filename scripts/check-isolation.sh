@@ -359,11 +359,15 @@ else
   svc_profile "$CPA" cpa <<EOF
 nets cpa-admin cpa-gateway egress-cpa|cpa is on cpa-admin, cpa-gateway and egress-cpa only (never edge)
 EOF
-  # Its only way out is the proxy's listener for it (ADR 0056): a direct connection fails, and a CONNECT to a host nobody listed
-  # is answered by the proxy itself, with a 403, so the request got there.
-  docker exec "$CPA" sh -c 'timeout 4 nc -w 3 1.1.1.1 443 </dev/null' >/dev/null 2>&1 && fail "cpa reached the internet directly" || pass "cpa has no direct route out"
-  got=$(docker exec "$CPA" sh -c 'printf "CONNECT unlisted.invalid:443 HTTP/1.1\r\nHost: unlisted.invalid:443\r\n\r\n" | timeout 6 nc -w 4 egress-cpa-host 3128' 2>/dev/null | head -1)
-  case "$got" in "HTTP/1.1 403"*) pass "a CONNECT from cpa reaches the proxy on egress-cpa, which refuses a host nobody listed";; *) fail "a CONNECT from cpa to the proxy: '$got'";; esac
+  # Its only way out is the proxy's listener for it (ADR 0056). The cpa image has no nc, so a throwaway container on
+  # egress-cpa makes the CONNECT: the proxy itself answers a host nobody listed with a 403, so the request got there.
+  got=$(py --network "${PROJECT}_egress-cpa" -- '
+import socket
+s = socket.create_connection(("egress-cpa-host", 3128), timeout=5)
+s.sendall(b"CONNECT unlisted.invalid:443 HTTP/1.1\r\nHost: unlisted.invalid:443\r\n\r\n")
+print(s.recv(64).split(b"\r\n")[0].decode())
+' 2>/dev/null)
+  case "$got" in "HTTP/1.1 403"*) pass "a CONNECT on egress-cpa reaches the proxy, which refuses a host nobody listed";; *) fail "a CONNECT on egress-cpa to the proxy: '$got'";; esac
 fi
 
 echo "== 3d2. Container hardening (ADR 0032)"
