@@ -273,8 +273,8 @@ services:
   # network that source arrives on (the network is the source, so no secret is in a URL or variable), each bound to the
   # address its alias gives and never a wildcard, because it also sits on egress-outbound, the one route out. The alerter's
   # relay port is on egress-alerter. Runs as uid 10006 from the image, with no exception to the hardening above, and 128 MB.
-  # It denies everything until the admin pushes its allowlists, which are in memory only. Nothing joins the four internal
-  # networks yet.
+  # It denies everything until the admin pushes its allowlists, which are in memory only. The admin, model-gateway, cpa and
+  # the alerter each share one internal network with it.
   egress-proxy:
     build:
       context: .
