@@ -62,7 +62,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Do: sign the hash of the exact action, task, user, a one-time ID and a 60 s expiry (expiry from `constants.rs`, bounds in `askbar-proto`) with `sign` from P5.5; record each approval in the audit span (hash and ID, no arguments). Signing is called by `/decide` in P5.6; here it is a function with its own tests.
   Accept: a changed argument changes the hash; expiry and one-time ID are present; no key in any output.
 - [x] **P5A.3** `feat(compose): add the agentgateway image pinned by digest` · dropped: no third-party gateway (G13). Its digest-and-notice check pattern (`scripts/check-cpa-image.sh`) is reused by P5A.13 for `searxng`.
-- [ ] **P5A.4** `feat(compose): scan the searxng image for vulnerabilities` · sonnet · after P5A.13
+- [x] **P5A.4** `feat(compose): scan the searxng image for vulnerabilities` · sonnet · after P5A.13
   Files: `scripts/scan-third-party-images.sh` (new).
   Do: the Trivy `images` CI job (`.github/workflows/images.yml`) scans pushed digests with its flags and `.trivyignore.yaml`; first work out whether it covers a pulled third-party image such as the `searxng` base and `cpa`'s base (a gap if it does not). Add a local script that runs the same Trivy flags on every digest the Dockerfile pins from outside, and write the exact workflow change for the owner. The orchestrator never edits `.github/workflows/`.
   Accept: the script runs on the `searxng` image; the PR body states whether CI already covered it and lists the workflow change. **[owner]** applies or declines the workflow change.
