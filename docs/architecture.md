@@ -98,7 +98,7 @@ What each container holds, what it can reach, and what taking it over would give
 
 | Service | Holds | Can reach | If it is compromised |
 | --- | --- | --- | --- |
-| **bootstrap** | writes the credential volumes `server-token`, `admin-token`, `auditor-token`, `model-gateway-token`, `alerter-token`, `egress-proxy-token`; runs once, as root with `CHOWN` only | nothing: no network | every link token could be minted, but it has no route to use them and has exited. Compromise needs a bad image |
+| **bootstrap** | writes the credential volumes `server-token`, `admin-token`, `auditor-token`, `model-gateway-token`, `alerter-token`, `egress-proxy-token`, `mcp-gateway-token`; runs once, as root with `CHOWN` only | nothing: no network | every link token could be minted, but it has no route to use them and has exited. Compromise needs a bad image |
 | **server** | `DATA_DIR` (the spaces and `control.db`); `server-token` read-only | `model-gateway` (`gateway-server`), the auditor (`audit-server`); Caddy and the admin reach it on `client-api` and `server-api` | every user's conversations, and appends and model calls under its own tokens. No provider key, no audit passphrase, no route out |
 | **admin** | `admin-data`, `admin-secrets` (provider keys, certificate key), `backup`, `cpa-config`; `admin-token` read-only; the sockets `admin-run` and `caddy-run`, and `caddy-secrets` (the certificate key, written here, read-only in Caddy) | the server (`server-api`), `model-gateway` (`gateway-admin`), the auditor (`audit-admin`), the alerter (`alerter-admin`), `cpa` (`cpa-admin`), Caddy by its admin socket. No route out | the provider keys, the settings and the user list, and it can push any configuration. Audit content stays sealed, backups stay encrypted to a key it cannot open, and it has no route out |
 | **auditor** | `auditor-data` (`audit.db`); `auditor-token` read-only | the alerter (`audit-alerter`). No route out | the sealed store: ciphertext, which it cannot open. It could delete or alter records, which the hash chain shows |
@@ -191,6 +191,8 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `admin` | `auditor` | Append admin action records | Admin append token |
 | `admin` | `alerter` | Config, events, status, test alert, restart, release results and exports | Per-link token |
 | `admin` | `egress-proxy` | Allowlists (`PUT /config`), status, restart | Per-link token (`admin-egress-proxy`) |
+| `server` | `mcp-gateway` | Tool calls with the signed approval | Per-link token (`server-mcp-gateway`) |
+| `admin` | `mcp-gateway` | Config (`PUT /config`) and status | Per-link token (`admin-mcp-gateway`) |
 | `alerter` | `auditor` | Delivery records (`alert-deliveries`) | Alerter append token |
 | `server`, `model-gateway` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
 | Caddy | `auditor` | Append access logs, to the ingest listener | None: a network of the two, and the listener answers nothing |

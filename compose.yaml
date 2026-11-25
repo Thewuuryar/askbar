@@ -67,6 +67,7 @@ services:
       - model-gateway-token:/model-gateway-token
       - alerter-token:/alerter-token
       - egress-proxy-token:/egress-proxy-token
+      - mcp-gateway-token:/mcp-gateway-token
 
   server:
     build:
@@ -468,6 +469,8 @@ volumes:
   alerter-token:
   # The egress proxy's credential volume (ADR 0049, 0056): the hash of the admin's token. Only bootstrap writes it.
   egress-proxy-token:
+  # The MCP gateway front's credential volume (ADR 0049, 0057): the hashes of the server's and the admin's tokens. Only bootstrap writes it.
+  mcp-gateway-token:
   admin-data:
   admin-secrets:
   # The admin's backups (ADR 0013, D27). A new volume, empty, owned by uid 10001 as the image's /backup is. Never renamed or dropped:

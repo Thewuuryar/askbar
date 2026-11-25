@@ -12,7 +12,7 @@ pub mod write;
 /// the current user. Returns the token file (the admin's) and the hash file (the server's).
 pub fn install_for_tests(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let ctx = write::Ctx::current_user(root).expect("the test directory is usable");
-    // The admin starts only with its token for each service it talks to: the server's, the gateway's, the alerter's, the egress proxy's and the auditor's.
+    // The admin starts only with its token for each service it talks to: the server's, the gateway's, the alerter's, the egress proxy's, the MCP gateway's and the auditor's.
     let links = [
         links::link("admin-server").expect("admin-server is a link"),
         links::link("admin-model-gateway").expect("a link"),
@@ -21,6 +21,7 @@ pub fn install_for_tests(root: &std::path::Path) -> (std::path::PathBuf, std::pa
         links::link("admin-alerter").expect("a link"),
         links::link("admin-auditor-restore").expect("a link"),
         links::link("admin-egress-proxy").expect("a link"),
+        links::link("admin-mcp-gateway").expect("a link"),
     ];
     write::apply(&ctx, &links, false).expect("bootstrap writes its files");
     (root.join("admin-token/call/admin-server.token"), root.join("server-token/accept/admin-server.sha256"))

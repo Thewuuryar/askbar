@@ -8,6 +8,7 @@
 #   docker build --target model-gateway -t askbar-model-gateway .
 #   docker build --target alerter    -t askbar-alerter .
 #   docker build --target egress-proxy -t askbar-egress-proxy .
+#   docker build --target mcp-gateway -t askbar-mcp-gateway .
 #   docker build --target admin      -t askbar-admin  .
 #   docker build --target caddy      -t askbar-caddy  .
 #   docker build --target cpa        -t askbar-cpa    .
@@ -36,7 +37,7 @@ COPY services/alerter/Cargo.toml services/alerter/
 COPY services/mcp-gateway/Cargo.toml services/mcp-gateway/
 COPY services/egress-proxy/Cargo.toml services/egress-proxy/
 RUN for d in crates/* services/*; do mkdir -p "$d/src" && touch "$d/src/lib.rs" && echo 'fn main() {}' > "$d/src/main.rs"; done \
- && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy \
+ && cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy -p askbar-mcp-gateway \
  && rm -rf crates/*/src services/*/src target/release/.fingerprint/askbar-*
 # The real sources. Removing the members' fingerprints above makes cargo rebuild them, whatever the
 # copied files' timestamps.
@@ -44,14 +45,14 @@ COPY crates crates
 COPY services services
 COPY docs/reference docs/reference
 # The desktop client is its own workspace (clients/desktop) and is not part of any image.
-RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy
+RUN cargo build --release --locked -p askbar-server -p askbar-admin -p askbar-cpa-supervisor -p askbar-bootstrap -p askbar-auditor -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy -p askbar-mcp-gateway
 
 # --------------------------------------------------------------- bootstrap
 # Creates the per-link tokens and exits (ADR 0049). Runs as root with CHOWN as its only capability, no
 # network, and mounts the credential volumes only. No user is made: it must own a directory it writes
 # to, then give it to the service that reads it.
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS bootstrap
-RUN mkdir /server-token /admin-token /auditor-token /model-gateway-token /alerter-token /egress-proxy-token
+RUN mkdir /server-token /admin-token /auditor-token /model-gateway-token /alerter-token /egress-proxy-token /mcp-gateway-token
 COPY --from=build /src/target/release/askbar-bootstrap /usr/local/bin/askbar-bootstrap
 ENTRYPOINT ["askbar-bootstrap"]
 
@@ -167,6 +168,19 @@ ENV ASKBAR_EGRESS_PROXY_TOKEN_DIR=/egress-proxy-token
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["askbar-egress-proxy", "healthcheck"]
 ENTRYPOINT ["askbar-egress-proxy"]
+
+# ----------------------------------------------------------------- mcp-gateway
+# The MCP gateway's front (ADR 0057). Runs as uid 10007 with no capabilities and no data volume; its only volume is the credential
+# volume `mcp-gateway-token`, mounted read-only (the hashes of the server's and the admin's tokens).
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS mcp-gateway
+RUN groupadd --system --gid 10007 askbar-mcp-gateway && useradd --system --uid 10007 --gid 10007 --home-dir /nonexistent --shell /usr/sbin/nologin askbar-mcp-gateway \
+ && mkdir /mcp-gateway-token && chown askbar-mcp-gateway:askbar-mcp-gateway /mcp-gateway-token
+COPY --from=build /src/target/release/askbar-mcp-gateway /usr/local/bin/askbar-mcp-gateway
+USER askbar-mcp-gateway
+ENV ASKBAR_MCP_GATEWAY_TOKEN_DIR=/mcp-gateway-token
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["askbar-mcp-gateway", "healthcheck"]
+ENTRYPOINT ["askbar-mcp-gateway"]
 
 # ----------------------------------------------------------------- server
 # The server: the client API on 8080 and the server API on its own address. Runs as uid 10002,

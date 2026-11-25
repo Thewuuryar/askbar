@@ -3,25 +3,28 @@
 //! - **Config by push.** The admin pushes the tool limits in `PUT /config` (ADR 0028). A bad push is refused and the old
 //!   config stays live. Until the first push every tool call is refused ([`Gateway::admit`]) and the defaults apply.
 //! - **No tool route yet.** Only health, status and config exist; the tools, the approval check and the audit spans follow.
-//! - **Links.** The token links (`server-mcp-gateway`, `admin-mcp-gateway`) are P5A.6a. Until then [`no_links`] accepts
-//!   no token, so every route but health answers `401`.
+//! - **Links.** One listener, two token links ([`LINKS`]): the admin's (status, config) and the server's (no route yet; the
+//!   tool route follows). A token that matches no link, or a route the link may not call, is refused.
 
 pub mod config;
 pub mod status;
 
 use askbar_proto::http::ApiError;
+use askbar_proto::links::{ADMIN_MCP_GATEWAY, SERVER_MCP_GATEWAY};
 use askbar_proto::paths::MCP_GATEWAY_V1;
 use askbar_proto::ErrorCode;
 use askbar_service::configured::Gate;
-use askbar_service::links::{self, Links};
+use askbar_service::links::{self, Allow, Link, LinkDef, Links, Routes};
 use askbar_service::status::BootId;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::Method;
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use config::Config;
 use status::Status;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -81,18 +84,31 @@ impl Gateway {
     }
 }
 
-/// No link yet (P5A.6a adds them): accepts no token, so nothing but health is reachable.
-pub fn no_links() -> Links {
-    Links::new(vec![]).named("mcp-gateway")
+const SERVER_ROUTES: Routes = &[];
+const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config")];
+
+/// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
+pub const LINKS: &[LinkDef] = &[(SERVER_MCP_GATEWAY, "server", SERVER_ROUTES), (ADMIN_MCP_GATEWAY, "admin", ADMIN_ROUTES)];
+
+/// The token check for the hashes in `token_dir/accept`: both links on the one listener. A link whose hash file is
+/// missing accepts nothing.
+pub fn links(token_dir: &Path) -> Links {
+    let link = |(name, caller, routes): &LinkDef| Link {
+        caller,
+        hash_file: token_dir.join("accept").join(format!("{name}.sha256")),
+        allow: routes.iter().map(|(m, p)| Allow::method(Method::from_bytes(m.as_bytes()).expect("a method"), &full(p))).collect(),
+    };
+    Links::new(LINKS.iter().map(link).collect()).named("mcp-gateway")
+}
+
+/// The credential volume, read-only: `ASKBAR_MCP_GATEWAY_TOKEN_DIR`, default `/mcp-gateway-token`.
+pub fn token_dir() -> PathBuf {
+    links::token_dir("ASKBAR_MCP_GATEWAY_TOKEN_DIR", "/mcp-gateway-token")
 }
 
 /// The routes, for the OpenAPI test.
 pub fn routes() -> Vec<links::RouteEntry> {
-    let mut r = links::routes(MCP_GATEWAY_V1, &[]);
-    r.extend(
-        [("GET", "/status"), ("PUT", "/config")].map(|(method, p)| links::RouteEntry { method, path: links::full(MCP_GATEWAY_V1, p) }),
-    );
-    r
+    links::routes(MCP_GATEWAY_V1, LINKS)
 }
 
 fn full(rest: &str) -> String {

@@ -26,18 +26,18 @@ fn it_creates_keeps_lists_and_rotates() {
 
     let first = run(&root, &[]);
     assert!(first.status.success());
-    assert_eq!(out(&first), "created admin-server\ncreated admin-auditor-append\ncreated admin-auditor-read\ncreated server-model-gateway\ncreated admin-model-gateway\ncreated model-gateway-auditor\ncreated server-auditor\ncreated model-gateway-auditor-read\ncreated auditor-alerter\ncreated admin-alerter\ncreated alerter-auditor\ncreated admin-auditor-restore\ncreated admin-egress-proxy\n");
+    assert_eq!(out(&first), "created admin-server\ncreated admin-auditor-append\ncreated admin-auditor-read\ncreated server-model-gateway\ncreated admin-model-gateway\ncreated model-gateway-auditor\ncreated server-auditor\ncreated model-gateway-auditor-read\ncreated auditor-alerter\ncreated admin-alerter\ncreated alerter-auditor\ncreated admin-auditor-restore\ncreated admin-egress-proxy\ncreated server-mcp-gateway\ncreated admin-mcp-gateway\n");
     let token = std::fs::read_to_string(&token_file).unwrap();
     assert!(token.starts_with("mgt_"));
     assert_eq!(std::fs::read_to_string(&hash_file).unwrap().trim().len(), 64);
 
     let again = run(&root, &[]);
-    assert_eq!(out(&again), "kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore\nkept admin-egress-proxy\n");
+    assert_eq!(out(&again), "kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore\nkept admin-egress-proxy\nkept server-mcp-gateway\nkept admin-mcp-gateway\n");
     assert_eq!(std::fs::read_to_string(&token_file).unwrap(), token, "a rerun keeps the token");
 
     assert_eq!(
         out(&run(&root, &["list"])),
-        "admin-server\nadmin-auditor-append\nadmin-auditor-read\nserver-model-gateway\nadmin-model-gateway\nmodel-gateway-auditor\nserver-auditor\nmodel-gateway-auditor-read\nauditor-alerter\nadmin-alerter\nalerter-auditor\nadmin-auditor-restore\nadmin-egress-proxy\n"
+        "admin-server\nadmin-auditor-append\nadmin-auditor-read\nserver-model-gateway\nadmin-model-gateway\nmodel-gateway-auditor\nserver-auditor\nmodel-gateway-auditor-read\nauditor-alerter\nadmin-alerter\nalerter-auditor\nadmin-auditor-restore\nadmin-egress-proxy\nserver-mcp-gateway\nadmin-mcp-gateway\n"
     );
 
     let rotated = run(&root, &["rotate", "admin-server"]);
