@@ -267,5 +267,10 @@ pub async fn settings(State(state): St, Extension(auth): Extension<ClientAuth>) 
         _ => false,
     };
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(Settings { display: served_display(&db, None).map_err(internal)?, policy: served_policy(&db).map_err(internal)?, web_search }))
+    Ok(Json(Settings {
+        display: served_display(&db, None).map_err(internal)?,
+        policy: served_policy(&db).map_err(internal)?,
+        web_search,
+        research: false,
+    }))
 }

@@ -148,6 +148,7 @@ impl ReplyReader {
                 }
                 Ok(ChatEvent::Done) => steps.push(Step::Done),
                 Ok(ChatEvent::Search { queries, sources }) => steps.push(Step::Emit(StreamEvent::Search { queries, sources })),
+                Ok(ChatEvent::Progress { .. }) => {} // the popup shows no progress yet
                 Ok(ChatEvent::Error { message, code }) => steps.push(Step::Fail { message, code }),
                 Err(_) => {} // unknown event from a newer server: ignore
             }
@@ -831,6 +832,7 @@ impl Remote {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
                 conversation_id: entry.conversation_id.clone(),
                 web_search: entry.web_search,
+                research: false,
                 model: Some(model).filter(|m| !m.is_empty()),
                 text: entry.text.clone(),
                 client_request_id: Some(entry.client_request_id.clone()),
@@ -1519,6 +1521,7 @@ mod tests {
                     conversation_id: None,
                     model: Some("p/mock-model".into()),
                     web_search: false,
+                    research: false,
                     text: text.into(),
                     client_request_id: None,
                 })

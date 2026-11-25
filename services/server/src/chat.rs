@@ -35,6 +35,7 @@ pub(crate) fn sse_event_with_id(e: &ChatEvent, seq: Option<u64>) -> Event {
         ChatEvent::Delta { .. } => "delta",
         ChatEvent::Done => "done",
         ChatEvent::Search { .. } => "search",
+        ChatEvent::Progress { .. } => "progress",
         ChatEvent::Error { .. } => "error",
     };
     let ev = Event::default().event(name).json_data(e).expect("ChatEvent serializes");

@@ -61,6 +61,9 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
     if s.quick_search.validate().is_err() {
         return Err("quick_search is out of range".into());
     }
+    if s.task_limits.validate().is_err() {
+        return Err("task_limits is out of range".into());
+    }
     if s.history_turns > MAX_HISTORY_TURNS {
         return Err(format!("history_turns must be between 0 and {MAX_HISTORY_TURNS}"));
     }
@@ -233,6 +236,14 @@ mod tests {
             let e = validate(&s).unwrap_err();
             assert!(e.contains("generation_timeout_secs") && e.contains("30") && e.contains("3600"), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn task_limits_outside_their_bounds_are_refused() {
+        let mut s = crate::testing::empty_snapshot();
+        assert_eq!(validate(&s), Ok(()));
+        s.task_limits.tool_calls = askbar_proto::research::MAX_TOOL_CALLS + 1;
+        assert!(validate(&s).unwrap_err().contains("task_limits"));
     }
 
     #[test]

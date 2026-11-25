@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod paths;
 pub mod problem;
 pub mod quick_search;
+pub mod research;
 pub mod task;
 pub use problem::{ErrorCode, Problem};
 
@@ -244,6 +245,12 @@ pub struct Snapshot {
     /// Whether quick search is on for everyone (plan P8.6e). Absent in an older snapshot: on.
     #[serde(default = "default_true")]
     pub quick_search_enabled: bool,
+    /// The research task limits (plan P5B.1), each within its bounds. Absent in an older snapshot: the defaults.
+    #[serde(default)]
+    pub task_limits: research::TaskLimits,
+    /// Whether research is on for everyone (plan P5B.1). Absent in an older snapshot: on.
+    #[serde(default = "default_true")]
+    pub research_enabled: bool,
     /// Seconds a generation may run before it is stopped (30 to 3600). Read when it starts.
     #[serde(default = "default_generation_timeout_secs")]
     pub generation_timeout_secs: u32,
@@ -457,6 +464,10 @@ pub struct Settings {
     /// client ignores it, and a response without it reads as `false`).
     #[serde(default)]
     pub web_search: bool,
+    /// Whether the caller may research (the `search` and `fetch` tools, the three research roles pinned, research on), so the
+    /// popup offers its toggle. Added after 1.0 (additive: absent from an older server, read as `false`).
+    #[serde(default)]
+    pub research: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -475,6 +486,10 @@ pub struct ChatRequest {
     /// without it is unchanged; a server that has not turned quick search on for this user ignores it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub web_search: bool,
+    /// Write a researched report for this message (plan phase 5B). Left out of the JSON when off. Wins over `web_search` when
+    /// both are set; a server that has not turned research on for this user ignores it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub research: bool,
 }
 
 /// A page a quick-search reply cites. `fetched` is false for a result the reply did not read (its URL carries query
@@ -521,6 +536,17 @@ pub enum ChatEvent {
         queries: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         sources: Vec<SearchSource>,
+    },
+    /// Where a research report is (plan phase 5B), sent as it works: `stage` is `splitting`, `researching`, `writing` or
+    /// `reviewing`; `done` and `total` count the researchers; `percent` is a task cap crossing. An older client ignores it.
+    Progress {
+        stage: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        done: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        percent: Option<u8>,
     },
     /// `code` is the stable reason (`timed_out`, `interrupted`, `kill_switch`, `provider_error`, `internal`); clients
     /// branch on it and show `message`. Absent from servers that predate it.
@@ -657,7 +683,7 @@ mod tests {
     fn a_settings_or_snapshot_from_before_the_policy_still_reads_and_says_the_default() {
         let old: Settings = serde_json::from_str(r#"{"display":{}}"#).unwrap();
         assert_eq!(old.policy, Policy::default());
-        assert!(!old.web_search);
+        assert!(!old.web_search && !old.research);
         let snap: Snapshot = serde_json::from_str(r#"{"audit_retention_days":30}"#).unwrap();
         assert_eq!(snap.policy, None, "the server then serves the defaults for the snapshot's retention");
         // And the policy round-trips on the wire with the names a client reads.
@@ -958,5 +984,23 @@ mod quick_search_wire {
         assert_eq!(serde_json::to_string(&ChatEvent::Done).unwrap(), r#"{"event":"done"}"#, "done is unchanged");
         let bare: ChatEvent = serde_json::from_str(r#"{"event":"search"}"#).unwrap();
         assert_eq!(bare, ChatEvent::Search { queries: vec![], sources: vec![] });
+    }
+
+    #[test]
+    fn research_is_additive_on_the_request_the_settings_the_snapshot_and_the_stream() {
+        let old: ChatRequest = serde_json::from_str(r#"{"text":"t"}"#).unwrap();
+        assert!(!old.research);
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"text":"t"}"#, "off is left out");
+        let on = ChatRequest { research: true, ..old };
+        assert_eq!(serde_json::from_str::<ChatRequest>(&serde_json::to_string(&on).unwrap()).unwrap(), on);
+        assert!(!serde_json::from_str::<Settings>(r#"{"display":{}}"#).unwrap().research);
+        let snap: Snapshot = serde_json::from_str(r#"{"audit_retention_days":30}"#).unwrap();
+        assert_eq!((snap.task_limits, snap.research_enabled), (research::TaskLimits::DEFAULT, true));
+        let ev = ChatEvent::Progress { stage: "researching".into(), done: Some(1), total: Some(3), percent: None };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(json, r#"{"event":"progress","stage":"researching","done":1,"total":3}"#);
+        assert_eq!(serde_json::from_str::<ChatEvent>(&json).unwrap(), ev);
+        let bare: ChatEvent = serde_json::from_str(r#"{"event":"progress","stage":"writing"}"#).unwrap();
+        assert_eq!(bare, ChatEvent::Progress { stage: "writing".into(), done: None, total: None, percent: None });
     }
 }

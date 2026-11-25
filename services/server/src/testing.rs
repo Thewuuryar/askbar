@@ -37,6 +37,8 @@ pub fn empty_snapshot() -> Snapshot {
         audit_retention_days: 30,
         quick_search: Default::default(),
         quick_search_enabled: true,
+        task_limits: Default::default(),
+        research_enabled: true,
         generation_timeout_secs: 300,
         history_turns: 0,
         audit_public_key: Some(test_audit_key()),

@@ -93,8 +93,9 @@ Both follow the signed-in user, so all of a user's clients see the same values.
   `newest_first` (absent from an older server: `false`) shows a conversation newest first.
   A client may override any field locally; a local override wins, and removing it returns
   the server's default.
-- `GET /api/client/v1/settings` returns `{"display": {...}, "policy": {...}, "web_search": bool}`: the server-wide display defaults, whether the caller
-  holds the web search permission (`web_search`, asked of the MCP front on each call; `false` when it cannot say; absent from an older server), and the
+- `GET /api/client/v1/settings` returns `{"display": {...}, "policy": {...}, "web_search": bool, "research": bool}`: the server-wide display defaults, whether the caller
+  holds the web search permission (`web_search`, asked of the MCP front on each call; `false` when it cannot say; absent from an older server),
+  whether the caller may research (`research`, added after 1.0, absent from an older server: `false`), and the
   **policy** (ADR 0012), which is what an app tells its person about the service. `policy.notice` is
   `{"enabled", "text", "retention_days", "version"}`: the privacy notice, with how many days audit records are kept and a
   `version` that is a hash of the wording and that number. An app shows it after pairing and whenever the `version` differs from
@@ -150,7 +151,7 @@ Paths below are relative to `/api/client/v1/spaces/{space_id}`.
 ## Chat stream
 
 `POST /api/client/v1/spaces/{space_id}/chat` with
-`{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional), "web_search": true (optional, quick search; false or omitted is no search)}`.
+`{"conversation_id": "<id>" (optional), "provider": "<provider id>", "text": "...", "client_request_id": "<string>" (optional), "web_search": true (optional, quick search; false or omitted is no search), "research": true (optional, a researched report; false or omitted is none; wins over `web_search`)}`.
 A new conversation is made in that space, and the history sent to the model comes from that space
 only. Empty text is `400`; an unknown provider, a conversation that is not in the space, or a space
 the caller is not a member of is `404`; a conversation that already has five messages waiting is `409` (see *The queue*); when
@@ -178,6 +179,7 @@ the server re-emits its own events. Each SSE message has `event:` naming the typ
 | `delta` | `{"event":"delta","text":"..."}` | the next piece of the reply; zero or more. Carries an SSE `id:` line, see below |
 | `done` | `{"event":"done"}` | the reply is complete (also when it was stopped with cancel: the text so far is kept) |
 | `search` | `{"event":"search","queries":["..."],"sources":[{"title":"...","url":"https://...","fetched":true}]}` | quick search only (`web_search` was sent). The queries used and the pages cited, sent once before the first `delta`. `queries` and `sources` are absent when empty; `fetched` is false for a result the reply did not read. An app that does not know it ignores it |
+| `progress` | `{"event":"progress","stage":"researching","done":1,"total":3,"percent":75}` | research only (`research` was sent). Where the report is: `stage` is `splitting`, `researching`, `writing` or `reviewing`; `done`, `total` and `percent` (a task cap crossing) are absent when they do not apply. An app that does not know it ignores it |
 | `error` | `{"event":"error","message":"...","code":"timed_out"}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived. `code` is the stable reason: `timed_out`, `interrupted`, `kill_switch`, `provider_error` or `internal` (absent from an older server). Branch on `code`; `message` is for a person |
 
 (Comment lines starting with `:` are keep-alives. A client ignores events it does not know.)

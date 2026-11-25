@@ -16,6 +16,12 @@ pub enum Decision {
 pub struct DecideRequest {
     pub decision: Decision,
     pub input: Value,
+    /// The reply the decision is for, so its call joins the reply's trace and counts against its task. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_id: Option<String>,
+    /// Whose decision it is (the user's budget and pause apply). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,6 +40,9 @@ mod tests {
         assert_eq!(serde_json::to_string(&Decision::StepCheck).unwrap(), r#""step_check""#);
         let req: DecideRequest = serde_json::from_str(r#"{"decision":"research","input":{"q":"x"}}"#).unwrap();
         assert_eq!(req.decision, Decision::Research);
+        assert_eq!((req.generation_id, req.user_id), (None, None), "an old request has neither");
+        let with: DecideRequest = serde_json::from_str(r#"{"decision":"judge","input":null,"generation_id":"g","user_id":"u"}"#).unwrap();
+        assert_eq!((with.generation_id.as_deref(), with.user_id.as_deref()), (Some("g"), Some("u")));
         let res = DecideResponse { decision: Decision::Judge, output: Value::Bool(true) };
         let json = serde_json::to_string(&res).unwrap();
         assert_eq!(serde_json::from_str::<DecideResponse>(&json).unwrap(), res);

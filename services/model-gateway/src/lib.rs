@@ -373,6 +373,9 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
     if c.quick_search.validate().is_err() {
         return Err("quick_search is out of range.".into());
     }
+    if c.task_limits.validate().is_err() {
+        return Err("task_limits is out of range.".into());
+    }
     if c.paused_users.len() > 10_000 || c.paused_users.iter().any(|u| !valid_id(u)) {
         return Err("A paused user is an id of 1 to 64 letters, digits, - or _ (at most 10,000 of them).".into());
     }
