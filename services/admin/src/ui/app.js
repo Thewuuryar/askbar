@@ -1268,7 +1268,12 @@
   });
   on('search-on', 'change', async () => {
     pageError('');
-    try { await api('PUT', '/api/admin/v1/settings', { quick_search_enabled: $('search-on').checked }); ui.toast($('search-on').checked ? 'Quick search is on.' : 'Quick search is off.'); } catch (ex) { pageError(ex.message); }
+    // PUT /settings takes the whole object (a field left out keeps its value, but the prompt and display are required): read it, change the one.
+    try {
+      const on = $('search-on').checked;
+      await api('PUT', '/api/admin/v1/settings', { ...(await api('GET', '/api/admin/v1/settings')), quick_search_enabled: on });
+      ui.toast(on ? 'Quick search is on.' : 'Quick search is off.');
+    } catch (ex) { pageError(ex.message); }
     liveSearch.refresh({ force: true });
   });
   async function loadUsage() {

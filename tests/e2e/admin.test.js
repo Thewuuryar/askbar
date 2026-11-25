@@ -94,8 +94,9 @@ async function runViewport(viewport) {
   const children = [];
   const run = (cmd, args, env) => { const c = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); children.push(c); return c; };
   let forwarder = null;
+  let front = null;
   // bootstrap's directories are read-only, as they are in the stack: open them up before removing.
-  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); spawnSync('chmod', ['-R', 'u+rwx', data]); fs.rmSync(data, { recursive: true, force: true }); };
+  const cleanup = () => { for (const c of children) c.kill(); if (forwarder) forwarder.close(); if (front) front.close(); spawnSync('chmod', ['-R', 'u+rwx', data]); fs.rmSync(data, { recursive: true, force: true }); };
   let browser = null;
   try {
 
@@ -130,7 +131,29 @@ async function runViewport(viewport) {
     ASKBAR_GATEWAY_SERVER_ADDR: '127.0.0.1:' + gatewayServerPort, ASKBAR_GATEWAY_ADMIN_ADDR: '127.0.0.1:' + gatewayAdminPort,
     ASKBAR_GATEWAY_TOKEN_DIR: path.join(dirs.creds, 'model-gateway-token'), ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
   });
+  // A stand-in for the MCP gateway's front (admin listener): GET /status and PUT /config, as the admin's link calls them. It keeps the last
+  // config it was given and answers the version the admin computes (the first 8 bytes of the SHA-256 of the config in the front's field order).
+  const FRONT_FIELDS = ['fetch_max_bytes', 'fetch_timeout_secs', 'fetch_redirects', 'tool_call_timeout_secs', 'one_time_id_window_secs', 'search_results', 'remembered_urls', 'tool_result_max_bytes', 'approval_public_key', 'approval_key_version', 'permissions'];
+  const frontState = { config: null, version: null };
+  const frontPort = await freePort();
+  front = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      const send = (code, text) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(text); };
+      if (!/^Bearer admmcp_/.test(req.headers.authorization || '')) return send(401, '{}');
+      if (req.method === 'GET' && req.url === '/api/mcp-gateway/v1/status') return send(200, '{"config_version":' + frontState.version + ',"boot_id":"e2e-front","calls":{"ok":2},"last_search":null}');
+      if (req.method === 'PUT' && req.url === '/api/mcp-gateway/v1/config') {
+        frontState.config = JSON.parse(body);
+        const ordered = Object.fromEntries(FRONT_FIELDS.map((k) => [k, frontState.config[k]]));
+        frontState.version = BigInt('0x' + require('node:crypto').createHash('sha256').update(JSON.stringify(ordered)).digest('hex').slice(0, 16));
+        return send(200, '{}');
+      }
+      send(404, '{}');
+    });
+  }).listen(frontPort, '127.0.0.1');
   run(path.join(ROOT, 'target/debug/askbar-admin'), [], {
+    ASKBAR_MCP_GATEWAY_URL: 'http://127.0.0.1:' + frontPort,
     ASKBAR_ADMIN_SOCKET: sock, ASKBAR_ADMIN_DATA_DIR: dirs.adminData, ASKBAR_ADMIN_SECRETS_DIR: dirs.adminSecrets,
     ASKBAR_ADMIN_TOKEN_DIR: path.join(dirs.creds, 'admin-token'), ASKBAR_SERVER_API_URL: 'http://127.0.0.1:' + serverApiPort,
     ASKBAR_GATEWAY_URL: 'http://127.0.0.1:' + gatewayAdminPort, ASKBAR_AUDIT_API_URL: 'http://127.0.0.1:' + auditPort,
@@ -1380,6 +1403,98 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.locator('#users [data-user]').count(), 1, 'nothing was deleted');
     await page.click('#user-panel [data-panel-close]');
     await page.waitForSelector('#user-panel', { state: 'hidden' });
+  });
+  // ---- MCP, Egress and Search pages (P8.8a): against the real admin, with the stand-in front above.
+  const H = { 'x-askbar-admin': '1', 'content-type': 'application/json' };
+  const adminJson = (method, url, body) => page.evaluate(async ([m, u, b, h]) => {
+    const r = await fetch(u, { method: m, headers: h, body: b === undefined ? undefined : JSON.stringify(b) });
+    return { status: r.status, body: r.status === 204 ? null : await r.json() };
+  }, [method, url, body, H]);
+  const untilFront = async (ok) => { for (let i = 0; i < 100 && !ok(frontState.config); i++) await new Promise((r) => setTimeout(r, 100)); assert.ok(ok(frontState.config), 'the front was not given the config: ' + JSON.stringify(frontState.config)); };
+  await step('MCP: the page loads with the front answering, and a person\'s search permission is switched on and off and read back', async () => {
+    await openPage('mcp');
+    await page.waitForFunction(() => /Answering/.test(document.querySelector('#mcp-front-state').textContent));
+    const ann = (await adminJson('GET', '/api/admin/v1/users')).body.find((u) => u.name === 'Ann').id;
+    const box = '#mcp-perms tr[data-user="' + ann + '"] input[aria-label="Ann: search"]';
+    await page.waitForSelector(box);
+    assert.equal(await page.isChecked(box), false, 'off until turned on');
+    assert.ok(await page.locator('#mcp-calls tr').count() > 0 && await page.locator('#mcp-key-section').count() === 1);
+    const put = page.waitForResponse((r) => r.url().endsWith('/mcp/permissions/' + ann) && r.request().method() === 'PUT');
+    await page.check(box);
+    assert.equal((await put).status(), 200);
+    assert.deepEqual((await adminJson('GET', '/api/admin/v1/mcp/permissions')).body[ann], { allowed: ['search'], denied: [] });
+    await page.waitForFunction((b) => document.querySelector(b).checked && /On/.test(document.querySelector(b).closest('label').textContent), box);
+    await untilFront((c) => c && c.permissions[ann] && c.permissions[ann].allowed.includes('search'));
+    await page.uncheck(box);
+    await page.waitForFunction(async (a) => !(a in await (await fetch('/api/admin/v1/mcp/permissions')).json()), ann);
+    await untilFront((c) => c && !(ann in c.permissions));
+  });
+  await step('MCP: a name or an error with markup is text', async () => {
+    const BAD = '<img src=x onerror=alert(1)>';
+    const WHY = 'The <b>front</b> is down';
+    await page.route('**/api/admin/v1/users', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const users = await (await route.fetch()).json();
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify([...users, { ...users[0], id: 'u-markup', name: BAD }]) });
+    });
+    await page.route('**/api/admin/v1/mcp/status', async (route) => {
+      const st = await (await route.fetch()).json();
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...st, online: false, configured: false, error: WHY }) });
+    });
+    await page.reload();
+    await page.waitForSelector('#mcp-perms tr[data-user="u-markup"]');
+    assert.equal(await page.locator('#mcp-perms img, #mcp-banner img, #mcp-banner b, #mcp-front-versions b').count(), 0, 'markup never becomes an element');
+    assert.equal(await page.textContent('#mcp-perms tr[data-user="u-markup"] td'), BAD);
+    await page.waitForFunction((w) => document.querySelector('#mcp-front-versions').textContent.includes(w), WHY);
+    assert.ok((await page.textContent('#mcp-banner')).includes(WHY));
+    await page.unroute('**/api/admin/v1/users');
+    await page.unroute('**/api/admin/v1/mcp/status');
+  });
+  await step('Egress: the page loads its sections', async () => {
+    await openPage('egress');
+    for (const id of ['egress-status-section', 'egress-allow-section', 'egress-approvals-section', 'denied-section']) await page.waitForSelector('#' + id);
+    await page.waitForFunction(() => /Answering/.test(document.querySelector('#egress-state').textContent));
+  });
+  await step('Search: the page loads, quick search is switched off and on, and the usage table answers', async () => {
+    await openPage('search');
+    await page.waitForSelector('#search-limits-quick tr[data-limit]');
+    assert.equal(await page.locator('#search-limits-quick tr[data-limit]').count(), 4);
+    assert.equal(await page.locator('#search-limits-mcp tr[data-limit]').count(), 8);
+    await page.waitForFunction(() => /No search yet/.test(document.querySelector('#search-searxng-state').textContent));
+    assert.ok(await page.locator('#search-engines tr').count() > 0, 'the engines are listed');
+    await page.waitForFunction(() => /^The last \d+ days/.test(document.querySelector('#search-usage-note').textContent) && document.querySelector('#search-usage-days tr'));
+    assert.equal(await page.isChecked('#search-on'), true);
+    for (const on of [false, true]) {
+      const put = page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/settings') && r.request().method() === 'PUT');
+      await page.setChecked('#search-on', on);
+      assert.equal((await put).status(), 204);
+      assert.equal((await adminJson('GET', '/api/admin/v1/settings')).body.quick_search_enabled, on);
+      assert.equal(await page.isChecked('#search-on'), on);
+    }
+  });
+  await step('Search: a limit is edited, reaches the front, is reset, and an out-of-range value is refused as text', async () => {
+    const lim = async (name) => (await adminJson('GET', '/api/admin/v1/limits')).body.mcp.find((l) => l.name === name);
+    const row = '#search-limits-mcp tr[data-limit="search_results"]';
+    const { default: def, max } = await lim('search_results');
+    const next = def < max ? def + 1 : def - 1;
+    await page.waitForSelector(row + ' input');
+    assert.equal(await page.isDisabled(row + ' button:has-text("Reset")'), true, 'at its default there is nothing to reset');
+    await page.fill(row + ' input', String(next));
+    await page.click(row + ' button:has-text("Save")');
+    await page.waitForFunction((r) => !document.querySelector(r + ' button.btn-quiet').disabled, row);
+    assert.equal((await lim('search_results')).value, next);
+    assert.equal(await page.inputValue(row + ' input'), String(next));
+    await untilFront((c) => c && c.search_results === next);
+    await page.click(row + ' button:has-text("Reset")');
+    await page.waitForFunction((r) => document.querySelector(r + ' button.btn-quiet').disabled, row);
+    assert.equal(await page.inputValue(row + ' input'), String(def));
+    assert.equal((await lim('search_results')).value, def);
+    await untilFront((c) => c && c.search_results === def);
+    await page.fill(row + ' input', String(max + 1));
+    await page.click(row + ' button:has-text("Save")');
+    await page.waitForFunction(() => { const e = document.querySelector('#page-error'); return !e.hidden && e.textContent.length > 0; });
+    assert.equal(await page.locator('#page-error *').count(), 0, 'the error is text');
+    assert.equal((await lim('search_results')).value, def, 'a refused value changes nothing');
   });
   await step('people: #add-user and #pair-open in the address open their box and leave the address clean', async () => {
     for (const [hash, box] of [['#add-user', 'user-box'], ['#pair-open', 'pair-box']]) {
