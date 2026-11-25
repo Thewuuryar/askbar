@@ -200,7 +200,7 @@ SPEC = {
   "admin": ("alerter-admin audit-admin cpa-admin egress-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
   "auditor": ("audit-admin audit-alerter audit-caddy audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
   "model-gateway": ("audit-model-gateway cpa-gateway egress-model-gateway gateway-admin gateway-server", "model-gateway-token:ro", ""),
-  "alerter": ("alerter-admin alerter-outbound audit-alerter", "alerter-data alerter-token:ro", ""),
+  "alerter": ("alerter-admin audit-alerter egress-alerter", "alerter-data alerter-token:ro", ""),
   "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
   "mock-llm": ("edge egress-outbound", "", ""),
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
@@ -638,13 +638,13 @@ fi
 
 echo "== 3d7. The alerter (ADR 0055)"
 ALERTER=askbar-alerter
-AL_ADMIN="${PROJECT}_alerter-admin"; AL_AUD="${PROJECT}_audit-alerter"; AL_OUT="${PROJECT}_alerter-outbound"
+AL_ADMIN="${PROJECT}_alerter-admin"; AL_AUD="${PROJECT}_audit-alerter"; AL_EGR="${PROJECT}_egress-alerter"; AL_OUT="${PROJECT}_egress-outbound"
 if [ "$(docker inspect -f '{{.State.Running}}' "$ALERTER" 2>/dev/null)" != true ]; then fail "the alerter is not running"; else
   svc_profile "$ALERTER" "the alerter" <<EOF
 health yes
 uid 10005
 caps yes
-nets alerter-admin alerter-outbound audit-alerter|the alerter is on alerter-admin, alerter-outbound and audit-alerter only
+nets alerter-admin audit-alerter egress-alerter|the alerter is on alerter-admin, audit-alerter and egress-alerter only
 owner $ALERTER|/alerter-token/accept/auditor-alerter.sha256|10005 444|the alerter's auditor hash file (owner, mode)
 owner $ALERTER|/alerter-token/accept/admin-alerter.sha256|10005 444|the alerter's admin hash file (owner, mode)
 owner $ALERTER|/alerter-token/call/alerter-auditor.token|10005 400|the alerter's auditor token file (owner, mode)
@@ -668,10 +668,11 @@ EOF
   # Each listener is on its own network's address and nowhere else, and only its own link's token opens it.
   AL_ADMIN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_ADMIN\").IPAddress}}" "$ALERTER")
   AL_AUD_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_AUD\").IPAddress}}" "$ALERTER")
-  AL_OUT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_OUT\").IPAddress}}" "$ALERTER")
+  AL_EGR_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$AL_EGR\").IPAddress}}" "$ALERTER")
   [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/health" GET)" = 200 ] && pass "the admin's listener answers on alerter-admin" || fail "the admin's listener does not answer on alerter-admin"
   [ "$(http "$AL_AUD" "http://$AL_AUD_IP:8085/api/alerter/v1/health" GET)" = 200 ] && pass "the auditor's listener answers on audit-alerter" || fail "the auditor's listener does not answer on audit-alerter"
-  [ "$(http "$AL_OUT" "http://$AL_OUT_IP:8085/api/alerter/v1/health" GET)" = 0 ] && pass "nothing answers on alerter-outbound" || fail "the alerter answers on alerter-outbound"
+  [ "$(http "$AL_EGR" "http://$AL_EGR_IP:8085/api/alerter/v1/health" GET)" = 0 ] && pass "nothing answers on egress-alerter" || fail "the alerter answers on egress-alerter"
+  docker exec "$ALERTER" bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' >/dev/null 2>&1 && fail "the alerter reached the internet directly" || pass "the alerter has no direct route out"
   [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET)" = 401 ] && pass "no token: 401 on the admin's listener" || fail "the admin's listener answers without a token"
   [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "wrong-token")" = 401 ] && pass "a wrong token: 401 on the admin's listener" || fail "a wrong token opened the admin's listener"
   [ "$(http "$AL_ADMIN" "http://$AL_ADMIN_IP:8085/api/alerter/v1/status" GET "$AL_AUD_TOK")" = 401 ] && pass "the auditor's token does not open the admin's listener" || fail "the auditor's token opened the admin's listener"
@@ -712,8 +713,8 @@ req = urllib.request.Request('http://auditor-alerter-host:8083/api/audit/v1/trac
 try: print(urllib.request.urlopen(req, timeout=4).status)
 except urllib.error.HTTPError as e: print(e.code)" 2>&1 | tail -1)
   [ "$ar" = 403 ] && pass "the alerter's token cannot read the auditor's records" || fail "the alerter's token read the auditor's records: '$ar'"
-  # A stand-in ntfy server on alerter-outbound (for this check only), a marker topic and token entered in the admin, a test alert that
-  # reaches the sink with them, a restart that needs no command to bring the settings back, and the marker nowhere it must not be.
+  # A stand-in ntfy server on egress-outbound (for this check only), approved for the alerter through the admin (it is a private
+  # address, P4.4a), a marker topic and token entered in the admin, a test alert that reaches the sink through the proxy with them, a restart that needs no command to bring the settings back, and the marker nowhere it must not be.
   docker rm -f askbar-ntfy-sink >/dev/null 2>&1
   SINK_PY="$(cd "$(dirname "$0")/.." && pwd)/tests/e2e/ntfy_sink.py"
   if docker run -d --rm --name askbar-ntfy-sink --network "$AL_OUT" -v "$SINK_PY:/sink.py:ro" "$PYIMG" python -I /sink.py 8080 0.0.0.0 >/dev/null 2>&1; then
@@ -722,17 +723,19 @@ except urllib.error.HTTPError as e: print(e.code)" 2>&1 | tail -1)
     ALTOK="isolation-token-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
     sink_seen() { py --network "$AL_OUT" -- "import urllib.request; print(urllib.request.urlopen('http://askbar-ntfy-sink:8080/_seen', timeout=4).read().decode())" 2>/dev/null; }
     out=$(admin_script "$(admin_login)
+s, body = call('PUT', '/api/admin/v1/egress/approvals', {'source': 'alerter', 'host': 'askbar-ntfy-sink', 'port': 8080, 'plain_http': True, 'note': 'isolation check'})
+assert s == 200, (s, body)
 s, body = call('PUT', '/api/admin/v1/alerts', {'ntfy': {'server': 'http://askbar-ntfy-sink:8080', 'topic': '$ALMARK', 'token': '$ALTOK'}})
 print(s)" 2>&1 | tail -1)
     [ "$out" = 200 ] && pass "alert delivery settings with a marker topic and token were entered in the admin" || fail "entering the alert settings answered '$out'"
     ok=""
-    for i in $(seq 1 10); do
+    for i in $(seq 1 15); do
       ok=$(admin_script "$(admin_login)
 s, body = call('POST', '/api/admin/v1/alerts/test')
 print(json.loads(body)['results'][0]['ok'] if s == 200 and json.loads(body)['results'] else 'no')" 2>&1 | tail -1)
       [ "$ok" = True ] && break; sleep 2
     done
-    [ "$ok" = True ] && pass "a test alert is delivered through the alerter, over alerter-outbound" || fail "the test alert: '$ok'"
+    [ "$ok" = True ] && pass "a test alert is delivered through the alerter and the egress proxy (its only route out), to a stand-in on egress-outbound" || fail "the test alert: '$ok'"
     seen=$(sink_seen)
     case "$seen" in *"/$ALMARK"*"Bearer $ALTOK"*) pass "the sink received the test alert on the topic, with the token";; *) fail "the sink did not get the test alert as expected: $seen";; esac
     # A restart: the settings were only in memory, so the admin has to push them again, with no command.
@@ -799,7 +802,7 @@ call('DELETE', '/api/admin/v1/audit/session')" 2>&1 | tail -1)
 print(call('PUT', '/api/admin/v1/alerts', {'ntfy': None})[0])" >/dev/null 2>&1
     docker rm -f askbar-ntfy-sink >/dev/null 2>&1
   else
-    fail "could not start the stand-in ntfy server on alerter-outbound"
+    fail "could not start the stand-in ntfy server on egress-outbound"
   fi
 fi
 
@@ -829,7 +832,9 @@ EOF
   docker exec "$EGP" bash -c 'getent hosts askbar-model-gateway' >/dev/null 2>&1 && pass "the egress proxy resolves the gateway (they share egress-model-gateway)" || fail "the egress proxy cannot resolve the gateway on egress-model-gateway"
   # cpa is on egress-cpa with the proxy (P4.3b), so it resolves it too.
   docker exec "$EGP" bash -c 'getent hosts cpa' >/dev/null 2>&1 && pass "the egress proxy resolves cpa (they share egress-cpa)" || fail "the egress proxy cannot resolve cpa on egress-cpa"
-  for h in caddy server auditor askbar-alerter mock-llm; do
+  # The alerter is on egress-alerter with the proxy (P4.3c), so it resolves it too.
+  docker exec "$EGP" bash -c 'getent hosts askbar-alerter' >/dev/null 2>&1 && pass "the egress proxy resolves the alerter (they share egress-alerter)" || fail "the egress proxy cannot resolve the alerter on egress-alerter"
+  for h in caddy server auditor mock-llm; do
     docker exec "$EGP" bash -c "getent hosts $h" >/dev/null 2>&1 && fail "the egress proxy resolves $h" || pass "the egress proxy cannot resolve $h"
   done
   for t in auditor/8083 server/8080 admin/8084; do
