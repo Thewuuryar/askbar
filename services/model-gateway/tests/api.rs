@@ -1395,6 +1395,112 @@ async fn reserve_tool_call_refuses_past_the_pushed_limit_and_uses_the_default_be
     assert!(rig.gw.reserve_tool_call("v").is_ok(), "tasks do not share");
 }
 
+// ------------------------------------------------------------------ research approvals (plan P5B.2)
+
+impl Rig {
+    async fn rs(&self, task: &str, user: &str, tool: &str, arguments: Value) -> (u16, Value) {
+        let body = json!({"task_id": task, "user": user, "tool": tool, "arguments": arguments});
+        let url = format!("{}/api/model-gateway/v1/approvals/research", self.server);
+        problem_of(self.http.post(url).bearer_auth(SRV).json(&body).send().await.unwrap()).await
+    }
+}
+
+#[tokio::test]
+async fn research_refusals_have_their_own_codes_and_only_an_approval_uses_a_tool_call() {
+    let (rig, _) = qs_rig(true, |c| {
+        c.task_limits.tool_calls = 2;
+        c.quick_search.max_query_chars = 20;
+        c.quick_search_enabled = false; // the route does not look at it
+    })
+    .await;
+    let long = json!({"query": QS_MARKER.repeat(3)});
+    let cases = [
+        ("shell", json!({"url": "https://a.example/"}), 400, "quick_search_tool"),
+        ("search", long, 400, "quick_search_arguments"),
+        ("fetch", json!({"query": "x"}), 400, "quick_search_arguments"),
+    ];
+    for (tool, args, status, code) in cases {
+        let (s, b) = rig.rs("t1", "user1", tool, args).await;
+        assert_eq!((s, b["error"].as_str()), (status, Some(code)), "{b}");
+        assert!(b.get("approval").is_none());
+    }
+    for _ in 0..2 {
+        assert_eq!(rig.rs("t1", "user1", "search", json!({"query": "a"})).await.0, 200, "refusals used no call");
+    }
+    let (s, b) = rig.rs("t1", "user1", "fetch", json!({"url": "https://a.example/"})).await;
+    assert_eq!((s, b["error"].as_str()), (429, Some("task_tool_calls")));
+    assert_eq!(rig.rs("t2", "user1", "search", json!({"query": "a"})).await.0, 200, "another task has its own limit");
+    let rows = rig.wait_rows("SELECT kind, name, status, error_code FROM spans WHERE trace_id = 't1' AND status = 'blocked'").await;
+    assert_eq!(rows[0], vec![json!("gate"), json!("research_approval"), json!("blocked"), json!("quick_search_tool")]);
+    assert_eq!(rig.provider_calls(), 0);
+}
+
+#[tokio::test]
+async fn research_is_refused_when_off_paused_or_killed_and_by_decide_too() {
+    let (rig, _) = qs_rig(true, |c| c.research_enabled = false).await;
+    let (s, b) = rig.rs("g1", "u1", "search", json!({"query": QS_MARKER})).await;
+    assert_eq!((s, b["error"].as_str()), (503, Some("research_disabled")));
+    let (s, b) = rig.judge("g1", "u1", r#"{"verdict":"approve"}"#).await;
+    assert_eq!((s, b["error"].as_str()), (503, Some("research_disabled")));
+    let rows = rig.wait_rows("SELECT attrs_json FROM spans WHERE trace_id = 'g1'").await;
+    assert!(!format!("{rows:?}").contains(QS_MARKER));
+    let (rig, _) = qs_rig(true, |c| c.paused_users = vec!["u1".into()]).await;
+    assert_eq!(rig.rs("g1", "u1", "search", json!({"query": "a"})).await.1["error"], "user_paused");
+    assert_eq!(rig.rs("g2", "u2", "search", json!({"query": "a"})).await.0, 200);
+    let (rig, _) = qs_rig(true, |c| c.kill_switch = true).await;
+    assert_eq!(rig.rs("g1", "u2", "search", json!({"query": "a"})).await.1["error"], "kill_switch");
+}
+
+#[tokio::test]
+async fn a_research_approval_verifies_at_the_mcp_front_and_leaves_no_text() {
+    use askbar_proto::approval::{Approval, Provenance, ToolAction};
+    use askbar_service::approval::{verify, OneTimeIds};
+    struct Any;
+    impl OneTimeIds for Any {
+        fn consume(&self, _: &str, _: i64) -> bool {
+            true
+        }
+    }
+    let (rig, public) = qs_rig(true, |_| {}).await;
+    let now = askbar_service::audit_client::now_parts().0;
+    for (tool, args) in
+        [("search", json!({"query": QS_MARKER})), ("fetch", json!({"url": format!("https://Docs.Example:443/{QS_MARKER}?q=1")}))]
+    {
+        let (s, b) = rig.rs("task-ok", "user1", tool, args.clone()).await;
+        assert_eq!(s, 200, "{b}");
+        let a: Approval = serde_json::from_value(b["approval"].clone()).unwrap();
+        let action = ToolAction {
+            tool: tool.into(),
+            arguments: args,
+            destination: b["destination"].as_str().unwrap().into(),
+            provenance: serde_json::from_value::<Provenance>(b["provenance"].clone()).unwrap(),
+            query_data: b["query_data"].as_bool().unwrap(),
+        };
+        assert_eq!((action.provenance, action.query_data), (Provenance::Search, false));
+        assert_eq!(action.destination, if tool == "fetch" { "docs.example" } else { "" });
+        verify(&a, &action, &public, now, &Any).unwrap();
+        assert_eq!(a.task_id, "task-ok");
+        let rows = rig.rows(&format!(
+            "SELECT attrs_json FROM spans WHERE trace_id = 'task-ok' AND name = 'research_approval' AND attrs_json LIKE '%{}%'",
+            a.one_time_id
+        ));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0][0].as_str().unwrap().contains(&a.action_hash));
+    }
+    let all = format!("{:?}", rig.rows("SELECT attrs_json, name FROM spans"));
+    assert!(!all.contains(QS_MARKER) && !all.contains("docs.example"), "{all}");
+}
+
+#[tokio::test]
+async fn a_research_approval_whose_span_is_not_acknowledged_signs_nothing_and_gives_the_call_back() {
+    let (rig, _) = qs_rig(false, |c| c.task_limits.tool_calls = 1).await;
+    for _ in 0..3 {
+        let (s, b) = rig.rs("t1", "u1", "search", json!({"query": "a"})).await;
+        assert_eq!((s, b["error"].as_str()), (503, Some("audit_backlog")), "{b}");
+        assert!(b.get("approval").is_none());
+    }
+}
+
 // ------------------------------------------------------------------ POST /decide, the judge (plan P5.6)
 
 const JUDGE_MARKER: &str = "judge-marker-words";
