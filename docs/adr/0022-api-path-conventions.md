@@ -21,6 +21,7 @@ Each API needs a predictable path and its own version. The admin prefix currentl
 | Model gateway | `/api/model-gateway/v1` | `model-gateway` | `server`, `admin`, and the judge | Internal |
 | Alerter | `/api/alerter/v1` | `alerter` | `auditor` and `admin` | Internal |
 | Egress proxy | `/api/egress-proxy/v1` | `egress-proxy` | `admin` | Internal |
+| MCP gateway | `/api/mcp-gateway/v1` | `mcp-gateway` | `server` and `admin` | Internal |
 | Executor, after v1 | `/api/executor/v1` | `server` | Executor | Through `executor-link` only |
 
 Every API uses `/api/{name}/v{major}`. The admin site stays at `/admin`, and its session cookie uses `Path=/api/admin`, so the cookie goes only to the admin API. Any admin allowlist covers both `/admin` and `/api/admin`.
@@ -91,3 +92,4 @@ Caddy routes only `/admin`, `/api/admin`, and `/api/client`, and answers 404 for
 - 2026-11-08: `POST /spaces/{space_id}/conversations` dropped, by the owner; the list is the nine routes the code registers ([0048](0048-drop-post-space-conversations.md)).
 - 2026-11-10: merged in 0047 and 0048; the list above is how it stands.
 - 2026-11-25 (accepted by the owner): the egress proxy has its own API, `/api/egress-proxy/v1`, served by `egress-proxy`, called by `admin` and internal ([0056](0056-egress-proxy.md)); its row is in the table above.
+- 2026-11-25 (proposed, not yet accepted by the owner): the MCP gateway has its own API, `/api/mcp-gateway/v1`, served by `mcp-gateway`, called by `server` and `admin`, internal; its row is in the table above.
