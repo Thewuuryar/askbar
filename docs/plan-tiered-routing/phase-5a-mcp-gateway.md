@@ -87,7 +87,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/auditor/src/lib.rs` (`LINKS`, `may_start`), `compose.yaml`, `services/bootstrap/src/{links,write}.rs`, `scripts/check-isolation.sh`, tests.
   Do: add an `mcp-gateway-auditor` entry to `LINKS` with its bootstrap token; add the audit network `audit-mcp-gateway` for the front in compose; add a `may_start` arm for `mcp-gateway` that allows `tool` spans only. Amend ADR 0010 and ADR 0051 in P5A.34 and P5A.35.
   Accept: the front can open a tool span and nothing else (a `turn` or `gate` start is refused); `scripts/check-isolation.sh` passes (CI).
-- [ ] **P5A.9** `feat(mcp-gateway): write the audit span before each call` · sonnet · after P5A.8, P5A.9a
+- [x] **P5A.9** `feat(mcp-gateway): write the audit span before each call` · sonnet · after P5A.8, P5A.9a
   Files: `services/mcp-gateway/src/{audit,call}.rs`, `docs/style/logging-and-audit.md`.
   Do: through the Rust `AuditClient` open the span (user, task, tool, approval ID, argument hash, no argument text) and run the tool only after the auditor acknowledges; a fetch records the full URL in a span of its own before each hop (P5A.15); if the auditor does not acknowledge, refuse the call (fail closed); close the span with the outcome.
   Accept: a test with an unreachable auditor refuses the call and the tool never runs; a log grep for a marker argument finds nothing.

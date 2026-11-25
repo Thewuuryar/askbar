@@ -2,8 +2,9 @@
 //!
 //! - **Config by push.** The admin pushes the tool limits in `PUT /config` (ADR 0028). A bad push is refused and the old
 //!   config stays live. Until the first push every tool call is refused ([`Gateway::admit`]) and the defaults apply.
-//! - **One tool route.** `POST /tools/{tool}/call` checks the signed approval, then refuses (`tool_not_available`): the
-//!   permission check, the audit spans and the tools follow.
+//! - **One tool route.** `POST /tools/{tool}/call` checks the signed approval, then writes a `tool` span and waits for
+//!   the auditor's acknowledgement (no acknowledgement: `503 audit_backlog`, nothing runs), then refuses
+//!   (`tool_not_available`): the permission check and the tools follow.
 //! - **Links.** One listener, two token links ([`LINKS`]): the admin's (status, config) and the server's (the tool call). A token that matches no link, or a route the link may not call, is refused.
 
 pub mod approval;
@@ -16,6 +17,7 @@ use askbar_proto::http::ApiError;
 use askbar_proto::links::{ADMIN_MCP_GATEWAY, SERVER_MCP_GATEWAY};
 use askbar_proto::paths::MCP_GATEWAY_V1;
 use askbar_proto::ErrorCode;
+use askbar_service::audit_client::AuditClient;
 use askbar_service::configured::Gate;
 use askbar_service::links::{self, Allow, Link, LinkDef, Links, Routes};
 use askbar_service::status::BootId;
@@ -28,6 +30,7 @@ use config::Config;
 use status::Status;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -37,16 +40,22 @@ pub struct Gateway {
     pub boot_id: BootId,
     /// `host:port` of `searxng` (an address, never a secret); unset means search has nowhere to go.
     pub searxng_addr: Option<String>,
+    /// The link to the auditor; `None` (a native run) refuses every call, as no call may run unrecorded.
+    audit: Option<Arc<AuditClient>>,
+    /// How many times a tool has run, for the tests: it must stay 0 when the audit span is not acknowledged.
+    pub tool_runs: AtomicU64,
     config: RwLock<Option<Arc<Config>>>,
     calls: Mutex<BTreeMap<&'static str, u64>>,
     one_time_ids: approval::OneTimeStore,
 }
 
 impl Gateway {
-    pub fn new(boot_id: BootId, searxng_addr: Option<String>) -> Arc<Gateway> {
+    pub fn new(boot_id: BootId, searxng_addr: Option<String>, audit: Option<Arc<AuditClient>>) -> Arc<Gateway> {
         Arc::new(Gateway {
             boot_id,
             searxng_addr,
+            audit,
+            tool_runs: AtomicU64::new(0),
             config: RwLock::new(None),
             calls: Mutex::new(BTreeMap::new()),
             one_time_ids: Default::default(),
@@ -55,6 +64,10 @@ impl Gateway {
 
     fn applied(&self) -> Option<Arc<Config>> {
         self.config.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn audit(&self) -> Option<&Arc<AuditClient>> {
+        self.audit.as_ref()
     }
 
     pub fn is_configured(&self) -> bool {

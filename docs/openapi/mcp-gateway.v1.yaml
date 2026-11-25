@@ -35,7 +35,7 @@ paths:
       summary: Which config this process runs, which process it is, and tool calls by outcome.
       description: >-
         `config_version` is null until the admin has pushed. `calls` counts by outcome (for example
-        `refused_not_configured`); it holds no key, argument or URL.
+        `refused_not_configured`, `refused_audit_unavailable`); it holds no key, argument or URL.
       responses:
         '200':
           description: Status.
@@ -85,8 +85,10 @@ paths:
         `id` is the tool name. The front rebuilds the action from the path and the body, then checks, in order: a config
         with an approval public key is held (else `503 not_configured`); the approval (its own code for each failure:
         `approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`,
-        `approval_replayed`, `approval_unsignable`); each approval passes once. A valid approval reaches the next checks,
-        which are not built yet and answer `501 tool_not_available`. The admin link gets `403`. No answer repeats an
+        `approval_replayed`, `approval_unsignable`); each approval passes once; then a `tool` span (the approval's hash and
+        ID, never the arguments) is written to the auditor and its acknowledgement awaited: without it `503 audit_backlog`
+        with `Retry-After`, nothing runs, and this includes a front with no auditor link. The span is closed with the
+        outcome. The tools are not built yet and answer `501 tool_not_available`. The admin link gets `403`. No answer repeats an
         argument, a URL or a signature.
       parameters:
         - name: id
@@ -128,7 +130,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '503':
-          $ref: '#/components/responses/NotConfigured'
+          description: The admin has not pushed the config yet (`not_configured`), or the call could not be recorded (`audit_backlog`); both with `Retry-After`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
     linkToken:

@@ -15,7 +15,7 @@ const SERVER_TOKEN: &str = "srvmcp_secret";
 async fn start(links: impl FnOnce(&std::path::Path) -> Links) -> (String, Arc<Gateway>) {
     let dir = std::env::temp_dir().join(format!("askbar-mcp-gateway-{}", BootId::new().as_str()));
     std::fs::create_dir_all(&dir).unwrap();
-    let g = Gateway::new(BootId::new(), Some("searxng-marker-host:8080".into()));
+    let g = Gateway::new(BootId::new(), Some("searxng-marker-host:8080".into()), None);
     let app = router(g.clone(), links(&dir));
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/api/mcp-gateway/v1", l.local_addr().unwrap());
