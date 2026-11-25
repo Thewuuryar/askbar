@@ -1324,3 +1324,73 @@ async fn quick_search_signs_nothing_when_the_span_is_not_acknowledged() {
         assert_eq!(rig.qs("g1", "u1", "search", json!({"query": "a"})).await.1["error"], "audit_backlog");
     }
 }
+
+// ------------------------------------------------------------------ the task token cap and tool-call limit (plan P5.10)
+
+async fn status_of(rig: &Rig) -> Value {
+    rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap().json().await.unwrap()
+}
+
+fn task_req(rig: &Rig, generation: &str, role: Role) -> ChatRequest {
+    let mut req = rig.request("p", generation, "hello");
+    req.role = Some(role);
+    req
+}
+
+#[tokio::test]
+async fn a_task_at_its_cap_is_refused_with_no_call_and_other_roles_and_tasks_are_not_counted() {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.role_pins.insert(Role::ResearchResearcher, "p/m".into());
+    cfg.role_pins.insert(Role::ChatManual, "p/m".into());
+    cfg.task_limits.token_cap = 20_000;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    assert_eq!(status_of(&rig).await["task_cap_75"], 0);
+
+    // The mock reports 150 tokens a call; a real call is counted, a chat.manual call is not.
+    assert!(matches!(rig.chat(&task_req(&rig, "task-a", Role::ResearchResearcher)).await.last(), Some(ChatEvent::Done { .. })));
+    assert!(matches!(rig.chat(&task_req(&rig, "task-a", Role::ChatManual)).await.last(), Some(ChatEvent::Done { .. })));
+    // Fill task-a to 14,850, then each call crosses a mark once: 75% is 15,000, 90% is 18,000.
+    rig.gw.tasks.lock().unwrap().add_tokens("task-a", 14_700, 20_000);
+    assert_eq!(status_of(&rig).await["task_cap_75"], 0, "150 + 14,700 is below 75%, and chat.manual did not count");
+    rig.chat(&task_req(&rig, "task-a", Role::ResearchResearcher)).await;
+    let s = status_of(&rig).await;
+    assert_eq!((s["task_cap_75"].as_u64(), s["task_cap_90"].as_u64()), (Some(1), Some(0)));
+    rig.chat(&task_req(&rig, "task-a", Role::ResearchResearcher)).await;
+    assert_eq!(status_of(&rig).await["task_cap_75"], 1, "counted once");
+    rig.gw.tasks.lock().unwrap().add_tokens("task-a", 3_000, 20_000);
+    rig.gw.tasks.lock().unwrap().add_tokens("task-a", 2_000, 20_000);
+    let s = status_of(&rig).await;
+    assert_eq!((s["task_cap_75"].as_u64(), s["task_cap_90"].as_u64()), (Some(1), Some(1)));
+    assert!(s.as_object().unwrap().keys().all(|k| ["config_version", "boot_id", "task_cap_75", "task_cap_90"].contains(&k.as_str())));
+    assert!(!s.to_string().contains("task-a") && !s.to_string().contains("user1"));
+
+    // At the cap: refused, no provider called, with its own code and a gate span. Another task is not.
+    let calls = rig.provider_calls();
+    let (status, body) = problem_of(rig.chat_raw(&task_req(&rig, "task-a", Role::ResearchResearcher)).await).await;
+    assert_eq!((status, body["error"].as_str()), (402, Some("task_token_cap")));
+    assert_eq!(rig.provider_calls(), calls);
+    let rows =
+        rig.wait_rows("SELECT kind, name, status, error_code FROM spans WHERE trace_id = 'task-a' AND name = 'task_token_cap'").await;
+    assert_eq!(rows[0], vec![json!("gate"), json!("task_token_cap"), json!("blocked"), json!("task_token_cap")]);
+    assert!(matches!(rig.chat(&task_req(&rig, "task-b", Role::ResearchResearcher)).await.last(), Some(ChatEvent::Done { .. })));
+    // A non-task role on the same id is still served.
+    assert!(matches!(rig.chat(&task_req(&rig, "task-a", Role::ChatManual)).await.last(), Some(ChatEvent::Done { .. })));
+}
+
+#[tokio::test]
+async fn reserve_tool_call_refuses_past_the_pushed_limit_and_uses_the_default_before_a_push() {
+    let rig = rig().await;
+    for _ in 0..askbar_proto::research::DEFAULT_TOOL_CALLS {
+        assert!(rig.gw.reserve_tool_call("t").is_ok());
+    }
+    assert_eq!(rig.gw.reserve_tool_call("t"), Err(askbar_proto::ErrorCode::TaskToolCalls));
+    rig.gw.release_tool_call("t");
+    assert!(rig.gw.reserve_tool_call("t").is_ok());
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.task_limits.tool_calls = 1;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    assert!(rig.gw.reserve_tool_call("u").is_ok());
+    assert_eq!(rig.gw.reserve_tool_call("u"), Err(askbar_proto::ErrorCode::TaskToolCalls));
+    assert!(rig.gw.reserve_tool_call("v").is_ok(), "tasks do not share");
+}
