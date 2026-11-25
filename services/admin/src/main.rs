@@ -164,6 +164,14 @@ async fn main() {
         let _ = state.egress.set(egress.clone());
         tokio::spawn(egress.run(state.clone()));
     }
+    // The MCP gateway's front refuses every call until it is given its config (ADR 0028). Unset means none (a native run).
+    if let Some(url) = askbar_admin::mcp_link::front_url() {
+        let token = askbar_admin::mcp_link::read_token(&askbar_admin::server_link::token_dir()).unwrap_or_else(|e| die(e, 1));
+        let mcp = askbar_admin::mcp_link::McpLink::new(&url, token);
+        mcp.set_notifier(state.notifier.clone());
+        let _ = state.mcp.set(mcp.clone());
+        tokio::spawn(mcp.run(state.clone()));
+    }
     if let Err(e) = askbar_admin::serve_unix(&askbar_admin::socket_path(), askbar_admin::router(state)).await {
         die(e, 1);
     }

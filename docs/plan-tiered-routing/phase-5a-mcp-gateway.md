@@ -125,7 +125,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/admin/src/mcp.rs`, `db.rs` migration, OpenAPI, tests.
   Do: per user and tool (the built-in names from `askbar-proto`): allow or deny, default off for every tool (ADR 0019); an API to read and set them; each change is an admin action; deleted with the user.
   Accept: a user with no row holds nothing; set and read round-trip; user-delete test removes rows.
-- [ ] **P5A.18** `feat(admin): push MCP config to the front` · sonnet · after P5A.17, P5A.6a, P5.3
+- [x] **P5A.18** `feat(admin): push MCP config to the front` · sonnet · after P5A.17, P5A.6a, P5.3
   Files: `services/admin/src/mcp_link.rs` (new), tests.
   Do: push permissions, the constants the front uses and the approval public key to the front's `PUT /config` over `admin-mcp-gateway`, re-pushing on a version mismatch at the interval in `constants.rs` (ADR 0028); a rejected push shows its error and does not loop faster than the interval. When P5A.16 lands the push also carries the server registry and credentials.
   Accept: a fake front receives the push; a changed permission changes the version; an old front that ignores new fields still accepts; no key in logs.

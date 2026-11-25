@@ -1,6 +1,6 @@
 //! Per-user permissions for the built-in MCP tools (ADR 0019, plan step P5A.17). Off by default: a user with no row holds
 //! nothing. Each change is an audited admin action (user id and counts only), refused when the record cannot be appended.
-//! [`permissions_config`] is the shape `mcp-gateway`'s `PUT /config` takes; the push itself is P5A.18.
+//! [`permissions_config`] is the shape `mcp-gateway`'s `PUT /config` takes; pushed by `mcp_link`.
 
 use crate::web::{err, Failure};
 use crate::AdminState;
@@ -33,6 +33,12 @@ pub fn permissions_config(conn: &Connection) -> rusqlite::Result<BTreeMap<String
 }
 
 type St = State<Arc<AdminState>>;
+/// The front gets the new permissions now, not at its next check.
+fn mark_dirty(state: &AdminState) {
+    if let Some(l) = state.mcp.get() {
+        l.mark_dirty();
+    }
+}
 fn internal(_: rusqlite::Error) -> Failure {
     err(StatusCode::INTERNAL_SERVER_ERROR, "The admin could not read or store the permissions.")
 }
@@ -83,6 +89,7 @@ pub async fn put(
         return Err(err(StatusCode::BAD_REQUEST, "Too many users have permissions."));
     }
     tx.commit().map_err(internal)?;
+    mark_dirty(&state);
     Ok(Json(t))
 }
 
@@ -99,5 +106,6 @@ pub async fn delete(
     if gone == 0 {
         return Err(err(StatusCode::NOT_FOUND, "That user has no permissions set."));
     }
+    mark_dirty(&state);
     Ok(StatusCode::NO_CONTENT)
 }

@@ -75,6 +75,9 @@ if [ -z "$URL" ]; then
   if [ ! -x "$ALBIN" ]; then cargo build -q -p askbar-alerter || { fail "build the alerter"; exit 1; }; fi
   EBIN="${ASKBAR_EGRESS_PROXY_BIN:-target/debug/askbar-egress-proxy}"
   if [ ! -x "$EBIN" ]; then cargo build -q -p askbar-egress-proxy || { fail "build the egress proxy"; exit 1; }; fi
+  MBIN="${ASKBAR_MCP_GATEWAY_BIN:-target/debug/askbar-mcp-gateway}"
+  if [ ! -x "$MBIN" ]; then cargo build -q -p askbar-mcp-gateway || { fail "build the MCP gateway's front"; exit 1; }; fi
+  MCP_SERVER_PORT=$(free_port); MCP_ADMIN_PORT=$(free_port)
   API_PORT=$(free_port); SERVER_API_PORT=$(free_port); MOCK_PORT=$(free_port)
   AUDIT_PORT=$(free_port); GW_SERVER_PORT=$(free_port); GW_ADMIN_PORT=$(free_port)
   AL_AUDITOR_PORT=$(free_port); AL_ADMIN_PORT=$(free_port); NTFY_PORT=$(free_port)
@@ -101,10 +104,14 @@ if [ -z "$URL" ]; then
   ASKBAR_EGRESS_PROXY_TOKEN_DIR="$WORK/credentials/egress-proxy-token" ASKBAR_EGRESS_PROXY_ADMIN_ADDR="127.0.0.1:$EG_ADMIN_PORT" \
     ASKBAR_EGRESS_PROXY_SOURCES="model-gateway=127.0.0.1:$EG_GW_PORT,cpa=127.0.0.1:$EG_CPA_PORT,alerter=127.0.0.1:$EG_AL_PORT" \
     ASKBAR_EGRESS_PROXY_RELAYS="" "$EBIN" >"$WORK/egress-proxy.log" 2>&1 & PIDS+=($!)
+  # The MCP gateway's front (ADR 0057): it refuses every call until the admin pushes its config.
+  ASKBAR_MCP_GATEWAY_SERVER_ADDR="127.0.0.1:$MCP_SERVER_PORT" ASKBAR_MCP_GATEWAY_ADMIN_ADDR="127.0.0.1:$MCP_ADMIN_PORT" \
+    ASKBAR_MCP_GATEWAY_TOKEN_DIR="$WORK/credentials/mcp-gateway-token" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
+    "$MBIN" >"$WORK/mcp-gateway.log" 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
   ASKBAR_ADMIN_SOCKET="$SOCK" ASKBAR_ADMIN_DATA_DIR="$WORK/admin-data" ASKBAR_ADMIN_SECRETS_DIR="$WORK/admin-secrets" \
     ASKBAR_ADMIN_TOKEN_DIR="$WORK/credentials/admin-token" ASKBAR_SERVER_API_URL="http://127.0.0.1:$SERVER_API_PORT" ASKBAR_PUBLIC_URL="$URL" \
-    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" ASKBAR_ALERTER_URL="http://127.0.0.1:$AL_ADMIN_PORT" ASKBAR_EGRESS_PROXY_URL="http://127.0.0.1:$EG_ADMIN_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
+    ASKBAR_GATEWAY_URL="http://127.0.0.1:$GW_ADMIN_PORT" ASKBAR_ALERTER_URL="http://127.0.0.1:$AL_ADMIN_PORT" ASKBAR_EGRESS_PROXY_URL="http://127.0.0.1:$EG_ADMIN_PORT" ASKBAR_MCP_GATEWAY_URL="http://127.0.0.1:$MCP_ADMIN_PORT" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" "$ABIN" >"$WORK/admin.log" 2>&1 & PIDS+=($!)
   for _ in $(seq 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
   # The server: the API, and a server listener that only the admin's token opens.
   ASKBAR_CLIENT_API_ADDR="127.0.0.1:$API_PORT" \
@@ -341,6 +348,17 @@ if [ $LOCAL = 1 ]; then
     sleep 0.2
   done
   if [ "$(json "$WORK/egress-status.json" "d['configured']")" = "True" ]; then pass "the admin pushed the allowlists and the egress proxy is configured"; else fail "the egress proxy is configured" "$(cat "$WORK/egress-status.json" 2>/dev/null)"; fi
+fi
+
+# 10e. The MCP gateway's front (local, ADR 0028): the admin pushed its config, so the front reports a version. The token is the admin's own.
+if [ $LOCAL = 1 ]; then
+  MG_TOKEN=$(cat "$WORK/credentials/admin-token/call/admin-mcp-gateway.token" 2>/dev/null)
+  for _ in $(seq 100); do
+    curl -fsS -H "Authorization: Bearer $MG_TOKEN" "http://127.0.0.1:$MCP_ADMIN_PORT/api/mcp-gateway/v1/status" >"$WORK/mcp-status.json" 2>/dev/null \
+      && [ "$(json "$WORK/mcp-status.json" "d['config_version'] is not None")" = "True" ] && break
+    sleep 0.2
+  done
+  if [ "$(json "$WORK/mcp-status.json" "d['config_version'] is not None")" = "True" ]; then pass "the admin pushed its config and the MCP gateway's front is configured"; else fail "the MCP gateway's front is configured" "$(cat "$WORK/mcp-status.json" 2>/dev/null)"; fi
 fi
 
 # 11. What only a person can check.

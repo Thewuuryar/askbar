@@ -832,6 +832,7 @@ nets audit-mcp-gateway egress-fetch mcp-admin mcp-searxng mcp-server|the front i
 owner $MCPG|/mcp-gateway-token/accept/server-mcp-gateway.sha256|10007 444|the front's server hash file (owner, mode)
 owner $MCPG|/mcp-gateway-token/accept/admin-mcp-gateway.sha256|10007 444|the front's admin hash file (owner, mode)
 owner $MCPG|/mcp-gateway-token/call/mcp-gateway-auditor.token|10007 400|the front's auditor token file (owner, mode)
+owner $ADMIN|/admin-token/call/admin-mcp-gateway.token|10001 400|the admin's MCP gateway token file (owner, mode)
 dirs $MCPG|10007 500|the front's|/mcp-gateway-token /mcp-gateway-token/call /mcp-gateway-token/accept
 EOF
   MG_SRV_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MG_SRV\").IPAddress}}" "$MCPG")
@@ -839,6 +840,15 @@ EOF
   MG_FETCH_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MG_FETCH\").IPAddress}}" "$MCPG")
   [ "$(http "$MG_SRV" "http://$MG_SRV_IP:8087/api/mcp-gateway/v1/health" GET)" = 200 ] && pass "the server's listener answers on mcp-server" || fail "the server's listener does not answer on mcp-server"
   [ "$(http "$MG_ADM" "http://$MG_ADM_IP:8087/api/mcp-gateway/v1/health" GET)" = 200 ] && pass "the admin's listener answers on mcp-admin" || fail "the admin's listener does not answer on mcp-admin"
+  # The admin gives the front its config (ADR 0028, every 12 seconds): /status through the admin's link token, from a throwaway container on mcp-admin.
+  mg_cfg=""; for _ in $(seq 1 20); do
+    mg_cfg=$(py --network "$MG_ADM" -e "X_TOK=$(docker exec "$ADMIN" cat /admin-token/call/admin-mcp-gateway.token 2>/dev/null)" -e "X_IP=$MG_ADM_IP" -- '
+import json, os, urllib.request
+r = urllib.request.Request("http://" + os.environ["X_IP"] + ":8087/api/mcp-gateway/v1/status", headers={"authorization": "Bearer " + os.environ["X_TOK"]})
+print(json.load(urllib.request.urlopen(r, timeout=5))["config_version"] is not None)' 2>/dev/null | tail -1)
+    [ "$mg_cfg" = True ] && break; sleep 3
+  done
+  [ "$mg_cfg" = True ] && pass "the admin has given the front its config" || fail "the front is still unconfigured: the admin has not pushed its config"
   # Nothing answers on egress-fetch but the proxy: a positive control in the same container, then every port of the front.
   got=$(py --network "$MG_FETCH" -e "X_IP=$MG_FETCH_IP" -- '
 import os, socket

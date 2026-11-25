@@ -1,6 +1,6 @@
 //! The approval signing key (plan step P5.3): made once, kept in `admin.db` encrypted with `admin.key` (as the provider keys
 //! are, so a backup holds it only encrypted, ADR 0013) and pushed to `model-gateway` in `PUT /config`, which holds it in memory.
-//! The public key and version stay here for the MCP front's push (P5A.18). No key is logged, shown or returned by anything here.
+//! The public key and version stay here for the MCP front's push (`mcp_link`). No key is logged, shown or returned by anything here.
 
 use crate::secrets::AdminSecrets;
 use askbar_proto::gateway::ApprovalSigningKey;

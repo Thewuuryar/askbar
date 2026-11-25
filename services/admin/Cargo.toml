@@ -39,6 +39,7 @@ futures-util = "0.3"
 askbar-server = { path = "../server", features = ["test-rig"] }
 askbar-bootstrap = { path = "../bootstrap" }
 askbar-model-gateway = { path = "../model-gateway" }
+askbar-mcp-gateway = { path = "../mcp-gateway" }
 askbar-audit = { path = "../../crates/askbar-audit" }
 askbar-auditor = { path = "../auditor" }
 
