@@ -338,11 +338,18 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P8.4](plan-tiered-routing/phase-8-admin-ui.md)** add the dry-run panel and decider comparison
 - [ ] **[P8.5](plan-tiered-routing/phase-8-admin-ui.md)** add example labeling and shared-question review
 - [ ] **[P8.6](plan-tiered-routing/phase-8-admin-ui.md)** add spend and subscription limit views
-- [ ] **[P8.6a](plan-tiered-routing/phase-8-admin-ui.md)** add MCP server and tool permission pages · W6
+- [ ] **[P8.6a](plan-tiered-routing/phase-8-admin-ui.md)** add the MCP page · W6
+- [ ] **[P8.6c](plan-tiered-routing/phase-8-admin-ui.md)** add the egress page · W6
+- [ ] **[P8.6d](plan-tiered-routing/phase-8-admin-ui.md)** make the quick search and MCP limits editable · W6
+- [ ] **[P8.6e](plan-tiered-routing/phase-8-admin-ui.md)** turn quick search on and off · W6
+- [ ] **[P8.6f](plan-tiered-routing/phase-8-admin-ui.md)** add the search page · W6
+- [ ] **[P8.6g](plan-tiered-routing/phase-8-admin-ui.md)** add MCP server registry pages
 - [ ] **[P8.6b](plan-tiered-routing/phase-8-admin-ui.md)** add agent task views
 - [ ] **[P8.7](plan-tiered-routing/phase-8-admin-ui.md)** add script review
-- [ ] **[P8.8](plan-tiered-routing/phase-8-admin-ui.md)** cover the routing, MCP and task pages at 1280 and 390
+- [ ] **[P8.8](plan-tiered-routing/phase-8-admin-ui.md)** cover the routing and task pages at 1280 and 390
+- [ ] **[P8.8a](plan-tiered-routing/phase-8-admin-ui.md)** cover the MCP, egress and search pages at 1280 and 390 · W6
 - [ ] **[P8.9](plan-tiered-routing/phase-8-admin-ui.md)** update the admin guide
+- [ ] **[P8.9a](plan-tiered-routing/phase-8-admin-ui.md)** the MCP, egress and search pages in the admin guide · W6
 
 ### Tiered routing Phase 9: executor (deferrable)
 

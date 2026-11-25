@@ -135,7 +135,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 | W3 | MCP gateway, `searxng`, search and fetch | Tiered routing [Phase 5A](plan-tiered-routing/phase-5a-mcp-gateway.md): every step except those it marks dropped or deferred, including P5.2 to P5.5 (approval types, signing key, signing, verification) |
 | W4 | Roles pinned to models | W4.1 and W4.2 below |
 | W5 | Quick search | W5.1 to W5.6 below |
-| W6 | Admin pages for search | Tiered routing [Phase 8](plan-tiered-routing/phase-8-admin-ui.md) P8.6a (MCP servers and per-user tool permissions). The admin UI overhaul is merged (`services/admin/src/constants.rs` is on `main`), so gate G0 is cleared |
+| W6 | Admin pages for search | Tiered routing [Phase 8](plan-tiered-routing/phase-8-admin-ui.md) P8.6a (MCP permissions, front status, approval key, egress status), P8.6c (egress page), P8.6d (editable quick search and MCP limits), P8.6e (quick search on and off), P8.6f (search page), P8.8a and P8.9a. P8.6g (server registry) waits for P5A.16 and is not part of W6. The admin UI overhaul is merged (`services/admin/src/constants.rs` is on `main`), so gate G0 is cleared |
 | W7 | Research reports and the judge | Tiered routing [Phase 5B](plan-tiered-routing/phase-5b-research-judge.md): P5.6, P5.9, P5.10 (token cap), P5.13, P5.17 and P5.18. P5.7 and P5.8 move to track 4. Research roles are added to the W4 role pins |
 
 #### W0: records
