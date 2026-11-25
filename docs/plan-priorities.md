@@ -190,7 +190,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   - bounds for the limits above, and their defaults and ranges in `constants.rs`, pushed to `model-gateway` and the server.
 
   Additive only.
-- [ ] **W5.2** `feat(model-gateway): approve quick search calls by fixed rules` · sonnet · after W5.1, P5.4
+- [x] **W5.2** `feat(model-gateway): approve quick search calls by fixed rules` · sonnet · after W5.1, P5.4
   Files: `services/model-gateway/src/{approval,lib}.rs`, `docs/openapi/model-gateway.v1.yaml`, tests.
   Do: a server-link route `POST /approvals/quick-search`.
   - **Refuse when:** the tool is not `search` or `fetch`; a query is over the length limit; the reply has reached its query or fetch count; the user is over the hourly limit; the user is paused; or the kill switch is on.

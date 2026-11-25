@@ -160,6 +160,11 @@ components:
           - user_paused
           - model_not_approved
           - role_not_pinned
+          - quick_search_tool
+          - quick_search_arguments
+          - quick_search_query_count
+          - quick_search_fetch_count
+          - quick_search_hourly_limit
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release

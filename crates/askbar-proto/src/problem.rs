@@ -23,6 +23,12 @@ pub enum ErrorCode {
     ModelNotApproved,
     /// The request names a role that has no model pinned (plan W4.1). 400.
     RoleNotPinned,
+    /// Quick search approvals (plan W5.2): each refusal has its own code.
+    QuickSearchTool,
+    QuickSearchArguments,
+    QuickSearchQueryCount,
+    QuickSearchFetchCount,
+    QuickSearchHourlyLimit,
     AuditKeyMissing,
     /// No backup key is set (ADR 0013): an export cannot be encrypted, so none is made. 503.
     BackupKeyMissing,
@@ -62,13 +68,18 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 39] = [
+    pub const ALL: [ErrorCode; 44] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
         ErrorCode::UserPaused,
         ErrorCode::ModelNotApproved,
         ErrorCode::RoleNotPinned,
+        ErrorCode::QuickSearchTool,
+        ErrorCode::QuickSearchArguments,
+        ErrorCode::QuickSearchQueryCount,
+        ErrorCode::QuickSearchFetchCount,
+        ErrorCode::QuickSearchHourlyLimit,
         ErrorCode::AuditKeyMissing,
         ErrorCode::BackupKeyMissing,
         ErrorCode::BackupNewerRelease,
@@ -113,6 +124,11 @@ impl ErrorCode {
             ErrorCode::UserPaused => "user_paused",
             ErrorCode::ModelNotApproved => "model_not_approved",
             ErrorCode::RoleNotPinned => "role_not_pinned",
+            ErrorCode::QuickSearchTool => "quick_search_tool",
+            ErrorCode::QuickSearchArguments => "quick_search_arguments",
+            ErrorCode::QuickSearchQueryCount => "quick_search_query_count",
+            ErrorCode::QuickSearchFetchCount => "quick_search_fetch_count",
+            ErrorCode::QuickSearchHourlyLimit => "quick_search_hourly_limit",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
             ErrorCode::BackupKeyMissing => "backup_key_missing",
             ErrorCode::BackupNewerRelease => "backup_newer_release",
@@ -155,7 +171,11 @@ impl ErrorCode {
             ErrorCode::QueueFull | ErrorCode::ApiKeyExists | ErrorCode::Conflict | ErrorCode::BackupNewerRelease | ErrorCode::NotEmpty => {
                 409
             }
-            ErrorCode::BudgetExceeded | ErrorCode::TooManyAttempts => 429,
+            ErrorCode::BudgetExceeded
+            | ErrorCode::TooManyAttempts
+            | ErrorCode::QuickSearchQueryCount
+            | ErrorCode::QuickSearchFetchCount
+            | ErrorCode::QuickSearchHourlyLimit => 429,
             ErrorCode::KillSwitch
             | ErrorCode::AuditKeyMissing
             | ErrorCode::BackupKeyMissing
@@ -163,7 +183,12 @@ impl ErrorCode {
             | ErrorCode::SetupRequired
             | ErrorCode::NotConfigured => 503,
             ErrorCode::ClientTooOld => 426,
-            ErrorCode::ClientVersionMissing | ErrorCode::BadRequest | ErrorCode::ModelNotApproved | ErrorCode::RoleNotPinned => 400,
+            ErrorCode::ClientVersionMissing
+            | ErrorCode::BadRequest
+            | ErrorCode::ModelNotApproved
+            | ErrorCode::RoleNotPinned
+            | ErrorCode::QuickSearchTool
+            | ErrorCode::QuickSearchArguments => 400,
             ErrorCode::Unauthorized => 401,
             ErrorCode::Forbidden
             | ErrorCode::PasswordChangeRequired
@@ -195,6 +220,11 @@ impl ErrorCode {
             ErrorCode::UserPaused => "Replies are paused for this user",
             ErrorCode::ModelNotApproved => "That model is not approved",
             ErrorCode::RoleNotPinned => "That role has no model pinned",
+            ErrorCode::QuickSearchTool => "That tool is not part of quick search",
+            ErrorCode::QuickSearchArguments => "The quick search arguments are not allowed",
+            ErrorCode::QuickSearchQueryCount => "This reply has used all its searches",
+            ErrorCode::QuickSearchFetchCount => "This reply has fetched all its pages",
+            ErrorCode::QuickSearchHourlyLimit => "This user has used all searches for this hour",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
             ErrorCode::BackupKeyMissing => "The backup key has not been set up",
             ErrorCode::BackupNewerRelease => "The backup is from a newer release",
@@ -362,6 +392,11 @@ mod tests {
                 | ErrorCode::UserPaused
                 | ErrorCode::ModelNotApproved
                 | ErrorCode::RoleNotPinned
+                | ErrorCode::QuickSearchTool
+                | ErrorCode::QuickSearchArguments
+                | ErrorCode::QuickSearchQueryCount
+                | ErrorCode::QuickSearchFetchCount
+                | ErrorCode::QuickSearchHourlyLimit
                 | ErrorCode::AuditKeyMissing
                 | ErrorCode::BackupKeyMissing
                 | ErrorCode::BackupNewerRelease
@@ -397,6 +432,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 39);
+        assert_eq!(ErrorCode::ALL.len(), 44);
     }
 }

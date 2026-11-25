@@ -80,6 +80,8 @@ struct Applied {
     approval_ttl_secs: u32,
     /// The model each role uses (plan W4.1); a request naming a role with no pin is refused.
     role_pins: BTreeMap<Role, String>,
+    /// The quick search limits (plan W5.2) that `POST /approvals/quick-search` holds a reply to.
+    quick_search: askbar_proto::quick_search::QuickSearchLimits,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -106,6 +108,8 @@ pub struct Gateway {
     reader: std::sync::OnceLock<Arc<usage::Reader>>,
     /// The replies running now, for the kill switch and a user's pause to stop.
     running: Mutex<Vec<Running>>,
+    /// What quick search approvals have been given, for the per-reply and per-hour limits.
+    quick: Mutex<approval::QuickCounts>,
 }
 
 impl Gateway {
@@ -120,6 +124,7 @@ impl Gateway {
             usage: usage::Book::default(),
             reader: std::sync::OnceLock::new(),
             running: Mutex::new(Vec::new()),
+            quick: Mutex::default(),
         })
     }
 
@@ -220,7 +225,7 @@ fn finish(status: &str) -> SpanFinish {
 
 // ------------------------------------------------------------------ the links
 
-const SERVER_ROUTES: Routes = &[("POST", "/chat"), ("GET", "/catalog")];
+const SERVER_ROUTES: Routes = &[("POST", "/chat"), ("GET", "/catalog"), ("POST", "/approvals/quick-search")];
 const ADMIN_ROUTES: Routes =
     &[("GET", "/status"), ("PUT", "/config"), ("POST", "/restart"), ("POST", "/models"), ("POST", "/providers/*/test")];
 
@@ -262,6 +267,7 @@ pub fn server_router(gw: Arc<Gateway>, links: Links) -> Router {
     let protected = Router::new()
         .route(&full("/chat"), post(chat))
         .route(&full("/catalog"), get(catalog))
+        .route(&full("/approvals/quick-search"), post(approval::quick_search))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     shell(gw, protected)
 }
@@ -413,6 +419,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         approval_key: c.approval_key.clone(),
         approval_ttl_secs: c.approval_ttl_secs,
         role_pins: c.role_pins.clone(),
+        quick_search: c.quick_search,
     })
 }
 
@@ -502,10 +509,14 @@ fn start_of(id: &str, trace: &str, parent: Option<&str>, kind: SpanKind, name: &
 
 /// A refusal at a gate, on record when the auditor is back: a span that began and ended at once, `blocked`.
 fn refuse_at_gate(gw: &Gateway, req: &ChatRequest, name: &str, error_code: &str, attrs: serde_json::Value) {
+    gate_blocked(gw, &req.generation_id, &req.user_id, req.client_id.clone(), name, error_code, attrs);
+}
+
+fn gate_blocked(gw: &Gateway, trace: &str, user: &str, client: Option<String>, name: &str, error_code: &str, attrs: serde_json::Value) {
     let id = askbar_service::ids::new_id();
-    let mut start = start_of(&id, &req.generation_id, None, SpanKind::Gate, name);
-    start.user_id = Some(req.user_id.clone());
-    start.client_id = req.client_id.clone();
+    let mut start = start_of(&id, trace, None, SpanKind::Gate, name);
+    start.user_id = Some(user.into());
+    start.client_id = client;
     start.attrs = Some(attrs);
     let mut f = finish("blocked");
     f.error_code = Some(error_code.into());

@@ -1155,3 +1155,153 @@ async fn approvals_are_signed_fresh_and_leak_nothing_and_fail_closed_without_a_k
     c.quick_search.max_queries = askbar_proto::quick_search::MAX_QUERIES + 1;
     assert_eq!(rig.push(&c).await.status(), 400, "a quick search limit out of bounds is refused");
 }
+
+// ------------------------------------------------------------------ quick search approvals (plan W5.2)
+
+const QS_MARKER: &str = "marker-secret-query-text";
+
+/// A rig with an approval key pushed; returns it and the public key.
+async fn qs_rig(auditor_up: bool, tweak: impl FnOnce(&mut GatewayConfig)) -> (Rig, Vec<u8>) {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    let rig = rig_with(auditor_up).await;
+    let (pkcs8, public) = askbar_service::approval::generate_keypair().unwrap();
+    let mut c = config(&rig, 1, &[("p", "m")]);
+    c.approval_key = Some(askbar_proto::gateway::ApprovalSigningKey { version: 1, pkcs8: URL_SAFE_NO_PAD.encode(pkcs8) });
+    tweak(&mut c);
+    assert_eq!(rig.push(&c).await.status(), 200);
+    (rig, public)
+}
+
+impl Rig {
+    async fn qs(&self, generation: &str, user: &str, tool: &str, arguments: Value) -> (u16, Value) {
+        let body = json!({"generation_id": generation, "user": user, "tool": tool, "arguments": arguments});
+        let r = self
+            .http
+            .post(format!("{}/api/model-gateway/v1/approvals/quick-search", self.server))
+            .bearer_auth(SRV)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        problem_of(r).await
+    }
+}
+
+#[tokio::test]
+async fn quick_search_refusals_each_have_their_own_code_and_sign_nothing() {
+    let (rig, _) = qs_rig(true, |c| {
+        c.quick_search.max_queries = 2;
+        c.quick_search.max_pages = 1;
+        c.quick_search.max_query_chars = 20;
+    })
+    .await;
+    let long = json!({"query": QS_MARKER.repeat(3)});
+    let cases = [
+        ("gen-q1", "fetch2", json!({"url": "https://a.example/"}), 400, "quick_search_tool"),
+        ("gen-q2", "search", long, 400, "quick_search_arguments"),
+        ("gen-q3", "search", json!({"query": "ok", "extra": 1}), 400, "quick_search_arguments"),
+        ("gen-q4", "fetch", json!({"url": 7}), 400, "quick_search_arguments"),
+        ("gen-q5", "fetch", json!({"query": "x"}), 400, "quick_search_arguments"),
+    ];
+    for (generation, tool, args, status, code) in cases {
+        let tool = if tool == "fetch2" { "shell" } else { tool };
+        let (s, b) = rig.qs(generation, "user1", tool, args).await;
+        assert_eq!((s, b["error"].as_str()), (status, Some(code)), "{b}");
+        assert!(b.get("approval").is_none());
+    }
+    // Per reply: two searches, one fetch; a refused request does not count.
+    for _ in 0..2 {
+        assert_eq!(rig.qs("gen-c", "user1", "search", json!({"query": "a"})).await.0, 200);
+    }
+    assert_eq!(rig.qs("gen-c", "user1", "search", json!({"query": QS_MARKER.repeat(3)})).await.1["error"], "quick_search_arguments");
+    let (s, b) = rig.qs("gen-c", "user1", "search", json!({"query": "a"})).await;
+    assert_eq!((s, b["error"].as_str()), (429, Some("quick_search_query_count")));
+    assert_eq!(rig.qs("gen-c", "user1", "fetch", json!({"url": "https://a.example/x"})).await.0, 200);
+    let (s, b) = rig.qs("gen-c", "user1", "fetch", json!({"url": "https://a.example/y"})).await;
+    assert_eq!((s, b["error"].as_str()), (429, Some("quick_search_fetch_count")));
+    assert_eq!(
+        rig.qs("gen-other", "user1", "fetch", json!({"url": "https://a.example/y"})).await.0,
+        200,
+        "another reply has its own count"
+    );
+    let rows = rig.wait_rows("SELECT kind, status, error_code FROM spans WHERE trace_id = 'gen-q1' AND status != 'running'").await;
+    assert_eq!(rows[0], vec![json!("gate"), json!("blocked"), json!("quick_search_tool")]);
+    assert_eq!(rig.provider_calls(), 0, "no model was called");
+}
+
+#[tokio::test]
+async fn quick_search_hourly_limit_counts_searches_per_user() {
+    let (rig, _) = qs_rig(true, |c| c.quick_search.searches_per_user_hour = 2).await;
+    for g in ["g1", "g2"] {
+        assert_eq!(rig.qs(g, "u1", "search", json!({"query": "a"})).await.0, 200);
+    }
+    let (s, b) = rig.qs("g3", "u1", "search", json!({"query": "a"})).await;
+    assert_eq!((s, b["error"].as_str()), (429, Some("quick_search_hourly_limit")));
+    assert_eq!(rig.qs("g3", "u1", "fetch", json!({"url": "https://a.example/"})).await.0, 200, "fetches are not searches");
+    assert_eq!(rig.qs("g4", "u2", "search", json!({"query": "a"})).await.0, 200, "another user has their own hour");
+}
+
+#[tokio::test]
+async fn quick_search_refuses_when_paused_or_killed() {
+    let (rig, _) = qs_rig(true, |c| c.paused_users = vec!["u1".into()]).await;
+    let (s, b) = rig.qs("g1", "u1", "search", json!({"query": "a"})).await;
+    assert_eq!((s, b["error"].as_str()), (403, Some("user_paused")));
+    assert_eq!(rig.qs("g2", "u2", "search", json!({"query": "a"})).await.0, 200);
+    let (rig, _) = qs_rig(true, |c| c.kill_switch = true).await;
+    let (s, b) = rig.qs("g1", "u2", "search", json!({"query": "a"})).await;
+    assert_eq!((s, b["error"].as_str()), (503, Some("kill_switch")));
+}
+
+#[tokio::test]
+async fn a_quick_search_approval_verifies_at_the_mcp_front_and_leaves_no_text() {
+    use askbar_proto::approval::{Approval, Provenance, ToolAction};
+    use askbar_service::approval::{verify, OneTimeIds};
+    struct Any;
+    impl OneTimeIds for Any {
+        fn consume(&self, _: &str, _: i64) -> bool {
+            true
+        }
+    }
+    let (rig, public) = qs_rig(true, |_| {}).await;
+    let now = askbar_service::audit_client::now_parts().0;
+    for (tool, args) in
+        [("search", json!({"query": QS_MARKER})), ("fetch", json!({"url": format!("https://Docs.Example:443/{QS_MARKER}?q=1")}))]
+    {
+        let (s, b) = rig.qs("gen-ok", "user1", tool, args.clone()).await;
+        assert_eq!(s, 200, "{b}");
+        let a: Approval = serde_json::from_value(b["approval"].clone()).unwrap();
+        let action = ToolAction {
+            tool: tool.into(),
+            arguments: args,
+            destination: b["destination"].as_str().unwrap().into(),
+            provenance: serde_json::from_value::<Provenance>(b["provenance"].clone()).unwrap(),
+            query_data: b["query_data"].as_bool().unwrap(),
+        };
+        assert_eq!((action.provenance, action.query_data), (Provenance::Search, false));
+        assert_eq!(action.destination, if tool == "fetch" { "docs.example" } else { "" });
+        verify(&a, &action, &public, now, &Any).unwrap();
+        assert_eq!(a.task_id, "gen-ok");
+        // The span was acknowledged before the approval came back, and holds the hash and ID, not the text.
+        let rows = rig.rows(&format!(
+            "SELECT status, attrs_json FROM spans WHERE trace_id = 'gen-ok' AND name = 'quick_search_approval' AND attrs_json LIKE '%{}%'",
+            a.one_time_id
+        ));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0][1].as_str().unwrap().contains(&a.action_hash));
+    }
+    let all = format!("{:?}", rig.rows("SELECT attrs_json, name FROM spans"));
+    assert!(!all.contains(QS_MARKER) && !all.contains("docs.example"), "{all}");
+}
+
+#[tokio::test]
+async fn quick_search_signs_nothing_when_the_span_is_not_acknowledged() {
+    let (rig, _) = qs_rig(false, |_| {}).await;
+    let (s, b) = rig.qs("g1", "u1", "search", json!({"query": "a"})).await;
+    assert_eq!((s, b["error"].as_str()), (503, Some("audit_backlog")), "{b}");
+    assert!(b.get("approval").is_none());
+    // The failed attempt did not use up a count.
+    let (rig, _) = qs_rig(false, |c| c.quick_search.max_queries = 1).await;
+    for _ in 0..2 {
+        assert_eq!(rig.qs("g1", "u1", "search", json!({"query": "a"})).await.1["error"], "audit_backlog");
+    }
+}
