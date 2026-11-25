@@ -74,6 +74,8 @@ struct Applied {
     catalog: BTreeSet<(String, String)>,
     /// The same, as the server is shown it, with the default.
     choices: askbar_proto::ModelList,
+    /// The approval signing key, in memory only (plan step P5.3); none until the admin has pushed one.
+    approval_key: Option<askbar_proto::gateway::ApprovalSigningKey>,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -350,6 +352,9 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
             free.insert(p.id.clone());
         }
     }
+    if c.approval_key.as_ref().is_some_and(|k| k.pkcs8.is_empty() || k.pkcs8.len() > MAX_KEY_CHARS) {
+        return Err(format!("approval_key.pkcs8 must be 1 to {MAX_KEY_CHARS} characters."));
+    }
     if c.paused_users.len() > 10_000 || c.paused_users.iter().any(|u| !valid_id(u)) {
         return Err("A paused user is an id of 1 to 64 letters, digits, - or _ (at most 10,000 of them).".into());
     }
@@ -395,10 +400,16 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         paused: c.paused_users.iter().cloned().collect(),
         catalog,
         choices: askbar_proto::ModelList { models: choices, default: c.default_model.clone() },
+        approval_key: c.approval_key.clone(),
     })
 }
 
 impl Gateway {
+    /// The approval signing key, or none before the first push that carried one: a caller with none signs nothing.
+    pub fn approval_key(&self) -> Option<askbar_proto::gateway::ApprovalSigningKey> {
+        self.applied()?.approval_key.clone()
+    }
+
     /// Put `c` in place of the configuration, or say why not (a sentence for a person). The keys it carries are held in
     /// memory and nowhere else.
     pub fn apply_config(&self, c: &GatewayConfig) -> Result<(), String> {
