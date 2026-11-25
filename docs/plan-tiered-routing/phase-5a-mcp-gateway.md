@@ -137,7 +137,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/mcp-gateway/tests/approvals.rs`.
   Do: ADR 0016 "Defend": a signed approval from the real signer path (P5.4) is replayed (sequentially and concurrently), its arguments swapped, its expiry passed, its signature stripped, signed with another key, issued for another user or task, and for another tool.
   Accept: each is refused before the tool runs, and each is recorded; the one-time ID is consumed only by a call that passed every check.
-- [ ] **P5A.21** `test(mcp-gateway): refuse the call when the audit write fails or the permission is off` · sonnet · after P5A.9, P5A.10
+- [x] **P5A.21** `test(mcp-gateway): refuse the call when the audit write fails or the permission is off` · sonnet · after P5A.9, P5A.10
   Files: `services/mcp-gateway/tests/{audit,permissions}.rs`.
   Do: an auditor that is down, slow or answers an error; a permitted and a not-permitted user; a permission removed by a config push between two calls; a front before its first push.
   Accept: the call is refused in each failing case and the tool runs in none; the allowed case passes.
