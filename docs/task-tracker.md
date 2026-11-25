@@ -256,7 +256,7 @@ P4.3a is committed on branch `feat/egress-proxy-wiring` (draft PR #144). CI is g
 
 - [x] **[P5.2](plan-tiered-routing/phase-5a-mcp-gateway.md)** add task, approval and decide types · W3
 - [x] **[P5.5](plan-tiered-routing/phase-5a-mcp-gateway.md)** add the approval feature: keys, sign and verify · W3
-- [ ] **[P5A.31](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0036: the approval feature · W3
+- [x] **[P5A.31](plan-tiered-routing/phase-5a-mcp-gateway.md)** amend 0036: the approval feature · W3
 - [ ] **[P5.3](plan-tiered-routing/phase-5a-mcp-gateway.md)** create and push the approval signing key · W3
 - [ ] **[P5.4](plan-tiered-routing/phase-5a-mcp-gateway.md)** sign approvals · W3
 - [ ] **[P5A.4](plan-tiered-routing/phase-5a-mcp-gateway.md)** scan the searxng image for vulnerabilities · W3
