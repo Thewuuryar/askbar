@@ -204,7 +204,7 @@ jobs:
           sudo apt-get $APT_OPTS update
           sudo apt-get $APT_OPTS install -y --no-install-recommends age
       - name: Build the binaries the test starts
-        run: cargo build -p askbar-server -p askbar-admin -p askbar-bootstrap -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy -p askbar-auditor -p askbar-cpa-supervisor
+        run: cargo build -p askbar-server -p askbar-admin -p askbar-bootstrap -p askbar-model-gateway -p askbar-alerter -p askbar-egress-proxy -p askbar-auditor -p askbar-cpa-supervisor -p askbar-mcp-gateway
       - name: npm run test:admin (${{ matrix.width }} px)
         env:
           E2E_VIEWPORT: ${{ matrix.width }}
@@ -385,7 +385,7 @@ jobs:
       - name: Scan the images
         run: |
           failed=0
-          for image in bootstrap server admin auditor model-gateway alerter egress-proxy caddy cpa; do
+          for image in bootstrap server admin auditor model-gateway alerter egress-proxy caddy cpa mcp-gateway searxng; do
             echo "== askbar-$image"
             trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore.yaml \
               --exit-code 1 --no-progress "askbar-$image:latest" || failed=1

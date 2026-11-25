@@ -6,7 +6,7 @@
 # A feature or fix branch only runs ci.yml and publishes nothing. `workflow_dispatch` is a dry run: it builds every image and
 # pushes, signs and releases nothing (it works only once this file is on `main`).
 #
-# What each run does, in order: build the eight images (docker/bake-action, ci.yml's pin) with SBOM and provenance attestations
+# What each run does, in order: build the eleven images (docker/bake-action, ci.yml's pin) with SBOM and provenance attestations
 # and OCI labels, push them, scan every pushed digest with Trivy (ci.yml's flags and .trivyignore.yaml), then sign every digest with
 # keyless cosign (the run's OIDC identity; no key is stored). Only a tag goes on: scripts/release-compose.sh writes
 # compose.release.yaml, build.yml builds the installers, SHA256SUMS lists every file and is signed once with `cosign sign-blob`, and a
@@ -14,7 +14,8 @@
 # job checks each one). Nothing here publishes a release: the owner does.
 #
 # `askbar-cpa` contains CLIProxyAPI (MIT; its notice is in THIRD_PARTY_NOTICES.md); the other images hold Askbar's AGPL-3.0-or-later
-# code, so every image is labelled AGPL-3.0-or-later and says so there.
+# code, so every image is labelled AGPL-3.0-or-later and says so there, except `askbar-searxng`: the upstream SearXNG image (AGPL-3.0)
+# with only our settings, so it is labelled with SearXNG's own source and licence, not ours.
 #
 # Actions are pinned to commit hashes (ADR 0017). Nothing from an event is put into a script directly: it goes through `env`.
 name: images
@@ -40,7 +41,7 @@ env:
   REGISTRY: ghcr.io/thewuuryar/
   # The built services, space-separated for the scripts below. The two bake steps list them one to a line (bake-action's `targets`
   # is a list: one space-separated string is taken as a single target name); keep the three in step.
-  SERVICES: bootstrap server admin auditor model-gateway alerter egress-proxy caddy cpa
+  SERVICES: bootstrap server admin auditor model-gateway alerter egress-proxy caddy cpa mcp-gateway searxng
 
 jobs:
   # Decides the channel, the commit, the tags and the environment. No checkout and no token.
@@ -162,6 +163,8 @@ jobs:
             egress-proxy
             caddy
             cpa
+            mcp-gateway
+            searxng
           push: true
           set: |
             *.cache-from=type=gha,scope=askbar-build
@@ -172,6 +175,8 @@ jobs:
             *.labels.org.opencontainers.image.version=${{ env.VERSION }}
             *.labels.org.opencontainers.image.revision=${{ env.COMMIT }}
             *.labels.org.opencontainers.image.licenses=AGPL-3.0-or-later
+            searxng.labels.org.opencontainers.image.source=https://github.com/searxng/searxng
+            searxng.labels.org.opencontainers.image.licenses=AGPL-3.0
       # The dry run builds the same images and keeps them nowhere (attestations need a push).
       - name: Build only (dry run)
         if: env.PUBLISH != 'true'
@@ -194,6 +199,8 @@ jobs:
             egress-proxy
             caddy
             cpa
+            mcp-gateway
+            searxng
           set: |
             *.cache-from=type=gha,scope=askbar-build
             caddy.cache-from=type=gha,scope=askbar-caddy
