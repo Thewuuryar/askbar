@@ -102,7 +102,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.7** `docs(adr): amend 0032: proxy container limits` · haiku · after P4.6
   Files: `docs/adr/0032-container-hardening.md`. Do: the proxy uses the shared hardening block with no exception, uid 10006, 128 MB, 256 pids from the block, a credential volume and no data volume; check-isolation checks them (P4.2a). Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.7a** `docs(adr): amend 0022: the egress proxy API prefix` · haiku · after P4.7
+- [x] **P4.7a** `docs(adr): amend 0022: the egress proxy API prefix` · haiku · after P4.7
   Files: `docs/adr/0022-api-path-conventions.md`. Do: a table row: Egress proxy, `/api/egress-proxy/v1`, `egress-proxy`, `admin`, internal; an Amendments line. Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7b** `docs(adr): amend 0049: the admin-egress-proxy link` · haiku · after P4.7a
