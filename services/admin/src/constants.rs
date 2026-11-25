@@ -76,9 +76,9 @@ pub const SERVICES: [&str; 6] = ["server", "model-gateway", "alerter", "admin", 
 /// What `cpa` may reach through the egress proxy (ADR 0056): the hosts behind the two subscription logins, nothing else.
 pub const CPA_EGRESS_HOSTS: [&str; 5] = ["api.anthropic.com", "platform.claude.com", "auth.openai.com", "chatgpt.com", "api.openai.com"];
 /// What `searxng` may reach through the egress proxy's `searxng` source: measured by the owner's run of
-/// `scripts/searxng-engine-trial.sh` on 2026-11-25 (query "askbar", one denied host per engine), still waiting for the owner's
-/// approval (G14). Limit: an engine that stops at its first denied host hides later ones, so rerun the trial against this
-/// pushed list and add any host that makes an engine return 0 results. `duckduckgo.com` and `lite.duckduckgo.com` from the
+/// `scripts/searxng-engine-trial.sh` on 2026-11-25 (query "askbar", one denied host per engine), approved by the owner (G14)
+/// on 2026-11-25. Limit: an engine that stops at its first denied host hides later ones, so a later engine change needs a
+/// new trial against this list (add any host that makes an engine return 0 results). `duckduckgo.com` and `lite.duckduckgo.com` from the
 /// earlier provisional list were not needed and are dropped. Used by P5A.19, not before.
 pub const SEARXNG_EGRESS_HOSTS: [&str; 4] = ["api.mwmbl.org", "html.duckduckgo.com", "search.brave.com", "search.yahoo.com"];
 /// The limits the admin pushes to the egress proxy; `askbar-proto` bounds them.

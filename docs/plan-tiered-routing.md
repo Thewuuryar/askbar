@@ -63,7 +63,7 @@ This plan adds to the shared rules:
 | G11 | Phase 10 (deferrable) | Owner promotes each script; go-live bar met |
 | G12 | Phase 8 | same as G0; Phase 8 may start any time after it |
 | G13 | P5A.2 | **Decided 2026-11-24:** no third-party gateway; own Rust front with native `search` and `fetch`; `rmcp` (the Rust MCP client) only at G16, agentgateway the runner-up as a later upstream behind the same front. The P5A.1 spike is not needed |
-| G14 | P5A.14 | **Decided 2026-11-24:** engines duckduckgo, brave, mojeek and wikipedia, no Google or Bing; the egress hosts are derived by running the pinned image against the egress proxy in log-only mode, not guessed. Open: the frozen host list (from that trial) |
+| G14 | P5A.14 | **Decided 2026-11-24:** engines duckduckgo, brave, mojeek and wikipedia, no Google or Bing; the egress hosts are derived by running the pinned image against the egress proxy in log-only mode, not guessed. Host list approved 2026-11-25: api.mwmbl.org, html.duckduckgo.com, search.brave.com, search.yahoo.com (engines as shipped: duckduckgo, brave, yahoo, mwmbl; mojeek is inactive upstream and wikipedia needs a contact URL) |
 | G15 | P5A.15 | **Decided 2026-11-24:** the egress proxy is authoritative for private-range blocking; the MCP front enforces provenance, the query-data rule, content types and per-hop audit; `fetch` has its own egress source. Open: robots.txt is the owner's call |
 | G16 | each later MCP server (P5A.16 on) | **Decided 2026-11-24:** the 10-point approval checklist (in [phase-5a-mcp-gateway.md](plan-tiered-routing/phase-5a-mcp-gateway.md)) is the policy for approving each further MCP server, its credentials and its egress destination, one gate per destination |
 
