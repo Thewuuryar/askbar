@@ -9,6 +9,7 @@
 //! - [`boot`]: what every service's `main` shares: `die`, `listen_addr`, `healthy`, `stop_signal`.
 //! - [`ids`]: server-generated ULIDs.
 //! - [`audit_client`]: the link to the auditor, with its queue of records to send (ADR 0010, ADR 0054).
+//! - `approval` (feature `approval`): keys, sign and verify for one tool action.
 //! - [`tar`]: the archive a backup export is written in.
 //!
 //! The common internal routes are the same in every service (ADR 0022): `GET /health`,
@@ -16,6 +17,8 @@
 //! [`routes`].
 
 pub mod alert_client;
+#[cfg(feature = "approval")]
+pub mod approval;
 pub mod audit_client;
 #[cfg(feature = "backup")]
 pub mod backup;
