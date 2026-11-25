@@ -96,7 +96,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
   Do: new section after 3d8, using throwaway containers on each source's network (the script's `py` and `http` helpers) and a stand-in upstream on `egress-outbound`: (1) a fresh proxy before any push answers `403` to every CONNECT; (2) from each of `model-gateway`, `cpa` and `alerter`, a direct TCP connection to a public address (`1.1.1.1:443`) and to the metadata address fails: no route; (3) after a push through the admin (provider URL, approval of the stand-in): the allowed host tunnels and returns the stand-in's answer, an unlisted host is `403 not_listed`, source B cannot use source A's entry, the stand-in without an approval is `403 private_address`, `169.254.169.254`, `127.0.0.1`, `[::1]` and a decimal IP literal are refused, a CONNECT to a listed host on another port is refused, and a plain `GET` through the CONNECT listener's absolute form is refused without `plain_http`; (4) `/status` counts the denials, and `recent_denied` holds source, host, port, reason and time only. Everything cleans up after itself.
   Accept: CI `isolation` job green; each case prints a pass line naming what it proves.
 
-- [ ] **P4.6** `docs(adr): amend 0006: egress through the proxy` · haiku · after P4.5
+- [x] **P4.6** `docs(adr): amend 0006: egress through the proxy` · haiku · after P4.5
   Files: `docs/adr/0006-v1-outbound-access-and-alerts.md`. Do: the Amendments line: the proxy shipped (ADR 0056); direct outbound ended for `model-gateway`, `cpa` and `alerter`; Caddy keeps its route for certificates. A decision amendment: the PR needs the owner's approval. Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7** `docs(adr): amend 0032: proxy container limits` · haiku · after P4.6
