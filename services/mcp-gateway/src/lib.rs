@@ -5,7 +5,7 @@
 //! - **One tool route.** `POST /tools/{tool}/call` checks the signed approval, then the user's tool permission, then writes a `tool` span and waits for
 //!   the auditor's acknowledgement (no acknowledgement: `503 audit_backlog`, nothing runs), then runs the tool from the
 //!   [`registry`] within the tool-call time limit and closes the span. `GET /tools?user=` lists the registered tools a user holds.
-//! - **Links.** One listener, two token links ([`LINKS`]): the admin's (status, config) and the server's (the tool call). A token that matches no link, or a route the link may not call, is refused.
+//! - **Links.** Two listeners, one per link and network ([`LINKS`]): the server's (the tool routes) and the admin's (status, config), each accepting only its own token and routes.
 
 pub mod approval;
 mod call;
@@ -21,11 +21,10 @@ use askbar_proto::paths::MCP_GATEWAY_V1;
 use askbar_proto::ErrorCode;
 use askbar_service::audit_client::AuditClient;
 use askbar_service::configured::Gate;
-use askbar_service::links::{self, Allow, Link, LinkDef, Links, Routes};
+use askbar_service::links::{self, LinkDef, Links, Routes};
 use askbar_service::status::BootId;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::Method;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use config::Config;
@@ -126,15 +125,14 @@ const ADMIN_ROUTES: Routes = &[("GET", "/status"), ("PUT", "/config")];
 /// The two links: name as `bootstrap` names it (the file `accept/<name>.sha256`), the caller, and the routes.
 pub const LINKS: &[LinkDef] = &[(SERVER_MCP_GATEWAY, "server", SERVER_ROUTES), (ADMIN_MCP_GATEWAY, "admin", ADMIN_ROUTES)];
 
-/// The token check for the hashes in `token_dir/accept`: both links on the one listener. A link whose hash file is
-/// missing accepts nothing.
-pub fn links(token_dir: &Path) -> Links {
-    let link = |(name, caller, routes): &LinkDef| Link {
-        caller,
-        hash_file: token_dir.join("accept").join(format!("{name}.sha256")),
-        allow: routes.iter().map(|(m, p)| Allow::method(Method::from_bytes(m.as_bytes()).expect("a method"), &full(p))).collect(),
-    };
-    Links::new(LINKS.iter().map(link).collect()).named("mcp-gateway")
+/// The check on the server's listener: only the server's token, only the tool routes.
+pub fn server_links(token_dir: &Path) -> Links {
+    links::links_for("mcp-gateway", MCP_GATEWAY_V1, token_dir, &LINKS[0])
+}
+
+/// The check on the admin's listener: only the admin's token, only status and config.
+pub fn admin_links(token_dir: &Path) -> Links {
+    links::links_for("mcp-gateway", MCP_GATEWAY_V1, token_dir, &LINKS[1])
 }
 
 /// The credential volume, read-only: `ASKBAR_MCP_GATEWAY_TOKEN_DIR`, default `/mcp-gateway-token`.
@@ -151,14 +149,25 @@ fn full(rest: &str) -> String {
     links::full(MCP_GATEWAY_V1, rest)
 }
 
-pub fn router(g: Arc<Gateway>, links: Links) -> Router {
+/// The server's listener: the tool routes.
+pub fn server_router(g: Arc<Gateway>, links: Links) -> Router {
+    let a = g.clone();
+    let gate = Gate::new(move || a.is_configured(), |p| p == full("/health"));
+    let protected = Router::new()
+        .route(&full("/tools/{tool}/call"), post(call::call))
+        .route(&full("/tools"), get(call::tools))
+        .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
+        .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
+    links::shell(MCP_GATEWAY_V1, MAX_BODY, g, protected)
+}
+
+/// The admin's listener: status and the config push, open before the first push.
+pub fn admin_router(g: Arc<Gateway>, links: Links) -> Router {
     let (a, open) = (g.clone(), [full("/health"), full("/status"), full("/config")]);
     let gate = Gate::new(move || a.is_configured(), move |p| open.iter().any(|o| o == p));
     let protected = Router::new()
         .route(&full("/status"), get(status))
         .route(&full("/config"), put(put_config))
-        .route(&full("/tools/{tool}/call"), post(call::call))
-        .route(&full("/tools"), get(call::tools))
         .layer(axum::middleware::from_fn_with_state(gate, askbar_service::configured::require))
         .layer(axum::middleware::from_fn_with_state(links, askbar_service::links::require));
     links::shell(MCP_GATEWAY_V1, MAX_BODY, g, protected)

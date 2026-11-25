@@ -16,8 +16,10 @@ info:
 
     Every error is a problem (`application/problem+json`), and none echoes what it was sent.
 servers:
-  - url: http://mcp-gateway-host:8087
-    description: The front on an internal network.
+  - url: http://mcp-gateway-server-host:8087
+    description: The front on the network it shares with the server (the tool routes).
+  - url: http://mcp-gateway-admin-host:8087
+    description: The front on the network it shares with the admin (status and config).
 security:
   - linkToken: []
 paths:

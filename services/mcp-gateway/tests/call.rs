@@ -2,7 +2,7 @@
 //! approval reaches the next check (a 501 for now), and one approval raced by many calls lets exactly one through.
 
 use askbar_mcp_gateway::registry::{handler, Registry};
-use askbar_mcp_gateway::{links, router, Gateway};
+use askbar_mcp_gateway::{admin_links, admin_router, server_links, server_router, Gateway};
 use askbar_proto::approval::{Provenance, ToolAction};
 use askbar_proto::ErrorCode;
 use askbar_service::approval::{generate_keypair, sign};
@@ -33,6 +33,7 @@ enum Auditor {
 struct Rig {
     seen: Seen,
     url: String,
+    admin_url: String,
     g: Arc<Gateway>,
     sk: Vec<u8>,
     pk: Vec<u8>,
@@ -91,18 +92,22 @@ async fn start_full(push_key: bool, mode: Auditor, registry: Registry, timeout_s
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/api/mcp-gateway/v1", l.local_addr().unwrap());
-    let app = router(g.clone(), links(&dir));
-    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let serve = |app: axum::Router| async move {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/mcp-gateway/v1", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        url
+    };
+    let url = serve(server_router(g.clone(), server_links(&dir))).await;
+    let admin_url = serve(admin_router(g.clone(), admin_links(&dir))).await;
     let (sk, pk) = generate_keypair().unwrap();
-    let rig = Rig { seen, url, g, sk, pk };
+    let rig = Rig { seen, url, admin_url, g, sk, pk };
     if push_key {
         let cfg = json!({"fetch_max_bytes": 1048576, "fetch_timeout_secs": 20, "fetch_redirects": 3, "tool_call_timeout_secs": timeout_secs,
             "one_time_id_window_secs": 120, "search_results": 8, "remembered_urls": 50,
             "approval_public_key": hex(&rig.pk), "approval_key_version": 1,
             "permissions": {"alice": {"allowed": ["fetch", "search"]}, "bob": {"allowed": ["fetch"], "denied": ["fetch"]}}});
-        let r = reqwest::Client::new().put(format!("{}/config", rig.url)).bearer_auth(ADMIN).json(&cfg).send().await.unwrap();
+        let r = reqwest::Client::new().put(format!("{}/config", rig.admin_url)).bearer_auth(ADMIN).json(&cfg).send().await.unwrap();
         assert_eq!(r.status(), 200);
     }
     rig
@@ -205,22 +210,22 @@ async fn fifty_racing_calls_with_one_approval_let_exactly_one_through() {
 }
 
 #[tokio::test]
-async fn the_admin_link_gets_403_and_a_call_without_config_or_key_is_refused() {
+async fn the_admin_link_gets_401_and_a_call_without_config_or_key_is_refused() {
     let rig = start(true).await;
     let u = "https://example.com/a";
     let b = body(&rig.sk, u, u, "adm", now() + 60);
-    assert_eq!(code(&post(&rig, ADMIN, &b).await), (403, "forbidden"));
+    assert_eq!(code(&post(&rig, ADMIN, &b).await), (401, "unauthorized"));
     assert_eq!(code(&post(&rig, "nope", &b).await), (401, "unauthorized"));
 
     let none = start(false).await;
     assert_eq!(code(&post(&none, SERVER, &b).await), (503, "not_configured"), "before the first push");
     let cfg = json!({"fetch_max_bytes": 1048576, "fetch_timeout_secs": 20, "fetch_redirects": 3, "tool_call_timeout_secs": 30,
         "one_time_id_window_secs": 120, "search_results": 8, "remembered_urls": 50});
-    let r = reqwest::Client::new().put(format!("{}/config", none.url)).bearer_auth(ADMIN).json(&cfg).send().await.unwrap();
+    let r = reqwest::Client::new().put(format!("{}/config", none.admin_url)).bearer_auth(ADMIN).json(&cfg).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(code(&post(&none, SERVER, &b).await), (503, "not_configured"), "a config without a key still fails closed");
     let bad = json!({"approval_public_key": "zz"});
-    let r = reqwest::Client::new().put(format!("{}/config", none.url)).bearer_auth(ADMIN).json(&bad).send().await.unwrap();
+    let r = reqwest::Client::new().put(format!("{}/config", none.admin_url)).bearer_auth(ADMIN).json(&bad).send().await.unwrap();
     assert_eq!(r.status(), 400);
 }
 
@@ -320,9 +325,9 @@ async fn the_list_shows_only_the_tools_the_user_holds() {
     assert_eq!(list("bob").await.1, json!({"tools": []}), "deny wins");
     assert_eq!(list("carol").await.1, json!({"tools": []}), "no entry, nothing held");
     let r = reqwest::Client::new().get(format!("{}/tools?user=alice", rig.url)).bearer_auth(ADMIN).send().await.unwrap();
-    assert_eq!(r.status(), 403);
+    assert_eq!(r.status(), 401, "the admin's token is not the server's");
     let bad = json!({"permissions": {"a": {"allowed": ["shell"]}}});
-    let r = reqwest::Client::new().put(format!("{}/config", rig.url)).bearer_auth(ADMIN).json(&bad).send().await.unwrap();
+    let r = reqwest::Client::new().put(format!("{}/config", rig.admin_url)).bearer_auth(ADMIN).json(&bad).send().await.unwrap();
     assert_eq!(r.status(), 400, "an unknown tool is refused at the push");
 }
 
