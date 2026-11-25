@@ -3,8 +3,8 @@
 //! - **Config by push.** The admin pushes the tool limits in `PUT /config` (ADR 0028). A bad push is refused and the old
 //!   config stays live. Until the first push every tool call is refused ([`Gateway::admit`]) and the defaults apply.
 //! - **One tool route.** `POST /tools/{tool}/call` checks the signed approval, then the user's tool permission, then writes a `tool` span and waits for
-//!   the auditor's acknowledgement (no acknowledgement: `503 audit_backlog`, nothing runs), then refuses
-//!   (`tool_not_available`): the tools follow. `GET /tools?user=` lists the tools a user holds.
+//!   the auditor's acknowledgement (no acknowledgement: `503 audit_backlog`, nothing runs), then runs the tool from the
+//!   [`registry`] within the tool-call time limit and closes the span. `GET /tools?user=` lists the registered tools a user holds.
 //! - **Links.** One listener, two token links ([`LINKS`]): the admin's (status, config) and the server's (the tool call). A token that matches no link, or a route the link may not call, is refused.
 
 pub mod approval;
@@ -12,6 +12,7 @@ mod call;
 pub mod config;
 mod constants;
 pub mod permissions;
+pub mod registry;
 pub mod status;
 
 use askbar_proto::http::ApiError;
@@ -48,11 +49,22 @@ pub struct Gateway {
     config: RwLock<Option<Arc<Config>>>,
     calls: Mutex<BTreeMap<&'static str, u64>>,
     one_time_ids: approval::OneTimeStore,
+    registry: registry::Registry,
 }
 
 impl Gateway {
     pub fn new(boot_id: BootId, searxng_addr: Option<String>, audit: Option<Arc<AuditClient>>) -> Arc<Gateway> {
+        Gateway::with_registry(boot_id, searxng_addr, audit, registry::Registry::builtin())
+    }
+
+    pub fn with_registry(
+        boot_id: BootId,
+        searxng_addr: Option<String>,
+        audit: Option<Arc<AuditClient>>,
+        registry: registry::Registry,
+    ) -> Arc<Gateway> {
         Arc::new(Gateway {
+            registry,
             boot_id,
             searxng_addr,
             audit,

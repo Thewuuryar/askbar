@@ -16,6 +16,9 @@ pub struct Config {
     pub one_time_id_window_secs: u32,
     pub search_results: u32,
     pub remembered_urls: u32,
+    /// Bytes of one serialized tool result; a larger one is not returned. Absent in an older push: the default.
+    #[serde(default = "default_result_bytes")]
+    pub tool_result_max_bytes: u64,
     /// The approval public key: 64 hex characters (32 raw bytes). None until the admin pushes one; every call is refused then.
     #[serde(default)]
     pub approval_public_key: Option<String>,
@@ -25,6 +28,10 @@ pub struct Config {
     /// Per user, the tools held. A user with no entry holds none (ADR 0019).
     #[serde(default)]
     pub permissions: Permissions,
+}
+
+fn default_result_bytes() -> u64 {
+    DEFAULT_TOOL_RESULT_MAX_BYTES
 }
 
 impl Default for Config {
@@ -37,6 +44,7 @@ impl Default for Config {
             one_time_id_window_secs: DEFAULT_ONE_TIME_ID_WINDOW_SECS,
             search_results: DEFAULT_SEARCH_RESULTS,
             remembered_urls: DEFAULT_REMEMBERED_URLS,
+            tool_result_max_bytes: DEFAULT_TOOL_RESULT_MAX_BYTES,
             approval_public_key: None,
             approval_key_version: 0,
             permissions: Default::default(),
@@ -53,7 +61,8 @@ impl Config {
             && (MIN_TOOL_CALL_TIMEOUT_SECS..=MAX_TOOL_CALL_TIMEOUT_SECS).contains(&self.tool_call_timeout_secs)
             && (MIN_ONE_TIME_ID_WINDOW_SECS..=MAX_ONE_TIME_ID_WINDOW_SECS).contains(&self.one_time_id_window_secs)
             && (MIN_SEARCH_RESULTS..=MAX_SEARCH_RESULTS).contains(&self.search_results)
-            && (MIN_REMEMBERED_URLS..=MAX_REMEMBERED_URLS).contains(&self.remembered_urls);
+            && (MIN_REMEMBERED_URLS..=MAX_REMEMBERED_URLS).contains(&self.remembered_urls)
+            && (MIN_TOOL_RESULT_MAX_BYTES..=MAX_TOOL_RESULT_MAX_BYTES).contains(&self.tool_result_max_bytes);
         let ok = ok && permissions::valid(&self.permissions);
         let ok = ok && self.approval_public_key.as_ref().is_none_or(|k| k.len() == 64 && self.public_key_bytes().is_some());
         if ok {

@@ -38,6 +38,12 @@ pub const MIN_REMEMBERED_URLS: u32 = 10;
 pub const DEFAULT_REMEMBERED_URLS: u32 = 50;
 pub const MAX_REMEMBERED_URLS: u32 = 200;
 
+/// Bytes of one tool result (serialized) the front returns; a larger one is refused. Not below the fetch default.
+pub const MIN_TOOL_RESULT_MAX_BYTES: u64 = 64 * 1024;
+pub const DEFAULT_TOOL_RESULT_MAX_BYTES: u64 = 1024 * 1024;
+pub const MAX_TOOL_RESULT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const _: () = assert!(DEFAULT_TOOL_RESULT_MAX_BYTES >= DEFAULT_FETCH_MAX_BYTES);
+
 /// The built-in tools a user can be given. Off by default (ADR 0019): a user holds a tool only when the admin pushes it.
 pub const TOOLS: [&str; 2] = ["search", "fetch"];
 
@@ -53,6 +59,7 @@ mod tests {
     fn each_default_sits_within_its_bounds() {
         let bounds = [
             (MIN_FETCH_MAX_BYTES, DEFAULT_FETCH_MAX_BYTES, MAX_FETCH_MAX_BYTES),
+            (MIN_TOOL_RESULT_MAX_BYTES, DEFAULT_TOOL_RESULT_MAX_BYTES, MAX_TOOL_RESULT_MAX_BYTES),
             (u64::from(MIN_FETCH_TIMEOUT_SECS), u64::from(DEFAULT_FETCH_TIMEOUT_SECS), u64::from(MAX_FETCH_TIMEOUT_SECS)),
             (u64::from(MIN_FETCH_REDIRECTS), u64::from(DEFAULT_FETCH_REDIRECTS), u64::from(MAX_FETCH_REDIRECTS)),
             (u64::from(MIN_TOOL_CALL_TIMEOUT_SECS), u64::from(DEFAULT_TOOL_CALL_TIMEOUT_SECS), u64::from(MAX_TOOL_CALL_TIMEOUT_SECS)),

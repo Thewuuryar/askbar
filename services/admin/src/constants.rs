@@ -87,6 +87,7 @@ pub const EGRESS_LIMITS: askbar_proto::egress::Limits = askbar_proto::egress::Li
 };
 // MCP gateway tool bounds (phase 5A). Pushed to the gateway; the bounds live in `askbar-proto::mcp`.
 pub const MCP_FETCH_MAX_BYTES: u64 = askbar_proto::mcp::DEFAULT_FETCH_MAX_BYTES;
+pub const MCP_TOOL_RESULT_MAX_BYTES: u64 = askbar_proto::mcp::DEFAULT_TOOL_RESULT_MAX_BYTES;
 pub const MCP_FETCH_TIMEOUT_SECS: u32 = askbar_proto::mcp::DEFAULT_FETCH_TIMEOUT_SECS;
 pub const MCP_FETCH_REDIRECTS: u32 = askbar_proto::mcp::DEFAULT_FETCH_REDIRECTS;
 pub const MCP_TOOL_CALL_TIMEOUT_SECS: u32 = askbar_proto::mcp::DEFAULT_TOOL_CALL_TIMEOUT_SECS;

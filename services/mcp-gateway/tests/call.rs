@@ -1,8 +1,10 @@
 //! `POST /tools/{tool}/call`: the signed approval is checked first, each failure has its own code and is counted, a valid
 //! approval reaches the next check (a 501 for now), and one approval raced by many calls lets exactly one through.
 
+use askbar_mcp_gateway::registry::{handler, Registry};
 use askbar_mcp_gateway::{links, router, Gateway};
 use askbar_proto::approval::{Provenance, ToolAction};
+use askbar_proto::ErrorCode;
 use askbar_service::approval::{generate_keypair, sign};
 use askbar_service::audit_client::AuditClient;
 use askbar_service::status::BootId;
@@ -65,6 +67,10 @@ async fn start(push_key: bool) -> Rig {
 }
 
 async fn start_with(push_key: bool, mode: Auditor) -> Rig {
+    start_full(push_key, mode, Registry::builtin(), 30).await
+}
+
+async fn start_full(push_key: bool, mode: Auditor, registry: Registry, timeout_secs: u32) -> Rig {
     let dir = std::env::temp_dir().join(format!("askbar-mcp-call-{}", BootId::new().as_str()));
     std::fs::create_dir_all(dir.join("accept")).unwrap();
     for (name, t) in [("admin-mcp-gateway", ADMIN), ("server-mcp-gateway", SERVER)] {
@@ -76,7 +82,7 @@ async fn start_with(push_key: bool, mode: Auditor) -> Rig {
     let audit_url = fake_auditor(mode, cell.clone(), seen.clone()).await;
     let audit = (mode != Auditor::None).then(|| AuditClient::new(&audit_url, dir.clone(), "mcp-gateway-auditor"));
     let boot = BootId::new();
-    let g = Gateway::new(boot.clone(), None, audit.clone());
+    let g = Gateway::with_registry(boot.clone(), None, audit.clone(), registry);
     cell.set(g.clone()).ok();
     if let Some(a) = &audit {
         tokio::spawn(a.clone().hello_until_done(boot.as_str().to_string()));
@@ -92,7 +98,7 @@ async fn start_with(push_key: bool, mode: Auditor) -> Rig {
     let (sk, pk) = generate_keypair().unwrap();
     let rig = Rig { seen, url, g, sk, pk };
     if push_key {
-        let cfg = json!({"fetch_max_bytes": 1048576, "fetch_timeout_secs": 20, "fetch_redirects": 3, "tool_call_timeout_secs": 30,
+        let cfg = json!({"fetch_max_bytes": 1048576, "fetch_timeout_secs": 20, "fetch_redirects": 3, "tool_call_timeout_secs": timeout_secs,
             "one_time_id_window_secs": 120, "search_results": 8, "remembered_urls": 50,
             "approval_public_key": hex(&rig.pk), "approval_key_version": 1,
             "permissions": {"alice": {"allowed": ["fetch", "search"]}, "bob": {"allowed": ["fetch"], "denied": ["fetch"]}}});
@@ -302,7 +308,15 @@ async fn the_list_shows_only_the_tools_the_user_holds() {
             (r.status().as_u16(), r.json::<Value>().await.unwrap())
         }
     };
-    assert_eq!(list("alice").await, (200, json!({"tools": [{"name": "search"}, {"name": "fetch"}]})));
+    assert_eq!(
+        list("alice").await,
+        (
+            200,
+            json!({"tools": [
+        {"name": "search", "schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "maxLength": 200}}}},
+        {"name": "fetch", "schema": {"type": "object", "required": ["url"], "properties": {"url": {"type": "string"}}}}]})
+        )
+    );
     assert_eq!(list("bob").await.1, json!({"tools": []}), "deny wins");
     assert_eq!(list("carol").await.1, json!({"tools": []}), "no entry, nothing held");
     let r = reqwest::Client::new().get(format!("{}/tools?user=alice", rig.url)).bearer_auth(ADMIN).send().await.unwrap();
@@ -310,4 +324,96 @@ async fn the_list_shows_only_the_tools_the_user_holds() {
     let bad = json!({"permissions": {"a": {"allowed": ["shell"]}}});
     let r = reqwest::Client::new().put(format!("{}/config", rig.url)).bearer_auth(ADMIN).json(&bad).send().await.unwrap();
     assert_eq!(r.status(), 400, "an unknown tool is refused at the push");
+}
+
+/// A registry whose `fetch` is the given handler (`search` is not registered).
+fn fetch_only(h: askbar_mcp_gateway::registry::Handler) -> Registry {
+    Registry::new([("fetch", json!({"type": "object"}), h)])
+}
+
+/// The finish the auditor was sent: `(status, error_code)`.
+async fn finished(rig: &Rig) -> (Option<String>, Option<String>) {
+    let spans = settled(rig).await;
+    let f = &spans.iter().find(|s| s.0.ends_with("/finish")).expect("a finish").1;
+    (f["status"].as_str().map(Into::into), f["error_code"].as_str().map(Into::into))
+}
+
+#[tokio::test]
+async fn an_approved_permitted_call_runs_the_handler_once_and_returns_its_result_untrusted() {
+    let rig = start_full(true, Auditor::Up, fetch_only(handler(|a| async move { Ok(json!({"echo": a.arguments["url"]})) })), 30).await;
+    let u = "https://example.com/ok";
+    let r = post(&rig, SERVER, &body(&rig.sk, u, u, "run1", now() + 60)).await;
+    assert_eq!(r, (200, json!({"result": {"echo": u}, "untrusted": true})));
+    assert_eq!(rig.g.tool_runs.load(Ordering::SeqCst), 1);
+    assert_eq!(finished(&rig).await, (Some("ok".into()), None));
+    let spans = settled(&rig).await;
+    assert!(!format!("{}", spans[1].1).contains("example.com"), "the result is not in the span");
+    assert_eq!(rig.g.status().calls.get("tool_ok"), Some(&1));
+}
+
+#[tokio::test]
+async fn a_handler_that_fails_closes_the_span_as_error() {
+    let rig = start_full(true, Auditor::Up, fetch_only(handler(|_| async { Err(ErrorCode::Internal) })), 30).await;
+    let u = "https://example.com/e";
+    assert_eq!(code(&post(&rig, SERVER, &body(&rig.sk, u, u, "err1", now() + 60)).await), (500, "internal"));
+    assert_eq!(finished(&rig).await, (Some("error".into()), Some("internal".into())));
+    assert_eq!(rig.g.status().calls.get("tool_error"), Some(&1));
+}
+
+#[tokio::test]
+async fn a_handler_past_the_time_limit_gives_tool_timeout_and_a_timeout_span() {
+    let slow = handler(|_| async {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        Ok(json!(1))
+    });
+    let rig = start_full(true, Auditor::Up, fetch_only(slow), 5).await; // 5 s is the lowest limit a push may set
+    let u = "https://example.com/slow";
+    assert_eq!(code(&post(&rig, SERVER, &body(&rig.sk, u, u, "slow1", now() + 60)).await), (504, "tool_timeout"));
+    assert_eq!(finished(&rig).await, (Some("timeout".into()), Some("tool_timeout".into())));
+    assert_eq!(rig.g.status().calls.get("tool_timeout"), Some(&1));
+}
+
+#[tokio::test]
+async fn an_unregistered_tool_is_refused_before_any_span_and_is_not_listed() {
+    let rig = start_full(true, Auditor::Up, fetch_only(handler(|_| async { Ok(json!(1)) })), 30).await;
+    let u = "https://example.com/a";
+    let mut b = body(&rig.sk, u, u, "unreg1", now() + 60);
+    // The approval is for `search`, which alice holds but this registry lacks.
+    let a = sign(&ToolAction { tool: "search".into(), ..action(u) }, "task1", "alice", "unreg1", now() + 60, &rig.sk).unwrap();
+    b["approval"] = json!(a);
+    let r = reqwest::Client::new().post(format!("{}/tools/search/call", rig.url)).bearer_auth(SERVER).json(&b).send().await.unwrap();
+    assert_eq!(r.status(), 501);
+    assert_eq!(rig.g.tool_runs.load(Ordering::SeqCst), 0);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(rig.seen.lock().unwrap().iter().all(|(p, _, _)| !p.contains("/spans")), "no span was opened");
+    let r = reqwest::Client::new().get(format!("{}/tools?user=alice", rig.url)).bearer_auth(SERVER).send().await.unwrap();
+    assert_eq!(r.json::<Value>().await.unwrap(), json!({"tools": [{"name": "fetch", "schema": {"type": "object"}}]}));
+}
+
+#[tokio::test]
+async fn no_refusal_path_runs_the_handler() {
+    let counted = || fetch_only(handler(|_| async { Ok(json!(1)) }));
+    let u = "https://example.com/a";
+    let rig = start_full(true, Auditor::Up, counted(), 30).await;
+    let mut unsigned = body(&rig.sk, u, u, "n1", now() + 60);
+    unsigned["approval"]["signature"] = json!("");
+    assert_eq!(code(&post(&rig, SERVER, &unsigned).await).1, "approval_unsigned");
+    assert_eq!(code(&post(&rig, SERVER, &body_for("bob", &rig.sk, u, u, "n2", now() + 60)).await).1, "tool_not_permitted");
+    assert_eq!(rig.g.tool_runs.load(Ordering::SeqCst), 0);
+    let down = start_full(true, Auditor::Busy, counted(), 30).await;
+    assert_eq!(code(&post(&down, SERVER, &body(&down.sk, u, u, "n3", now() + 60)).await).1, "audit_backlog");
+    assert_eq!(down.g.tool_runs.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_oversize_result_is_not_returned_and_closes_the_span_as_error() {
+    // The default limit is 1 MiB; the config in the rig does not push one.
+    let big = handler(|_| async { Ok(json!("x".repeat(1024 * 1024 + 1))) });
+    let rig = start_full(true, Auditor::Up, fetch_only(big), 30).await;
+    let u = "https://example.com/big";
+    let r = post(&rig, SERVER, &body(&rig.sk, u, u, "big1", now() + 60)).await;
+    assert_eq!(code(&r), (502, "tool_result_too_large"));
+    assert!(!r.1.to_string().contains("xxxx"), "the result is not in the answer");
+    assert_eq!(finished(&rig).await, (Some("error".into()), Some("tool_result_too_large".into())));
+    assert_eq!(rig.g.status().calls.get("tool_error"), Some(&1));
 }
