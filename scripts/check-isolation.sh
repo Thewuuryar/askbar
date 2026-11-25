@@ -848,6 +848,160 @@ EOF
   done
 fi
 
+echo "== 3d9. The egress proxy denies by default and blocks private addresses (ADR 0056)"
+# Throwaway containers on each source's network talk to the proxy's listener for that source. The stand-in upstream sits on
+# egress-outbound (the proxy's one route out) and answers "askbar-standin-ok" on 8080 and 8081.
+P45_SRC=askbar-egress-standin; P45_FRESH=askbar-egress-fresh; P45_NET="${PROJECT}_p45-fresh"
+P45_MG="${PROJECT}_egress-model-gateway"; P45_CPA="${PROJECT}_egress-cpa"; P45_AL="${PROJECT}_egress-alerter"
+P45_STAND_PY='
+import http.server as h, threading
+class H(h.BaseHTTPRequestHandler):
+    def do_GET(s):
+        s.send_response(200); s.send_header("content-length", "17"); s.end_headers(); s.wfile.write(b"askbar-standin-ok")
+    def log_message(*a): pass
+threading.Thread(target=h.HTTPServer(("0.0.0.0", 8081), H).serve_forever, daemon=True).start()
+h.HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+'
+P45_PROBE_PY='
+import os, socket
+h, _, p = os.environ["X_PROXY"].rpartition(":"); t = os.environ["X_TARGET"]; plain = os.environ["X_MODE"] == "plain"
+try:
+    s = socket.create_connection((h, int(p)), timeout=6)
+    s.sendall((("GET http://%s/ HTTP/1.1" if plain else "CONNECT %s HTTP/1.1") % t + "\r\nHost: %s\r\n\r\n" % t).encode())
+    d = b""
+    while b"\r\n\r\n" not in d:
+        c = s.recv(4096)
+        if not c: break
+        d += c
+    head, _, body = d.partition(b"\r\n\r\n")
+    lines = head.decode().split("\r\n"); st = lines[0].split(" ")[1]; why = "-"
+    for l in lines[1:]:
+        if l.lower().startswith("x-askbar-egress-reason:"): why = l.split(":", 1)[1].strip()
+    if st == "200":
+        if not plain: s.sendall(b"GET / HTTP/1.0\r\n\r\n")
+        while True:
+            c = s.recv(4096)
+            if not c: break
+            body += c
+    print(st, why, b"askbar-standin-ok" in body)
+except Exception: print(0, "-", False)
+'
+egx() { # NET PROXY_ADDR TARGET [connect|plain] -> "status reason sees-the-stand-in-answer" (status 0: no answer)
+  py --network "$1" -e "X_PROXY=$2" -e "X_TARGET=$3" -e "X_MODE=${4:-connect}" -- "$P45_PROBE_PY" 2>/dev/null | tail -1
+}
+egx_is() { # description NET PROXY_ADDR TARGET MODE "want"
+  local got; got=$(egx "$2" "$3" "$4" "$5")
+  [ "$got" = "$6" ] && pass "$1" || fail "$1: got '$got', expected '$6'"
+}
+egx_wait() { # NET PROXY_ADDR TARGET "want" -> 0 when the answer is the wanted one within about a minute (the admin pushes every 12 seconds)
+  local i; for i in $(seq 1 20); do [ "$(egx "$1" "$2" "$3")" = "$4" ] && return 0; sleep 3; done; return 1
+}
+egp_status() { # the proxy's /status, through the admin's link token, from a throwaway container on egress-admin
+  py --network "${PROJECT}_egress-admin" -e "X_TOK=$(docker exec "$ADMIN" cat /admin-token/call/admin-egress-proxy.token 2>/dev/null)" -- '
+import os, urllib.request
+r = urllib.request.Request("http://egress-admin-host:8086/api/egress-proxy/v1/status", headers={"authorization": "Bearer " + os.environ["X_TOK"]})
+print(urllib.request.urlopen(r, timeout=5).read().decode())' 2>/dev/null
+}
+p45_clean() { # idempotent: the stand-in, the fresh proxy and its network, then the admin's providers and approvals made here
+  docker rm -f "$P45_SRC" "$P45_FRESH" >/dev/null 2>&1; docker network rm "$P45_NET" >/dev/null 2>&1
+  [ -n "${P45_PIDS:-}" ] && admin_script "$(admin_login)
+for pid in '$P45_PIDS'.split():
+    call('DELETE', '/api/admin/v1/providers/' + pid)
+for h, p in (('$P45_SRC', 8080), ('$P45_SRC', 8081)):
+    call('DELETE', '/api/admin/v1/egress/approvals?source=model-gateway&host=' + h + '&port=' + str(p))" >/dev/null 2>&1
+  P45_PIDS=""
+}
+P45_PIDS=""; p45_clean
+if [ "$(docker inspect -f '{{.State.Running}}' "$EGP" 2>/dev/null)" != true ]; then fail "the egress proxy is not running"; else
+  # (2) No route out of a source's network, with a positive control in the same container: the proxy's listener answers there.
+  for pair in "model-gateway $P45_MG egress-model-gateway-host" "cpa $P45_CPA egress-cpa-host" "alerter $P45_AL egress-alerter-host"; do
+    set -- $pair
+    got=$(py --network "$2" -e "X_PROXY=$3:3128" -- '
+import os, socket
+h, _, p = os.environ["X_PROXY"].rpartition(":")
+try: socket.create_connection((h, int(p)), timeout=5).close(); ctl = "control-ok"
+except Exception as e: ctl = "control-failed"
+out = []
+for addr in (("1.1.1.1", 443), ("169.254.169.254", 80)):
+    try: socket.create_connection(addr, timeout=4).close(); out.append("reached")
+    except Exception: out.append("no-route")
+print(ctl, *out)' 2>/dev/null | tail -1)
+    [ "$got" = "control-ok no-route no-route" ] && pass "from $1's network the proxy answers, and 1.1.1.1:443 and the metadata address have no route" || fail "direct access from $1's network: '$got'"
+  done
+  # (1) A proxy that has had no push answers 403 to every CONNECT: a second instance of the proxy's own image, on a network of its
+  # own, with the credential volume read-only and no admin to push to it. A 403 (not a refused connection) shows it is up.
+  EGP_IMG=$(docker inspect -f '{{.Config.Image}}' "$EGP")
+  if docker network create --internal "$P45_NET" >/dev/null 2>&1 && docker run -d --name "$P45_FRESH" --network "$P45_NET" --network-alias p45-fresh \
+      --read-only --cap-drop ALL --security-opt no-new-privileges -v "${PROJECT}_egress-proxy-token:/egress-proxy-token:ro" \
+      -e ASKBAR_EGRESS_PROXY_ADMIN_ADDR=p45-fresh:8086 -e ASKBAR_EGRESS_PROXY_SOURCES=probe=p45-fresh:3128 "$EGP_IMG" >/dev/null 2>&1; then
+    egx_wait "$P45_NET" p45-fresh:3128 api.github.com:443 "403 not_listed False" || true
+    for t in "api.github.com:443 403 not_listed" "$P45_SRC:8080 403 not_listed" "example.com:443 403 not_listed" "1.1.1.1:443 403 ip_literal"; do
+      set -- $t
+      egx_is "a fresh proxy, before any push, answers 403 $3 to CONNECT $1" "$P45_NET" p45-fresh:3128 "$1" connect "$2 $3 False"
+    done
+  else
+    fail "could not start the fresh proxy instance"
+  fi
+  docker rm -f "$P45_FRESH" >/dev/null 2>&1; docker network rm "$P45_NET" >/dev/null 2>&1
+  # (3) Through the admin: four providers whose URLs name the stand-in and three non-public literals (so they are listed, with no
+  # approval), then approvals for the stand-in, and the requests of each kind.
+  if docker run -d --rm --name "$P45_SRC" --network "$EGP_OUT" "$PYIMG" python -I -c "$P45_STAND_PY" >/dev/null 2>&1; then
+    out=$(admin_script "$(admin_login)
+import json, uuid
+ids = []
+for u in ('http://$P45_SRC:8080/v1', 'http://169.254.169.254/latest', 'http://127.0.0.1:8080/v1', 'http://[::1]:8080/v1'):
+    s, body = call('POST', '/api/admin/v1/providers', {'name': 'p45-' + uuid.uuid4().hex[:6], 'type': 'openai', 'base_url': u, 'model': 'm', 'api_key': 'p45-not-a-key'})
+    assert s == 201, (s, body)
+    ids.append(json.loads(body)['id'])
+print('IDS', *ids)" 2>&1 | tail -1)
+    case "$out" in "IDS "*) P45_PIDS="${out#IDS }"; pass "four providers (the stand-in and three non-public literals) were added in the admin";; *) fail "adding the providers: '$out'";; esac
+    S="$P45_SRC:8080"
+    # Listed for the gateway but not approved: the name resolves to a private address, so it is refused.
+    if egx_wait "$P45_MG" egress-model-gateway-host:3128 "$S" "403 private_address False"; then pass "a listed stand-in with no approval is refused: 403 private_address"; else fail "the unapproved stand-in did not give 403 private_address: '$(egx "$P45_MG" egress-model-gateway-host:3128 "$S")'"; fi
+    out=$(admin_script "$(admin_login)
+for p, plain in ((8080, True), (8081, False)):
+    s, body = call('PUT', '/api/admin/v1/egress/approvals', {'source': 'model-gateway', 'host': '$P45_SRC', 'port': p, 'plain_http': plain, 'note': 'isolation check'})
+    assert s == 200, (s, body)
+print('approved')" 2>&1 | tail -1)
+    [ "$out" = approved ] && pass "the stand-in was approved for model-gateway (8080 with plain_http, 8081 without)" || fail "approving the stand-in: '$out'"
+    if egx_wait "$P45_MG" egress-model-gateway-host:3128 "$S" "200 - True"; then pass "after the approval the allowed host tunnels and returns the stand-in's answer"; else fail "the approved stand-in did not tunnel: '$(egx "$P45_MG" egress-model-gateway-host:3128 "$S")'"; fi
+    S0=$(egp_status)
+    MG=egress-model-gateway-host:3128
+    egx_is "an unlisted host is refused: 403 not_listed" "$P45_MG" $MG unlisted.p45.example:443 connect "403 not_listed False"
+    egx_is "source B cannot use source A's entry: cpa gets 403 not_listed for the stand-in the gateway may reach" "$P45_CPA" egress-cpa-host:3128 "$S" connect "403 not_listed False"
+    egx_is "the metadata address, listed but not approved, is refused: 403 private_address" "$P45_MG" $MG 169.254.169.254:80 connect "403 private_address False"
+    egx_is "127.0.0.1, listed but not approved, is refused: 403 private_address" "$P45_MG" $MG 127.0.0.1:8080 connect "403 private_address False"
+    egx_is "[::1], listed but not approved, is refused: 403 private_address" "$P45_MG" $MG '[::1]:8080' connect "403 private_address False"
+    egx_is "an IP literal no entry names is refused: 403 ip_literal" "$P45_MG" $MG 10.0.0.1:80 connect "403 ip_literal False"
+    egx_is "a decimal IP literal (127.0.0.1 as 2130706433) is refused: 403 ip_literal" "$P45_MG" $MG 2130706433:8080 connect "403 ip_literal False"
+    egx_is "a CONNECT to a listed host on another port is refused: 403 port (8080 tunnels, above)" "$P45_MG" $MG "$P45_SRC:9999" connect "403 port False"
+    egx_is "a plain GET in absolute form to an entry without plain_http is refused: 403 plain_http" "$P45_MG" $MG "$P45_SRC:8081" plain "403 plain_http False"
+    egx_is "control: CONNECT to that same entry (8081) tunnels" "$P45_MG" $MG "$P45_SRC:8081" connect "200 - True"
+    egx_is "control: a plain GET to an entry with plain_http (8080) returns the stand-in's answer" "$P45_MG" $MG "$S" plain "200 - True"
+    S1=$(egp_status)
+    # (4) /status counts the denials; recent_denied holds source, host, port, reason and time only.
+    res=$(python3 -c '
+import json, sys
+a, b = json.loads(sys.argv[1]), json.loads(sys.argv[2]); src = sys.argv[3]
+def d(s, r): return b["sources"][s]["denied"].get(r, 0) - a["sources"][s]["denied"].get(r, 0)
+bad = []
+for s, n in (("model-gateway", {"not_listed": 1, "ip_literal": 2, "private_address": 3, "port": 1, "plain_http": 1}), ("cpa", {"not_listed": 1})):
+    bad += ["%s %s +%d" % (s, r, d(s, r)) for r, want in n.items() if d(s, r) < want]
+keys = {tuple(sorted(e)) for e in b["recent_denied"]}
+if keys != {("at", "host", "port", "reason", "source")}: bad.append("keys %s" % keys)
+have = {(e["source"], e["host"], e["port"], e["reason"]) for e in b["recent_denied"]}
+for w in (("model-gateway", src, 9999, "port"), ("model-gateway", src, 8081, "plain_http"), ("cpa", src, 8080, "not_listed"),
+          ("model-gateway", "unlisted.p45.example", 443, "not_listed"), ("model-gateway", "169.254.169.254", 80, "private_address"),
+          ("model-gateway", "::1", 8080, "private_address"), ("model-gateway", "10.0.0.1", 80, "ip_literal"), ("model-gateway", "invalid", None, "ip_literal")):
+    if w not in have: bad.append("missing %s" % (w,))
+print("ok" if not bad else "; ".join(bad))' "$S0" "$S1" "$P45_SRC" 2>&1 | tail -1)
+    [ "$res" = ok ] && pass "/status counted every denial by source and reason, and recent_denied names source, host, port, reason and time only" || fail "the proxy's status after the denials: $res"
+  else
+    fail "could not start the stand-in upstream on egress-outbound"
+  fi
+  p45_clean
+fi
+
 echo "== 3e. No Docker socket"
 # There is no controller (ADR 0005): no container of the project mounts the Docker socket, and none is left
 # of the controller or its network.
