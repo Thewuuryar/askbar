@@ -66,7 +66,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `scripts/scan-third-party-images.sh` (new).
   Do: the Trivy `images` CI job (`.github/workflows/images.yml`) scans pushed digests with its flags and `.trivyignore.yaml`; first work out whether it covers a pulled third-party image such as the `searxng` base and `cpa`'s base (a gap if it does not). Add a local script that runs the same Trivy flags on every digest the Dockerfile pins from outside, and write the exact workflow change for the owner. The orchestrator never edits `.github/workflows/`.
   Accept: the script runs on the `searxng` image; the PR body states whether CI already covered it and lists the workflow change. **[owner]** applies or declines the workflow change.
-- [ ] **P5A.5** `feat(admin): add MCP gateway values to constants.rs` · haiku · after P5.2, G0
+- [x] **P5A.5** `feat(admin): add MCP gateway values to constants.rs` · haiku · after P5.2, G0
   Files: `crates/askbar-proto/src/mcp.rs` (new), `services/admin/src/constants.rs`, tests.
   Do: `MIN_`/`MAX_`/`DEFAULT_` for the fetch size limit, fetch total time limit, fetch redirect hop cap, tool-call time limit, the one-time ID window, the search result count and the maximum search URLs remembered per task; each with a doc comment; the approval expiry (60 s) is reused from P1.1a. The allowed content types, ports and the datamark character are fixed in `askbar-proto`, not pushed (a push must not widen a security rule). Added to the struct served as `/admin/constants.json`.
   Accept: tests `MIN <= DEFAULT <= MAX`; the served JSON has no secret-looking keys; existing constants tests pass untouched.

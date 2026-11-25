@@ -15,6 +15,7 @@ pub mod decide;
 pub mod egress;
 pub mod gateway;
 pub mod links;
+pub mod mcp;
 pub mod paths;
 pub mod problem;
 pub mod task;
