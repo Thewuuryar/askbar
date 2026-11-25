@@ -77,7 +77,9 @@ if [ -z "$URL" ]; then
   if [ ! -x "$EBIN" ]; then cargo build -q -p askbar-egress-proxy || { fail "build the egress proxy"; exit 1; }; fi
   MBIN="${ASKBAR_MCP_GATEWAY_BIN:-target/debug/askbar-mcp-gateway}"
   if [ ! -x "$MBIN" ]; then cargo build -q -p askbar-mcp-gateway || { fail "build the MCP gateway's front"; exit 1; }; fi
-  MCP_SERVER_PORT=$(free_port); MCP_ADMIN_PORT=$(free_port)
+  SBIN="${ASKBAR_SIGN_APPROVAL_BIN:-target/debug/examples/sign_approval}"
+  if [ ! -x "$SBIN" ]; then cargo build -q -p askbar-service --features approval --example sign_approval || { fail "build the approval signer"; exit 1; }; fi
+  MCP_SERVER_PORT=$(free_port); MCP_ADMIN_PORT=$(free_port); SEARX_PORT=$(free_port)
   API_PORT=$(free_port); SERVER_API_PORT=$(free_port); MOCK_PORT=$(free_port)
   AUDIT_PORT=$(free_port); GW_SERVER_PORT=$(free_port); GW_ADMIN_PORT=$(free_port)
   AL_AUDITOR_PORT=$(free_port); AL_ADMIN_PORT=$(free_port); NTFY_PORT=$(free_port)
@@ -104,8 +106,9 @@ if [ -z "$URL" ]; then
   ASKBAR_EGRESS_PROXY_TOKEN_DIR="$WORK/credentials/egress-proxy-token" ASKBAR_EGRESS_PROXY_ADMIN_ADDR="127.0.0.1:$EG_ADMIN_PORT" \
     ASKBAR_EGRESS_PROXY_SOURCES="model-gateway=127.0.0.1:$EG_GW_PORT,cpa=127.0.0.1:$EG_CPA_PORT,alerter=127.0.0.1:$EG_AL_PORT" \
     ASKBAR_EGRESS_PROXY_RELAYS="" "$EBIN" >"$WORK/egress-proxy.log" 2>&1 & PIDS+=($!)
-  # The MCP gateway's front (ADR 0057): it refuses every call until the admin pushes its config.
-  ASKBAR_MCP_GATEWAY_SERVER_ADDR="127.0.0.1:$MCP_SERVER_PORT" ASKBAR_MCP_GATEWAY_ADMIN_ADDR="127.0.0.1:$MCP_ADMIN_PORT" \
+  # The MCP gateway's front (ADR 0057): it refuses every call until the admin pushes its config. `search` goes to a stand-in searxng.
+  python3 -u tests/e2e/searxng_mock.py "$SEARX_PORT" >/dev/null 2>&1 & PIDS+=($!)
+  ASKBAR_SEARXNG_ADDR="127.0.0.1:$SEARX_PORT" ASKBAR_MCP_GATEWAY_SERVER_ADDR="127.0.0.1:$MCP_SERVER_PORT" ASKBAR_MCP_GATEWAY_ADMIN_ADDR="127.0.0.1:$MCP_ADMIN_PORT" \
     ASKBAR_MCP_GATEWAY_TOKEN_DIR="$WORK/credentials/mcp-gateway-token" ASKBAR_AUDIT_API_URL="http://127.0.0.1:$AUDIT_PORT" \
     "$MBIN" >"$WORK/mcp-gateway.log" 2>&1 & PIDS+=($!)
   # The admin service: its own database and secrets, a unix socket and no TCP port.
@@ -359,6 +362,40 @@ if [ $LOCAL = 1 ]; then
     sleep 0.2
   done
   if [ "$(json "$WORK/mcp-status.json" "d['config_version'] is not None")" = "True" ]; then pass "the admin pushed its config and the MCP gateway's front is configured"; else fail "the MCP gateway's front is configured" "$(cat "$WORK/mcp-status.json" 2>/dev/null)"; fi
+fi
+
+# 10f. MCP search (local, P5A.23): a call with no signature is refused, a signed one returns untrusted results, its tool span is in the
+# audit store, and no query or result is in the front's log. The smoke has no private approval key (only model-gateway holds it, in
+# memory), so it makes its own and writes the PUBLIC half over the throwaway admin.db's, which the admin then pushes to the front.
+# Fetch is not here: the front takes only dotted DNS names on ports 80 and 443, which a native run cannot resolve (tests/fetch.rs covers it).
+if [ $LOCAL = 1 ]; then
+  { read -r APPROVAL_KEY; read -r APPROVAL_PUB; } < <("$SBIN" generate); export APPROVAL_KEY
+  py 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1],timeout=10); c.execute("UPDATE approval_keys SET public_key=?, version=version+1 WHERE id=1",(bytes.fromhex(sys.argv[2]),)); c.commit()' "$WORK/admin-data/admin.db" "$APPROVAL_PUB"
+  admin PUT "/api/admin/v1/mcp/permissions/$USER_ID" '{"allowed":["search"],"denied":[]}' >/dev/null 2>&1
+  mcp_call() { # task_id one_time_id blank_signature: POST a signed search call to the front's server listener
+    local act='{"tool":"search","arguments":{"query":"smoke-query-zebra-91"},"destination":"searxng"}'
+    local ap; ap=$("$SBIN" sign "$USER_ID" "$1" "$2" $(( $(date +%s) + 60 )) <<<"$act")
+    py 'import json,sys
+a=json.loads(sys.argv[1]); ap=json.loads(sys.argv[2])
+if sys.argv[3]=="1": ap["signature"]=""
+del a["tool"]; a["approval"]=ap; print(json.dumps(a))' "$act" "$ap" "$3" \
+      | curl -sS -X POST -H "Authorization: Bearer $(cat "$WORK/credentials/server-token/call/server-mcp-gateway.token")" -H 'content-type: application/json' \
+        -d @- "http://127.0.0.1:$MCP_SERVER_PORT/api/mcp-gateway/v1/tools/search/call"
+  }
+  MG_TASK="smoke-task-$$"
+  # The admin pushes the new key and permission within a push or two; the first signed call that is not refused ends the wait.
+  for i in $(seq 100); do
+    mcp_call "$MG_TASK" "one-time-signed-$i" 0 >"$WORK/mcp-search.json" 2>/dev/null
+    [ "$(json "$WORK/mcp-search.json" "d.get('untrusted')")" = "True" ] && break
+    sleep 0.2
+  done
+  mcp_call "$MG_TASK" one-time-unsigned 1 >"$WORK/mcp-unsigned.json" 2>/dev/null
+  if [ "$(json "$WORK/mcp-unsigned.json" "d['error']")" = "approval_unsigned" ]; then pass "an MCP tool call with no signature is refused (approval_unsigned)"; else fail "an unsigned MCP call is refused" "$(head -c 200 "$WORK/mcp-unsigned.json")"; fi
+  if [ "$(json "$WORK/mcp-search.json" "d['untrusted'] and len(d['result']['results'])")" = "2" ]; then pass "a signed MCP search returns two results, marked untrusted"; else fail "a signed MCP search returns results" "$(head -c 200 "$WORK/mcp-search.json")"; fi
+  AUD_TOKEN=$(cat "$WORK/credentials/admin-token/call/admin-auditor-read.token" 2>/dev/null)
+  curl -fsS -H "Authorization: Bearer $AUD_TOKEN" "http://127.0.0.1:$AUDIT_PORT/api/audit/v1/traces/$MG_TASK" >"$WORK/mcp-trace.json" 2>/dev/null
+  if [ "$(json "$WORK/mcp-trace.json" "[(s['kind'],s['name'],s['status']) for s in d].count(('tool','search','ok'))")" = "1" ]; then pass "the audit store holds the search's tool span"; else fail "the audit store holds the search's tool span" "$(head -c 300 "$WORK/mcp-trace.json")"; fi
+  if grep -q -e 'smoke-query-zebra-91' -e 'page.example' -e 'Snippet' "$WORK/mcp-gateway.log" 2>/dev/null; then fail "no query or result in the front's log"; else pass "no query or result is in the front's log"; fi
 fi
 
 # 11. What only a person can check.
