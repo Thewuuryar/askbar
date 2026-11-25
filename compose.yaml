@@ -322,7 +322,7 @@ services:
   # entrypoint writes besides /tmp, /etc/searxng (the settings file the start script makes) and /var/cache/searxng (its cache),
   # owned by uid 977 and in memory only. It answers the front on mcp-searxng (alias searxng-host, port 8080) and reaches engines
   # only through the egress proxy's `searxng` listener on egress-searxng. No published port, no volume, no secret in an environment
-  # variable. The health check uses the image's own Python: the image has no curl or wget that we know of.
+  # variable. The web server binds only its address on mcp-searxng (start.sh), so the health check uses the alias, with the image's own Python (no curl or wget assumed).
   searxng:
     build:
       context: .
@@ -337,7 +337,7 @@ services:
       - /etc/searxng:uid=977,gid=977,mode=0700
       - /var/cache/searxng:uid=977,gid=977,mode=0700
     healthcheck:
-      test: ["CMD", "/usr/local/searxng/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      test: ["CMD", "/usr/local/searxng/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://searxng-host:8080/healthz', timeout=3)"]
       interval: 30s
       timeout: 5s
       start_period: 20s

@@ -11,11 +11,11 @@
 # Usage (needs Docker; reads nothing from the engines but what they answer, and sends the query "askbar" to each):
 #   docker compose up -d --build          # the stack, with the searxng and egress-proxy services running and healthy
 #   ASKBAR_ADMIN_PASSWORD=<admin password> scripts/searxng-engine-trial.sh
-#   ENGINES="duckduckgo brave wikipedia mwmbl"   the engines to try (default: the four in docker/searxng/settings.yml)
+#   ENGINES="duckduckgo brave yahoo mwmbl"   the engines to try (default: the four in docker/searxng/settings.yml)
 #   COMPOSE_PROJECT_NAME                         the project name (default askbar)
 set -u
 PROJECT="${COMPOSE_PROJECT_NAME:-askbar}"
-ENGINES="${ENGINES:-duckduckgo brave wikipedia mwmbl}"
+ENGINES="${ENGINES:-duckduckgo brave yahoo mwmbl}"
 PYIMG="${ASKBAR_CHECK_IMAGE:-python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54}"
 : "${ASKBAR_ADMIN_PASSWORD:?set ASKBAR_ADMIN_PASSWORD to the admin password}"
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
