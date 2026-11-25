@@ -2,7 +2,7 @@
 //!
 //! Every URL rule is decided before the first network call ([`crate::fetch_rules`]); redirects are followed here, one
 //! hop at a time, each hop re-checked and given its own `tool` span (with the full URL) that the auditor has acknowledged
-//! before the request is sent. The response is read without decompression, within the size and time limits, and only for
+//! before the request is sent. The response is read (a `gzip` body is decoded; the size cap counts decoded bytes), within the size and time limits, and only for
 //! the fixed content types; HTML becomes plain text by a small hand-written pass. Nothing about a URL, a page or a
 //! query is logged or counted: the front's status holds outcome counts only.
 
@@ -17,6 +17,7 @@ use askbar_service::audit_client::now_parts;
 use askbar_service::ids::new_id;
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, LOCATION};
 use serde_json::{json, Value};
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -74,7 +75,7 @@ async fn hops(client: &reqwest::Client, c: &ToolCall, first: Target) -> Result<V
     let (max, mut cur) = (c.config.fetch_redirects, first.clone());
     for hop in 0..=max {
         let span = hop_span(c, &cur.url, hop).await?;
-        let sent = client.get(&cur.url).header(ACCEPT_ENCODING, "identity").send().await;
+        let sent = client.get(&cur.url).header(ACCEPT_ENCODING, "gzip").send().await;
         let Ok(resp) = sent else {
             end_span(c, &span, "error", Some(ErrorCode::ToolUpstreamFailed));
             return Err(ErrorCode::ToolUpstreamFailed.into());
@@ -135,10 +136,14 @@ fn end_span(c: &ToolCall, id: &str, status: &str, code: Option<ErrorCode>) {
 
 /// The final response: encoding and type checks, then at most `fetch_max_bytes` of body (more aborts the read).
 async fn read(mut resp: reqwest::Response, url: &str, c: &ToolCall) -> Result<Value, ToolError> {
-    let identity = |v: &reqwest::header::HeaderValue| v.to_str().is_ok_and(|s| s.trim().eq_ignore_ascii_case("identity"));
-    if !resp.headers().get_all(CONTENT_ENCODING).iter().all(identity) {
-        return Err(refused("content_encoding"));
-    }
+    // Only `gzip` is decoded, alone: any other coding, or a stacked list such as `gzip, gzip`, is refused.
+    let enc: Vec<String> =
+        resp.headers().get_all(CONTENT_ENCODING).iter().map(|v| v.to_str().unwrap_or("?").trim().to_ascii_lowercase()).collect();
+    let gzip = match enc.as_slice() {
+        [e] if e == "gzip" => true,
+        all if all.iter().all(|e| e == "identity") => false,
+        _ => return Err(refused("content_encoding")),
+    };
     let ct = resp.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
     let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
     if !FETCH_CONTENT_TYPES.contains(&ct.as_str()) {
@@ -150,19 +155,53 @@ async fn read(mut resp: reqwest::Response, url: &str, c: &ToolCall) -> Result<Va
         return Err(too_large());
     }
     let status = resp.status().as_u16();
-    let mut body = Vec::new();
+    // A decode error is the upstream's fault: `tool_upstream_failed`, as a broken connection is.
+    let fail = |e: std::io::Error| {
+        ToolError::from(if e.kind() == std::io::ErrorKind::FileTooLarge {
+            ErrorCode::ToolResultTooLarge
+        } else {
+            ErrorCode::ToolUpstreamFailed
+        })
+    };
+    let mut plain = Capped { buf: Vec::new(), max };
+    let mut dec = gzip.then(|| flate2::write::GzDecoder::new(Capped { buf: Vec::new(), max }));
     while let Some(chunk) = resp.chunk().await.map_err(|_| ErrorCode::ToolUpstreamFailed)? {
-        body.extend_from_slice(&chunk);
-        if body.len() as u64 > max {
-            return Err(too_large());
+        match dec.as_mut() {
+            Some(d) => d.write_all(&chunk),
+            None => plain.write_all(&chunk),
         }
+        .map_err(fail)?;
     }
+    // `finish` also fails on a stream cut short.
+    let body = match dec {
+        Some(d) => d.finish().map_err(fail)?.buf,
+        None => plain.buf,
+    };
     // shortcut: the body is read as UTF-8 whatever its charset says; upgrade if a charset-heavy site matters.
     let text = String::from_utf8_lossy(&body);
     let text = if ct.ends_with("html+xml") || ct == "text/html" { tidy(&html_to_text(&text)) } else { text.into_owned() };
     let text: String = text.chars().filter(|&ch| ch != DATAMARK && (ch == '\n' || ch == '\t' || !ch.is_control())).collect();
     // `truncated` is false for now: a body over the cap is an error, not a cut page.
     Ok(json!({ "url": url, "status": status, "content_type": ct, "text": text, "truncated": false }))
+}
+
+/// A buffer that refuses bytes past `max` (so a gzip bomb stops at the cap, with no allocation beyond it).
+struct Capped {
+    buf: Vec<u8>,
+    max: u64,
+}
+
+impl std::io::Write for Capped {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if (self.buf.len() + b.len()) as u64 > self.max {
+            return Err(std::io::ErrorKind::FileTooLarge.into());
+        }
+        self.buf.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Tags that end a line of text.
@@ -525,10 +564,25 @@ mod tests {
         assert!(https.https && !next.https);
     }
 
+    fn gz(b: &[u8]) -> Vec<u8> {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(b).unwrap();
+        e.finish().unwrap()
+    }
+
+    #[test]
+    fn capped_stops_at_its_limit() {
+        let mut c = Capped { buf: Vec::new(), max: 4 };
+        assert!(c.write_all(b"abcd").is_ok());
+        assert_eq!(c.write_all(b"e").unwrap_err().kind(), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(c.buf, b"abcd");
+    }
+
     #[tokio::test]
     async fn the_response_is_checked_before_it_is_read() {
         let pages: Pages = Arc::new(|k| match k {
-            "a.example/gz" => Some((200, vec![("content-type", "text/html".into()), ("content-encoding", "gzip".into())], b"x".to_vec())),
+            "a.example/gz" => Some((200, vec![("content-type", "text/plain".into()), ("content-encoding", "gzip".into())], gz(b"zipped"))),
+            "a.example/br" => Some((200, vec![("content-type", "text/plain".into()), ("content-encoding", "br".into())], b"x".to_vec())),
             "a.example/id" => {
                 Some((200, vec![("content-type", "text/plain".into()), ("content-encoding", "identity".into())], b"plain".to_vec()))
             }
@@ -540,7 +594,8 @@ mod tests {
             _ => None,
         });
         let rig = rig(pages).await;
-        assert_eq!(rig.user("http://a.example/gz").await.map_err(reason), Err(refusal("content_encoding")));
+        assert_eq!(rig.user("http://a.example/gz").await.unwrap()["text"], "zipped");
+        assert_eq!(rig.user("http://a.example/br").await.map_err(reason), Err(refusal("content_encoding")));
         assert_eq!(rig.user("http://a.example/png").await.map_err(reason), Err(refusal("content_type")));
         assert_eq!(rig.user("http://a.example/none").await.map_err(reason), Err(refusal("content_type")));
         assert_eq!(rig.user("http://a.example/id").await.unwrap()["text"], "plain");

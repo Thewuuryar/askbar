@@ -77,7 +77,7 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | combine | 4.6.9 | MIT |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
 | const-oid | 0.10.3 | Apache-2.0 OR MIT |
-| cookie | 0.18.2 | MIT OR Apache-2.0 |
+| cookie | 0.18.3 | MIT OR Apache-2.0 |
 | cookie-factory | 0.3.3 | MIT |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 |
 | core-foundation | 0.9.4 | MIT OR Apache-2.0 |
@@ -88,6 +88,7 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 |
 | cpufeatures | 0.3.1 | MIT OR Apache-2.0 |
 | crc32fast | 1.5.3 | MIT OR Apache-2.0 |
+| crc32fast | 1.5.6 | MIT OR Apache-2.0 |
 | crossbeam-channel | 0.5.17 | MIT OR Apache-2.0 |
 | crossbeam-utils | 0.8.23 | MIT OR Apache-2.0 |
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 |
@@ -143,6 +144,7 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | field-offset | 0.3.6 | MIT OR Apache-2.0 |
 | find-crate | 0.6.3 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
+| flate2 | 1.1.11 | MIT OR Apache-2.0 |
 | fluent | 0.16.1 | Apache-2.0 OR MIT |
 | fluent-bundle | 0.15.3 | Apache-2.0 OR MIT |
 | fluent-langneg | 0.13.1 | Apache-2.0 OR MIT |
@@ -152,7 +154,7 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | foreign-types | 0.5.0 | MIT/Apache-2.0 |
 | foreign-types-macros | 0.2.4 | MIT/Apache-2.0 |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 |
-| form_urlencoded | 1.2.2 | MIT OR Apache-2.0 |
+| form_urlencoded | 1.2.3 | MIT OR Apache-2.0 |
 | futures | 0.3.34 | MIT OR Apache-2.0 |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 |
@@ -485,7 +487,7 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | unicode-width | 0.2.3 | MIT OR Apache-2.0 |
 | universal-hash | 0.5.1 | MIT OR Apache-2.0 |
 | untrusted | 0.9.0 | ISC |
-| url | 2.5.8 | MIT OR Apache-2.0 |
+| url | 2.5.9 | MIT OR Apache-2.0 |
 | urlpattern | 0.6.0 | MIT |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT |
 | uuid | 1.29.0 | Apache-2.0 OR MIT |
@@ -600,9 +602,10 @@ Written by hand; the base images are the ones pinned by digest in the `Dockerfil
 
 | Image | Contains | License |
 | --- | --- | --- |
-| `askbar-bootstrap`, `-server`, `-admin`, `-auditor`, `-model-gateway`, `-alerter` | Debian 12 (`debian:bookworm-slim`) and one Askbar binary. | Debian's packages are each under their own license; the license text of every installed package is under `/usr/share/doc/<package>/copyright` in the image. The Askbar binary is AGPL-3.0-or-later, with the Rust crates above. |
+| `askbar-bootstrap`, `-server`, `-admin`, `-auditor`, `-model-gateway`, `-alerter`, `-mcp-gateway`, `-egress-proxy` | Debian 12 (`debian:bookworm-slim`) and one Askbar binary. | Debian's packages are each under their own license; the license text of every installed package is under `/usr/share/doc/<package>/copyright` in the image. The Askbar binary is AGPL-3.0-or-later, with the Rust crates above. |
 | `askbar-caddy` | [Caddy](https://caddyserver.com) 2 (the official image, with the Caddy binary rebuilt to add the Cloudflare DNS plugin) and [`caddy-dns/cloudflare`](https://github.com/caddy-dns/cloudflare). | Caddy: Apache-2.0. The plugin: MIT. The Go modules in the binary have their own licenses (`caddy build-info` lists them). |
 | `askbar-cpa` | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (`eceasy/cli-proxy-api`, unchanged) and Askbar's supervisor (AGPL-3.0-or-later, with the Rust crates above). | CLIProxyAPI: MIT; its notice is below. |
+| `askbar-searxng` | [SearXNG](https://github.com/searxng/searxng) (`docker.io/searxng/searxng:2026.11.21-c6ee3e9fd`, digest `sha256:fc1d81d7e9d04d3c8b3e23c7162feddf5c3d6aecd32e67a56eaabcb8d8747f79`, [source at that version](https://github.com/searxng/searxng/tree/c6ee3e9fd0235004a694e63720efc869bb1e3594)), unmodified apart from configuration: Askbar adds only a settings file and a start script (`docker/searxng`). | AGPL-3.0-or-later, as a separate container that Askbar talks to over HTTP and does not link. This is the author's reading, not legal advice. |
 | `python:3.12-slim` (the `dev` profile only) | Python, to run the mock model in `tests/e2e/mock_llm.py`. It is not part of a release or a normal start. | Python Software Foundation License. |
 
 ### CLIProxyAPI
