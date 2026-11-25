@@ -99,7 +99,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.6** `docs(adr): amend 0006: egress through the proxy` · haiku · after P4.5
   Files: `docs/adr/0006-v1-outbound-access-and-alerts.md`. Do: the Amendments line: the proxy shipped (ADR 0056); direct outbound ended for `model-gateway`, `cpa` and `alerter`; Caddy keeps its route for certificates. A decision amendment: the PR needs the owner's approval. Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.7** `docs(adr): amend 0032: proxy container limits` · haiku · after P4.6
+- [x] **P4.7** `docs(adr): amend 0032: proxy container limits` · haiku · after P4.6
   Files: `docs/adr/0032-container-hardening.md`. Do: the proxy uses the shared hardening block with no exception, uid 10006, 128 MB, 256 pids from the block, a credential volume and no data volume; check-isolation checks them (P4.2a). Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7a** `docs(adr): amend 0022: the egress proxy API prefix` · haiku · after P4.7
