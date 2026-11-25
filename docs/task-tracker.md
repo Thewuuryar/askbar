@@ -17,14 +17,14 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | 41 | 0 | 1 | 42 |
 | [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 0 | 0 | 10 | 10 |
 | [Tiered routing Phase 6: agents](plan-tiered-routing/phase-6-agents.md) | 0 | 0 | 31 | 31 |
-| [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 5 | 0 | 5 | 10 |
+| [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 6 | 0 | 4 | 10 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 0 | 0 | 11 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **123** | **0** | **180** | **303** |
+| **Total** | **124** | **0** | **179** | **303** |
 
-## Completed (123)
+## Completed (124)
 
 ### Refactor (track 0)
 
@@ -169,12 +169,13 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[P8.6d](plan-tiered-routing/phase-8-admin-ui.md)** make the quick search and MCP limits editable · W6
 - [x] **[P8.6e](plan-tiered-routing/phase-8-admin-ui.md)** turn quick search on and off · W6
 - [x] **[P8.6f](plan-tiered-routing/phase-8-admin-ui.md)** add the search page · W6
+- [x] **[P8.8a](plan-tiered-routing/phase-8-admin-ui.md)** cover the MCP, egress and search pages at 1280 and 390 · W6
 
 ## In progress (0)
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (180)
+## Not started (179)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -350,7 +351,6 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P8.6b](plan-tiered-routing/phase-8-admin-ui.md)** add agent task views
 - [ ] **[P8.7](plan-tiered-routing/phase-8-admin-ui.md)** add script review
 - [ ] **[P8.8](plan-tiered-routing/phase-8-admin-ui.md)** cover the routing and task pages at 1280 and 390
-- [ ] **[P8.8a](plan-tiered-routing/phase-8-admin-ui.md)** cover the MCP, egress and search pages at 1280 and 390 · W6
 - [ ] **[P8.9](plan-tiered-routing/phase-8-admin-ui.md)** update the admin guide
 - [ ] **[P8.9a](plan-tiered-routing/phase-8-admin-ui.md)** the MCP, egress and search pages in the admin guide · W6
 
