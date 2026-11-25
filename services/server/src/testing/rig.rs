@@ -188,6 +188,7 @@ impl Rig {
             // Every provider's own model is approved, and the snapshot's default provider's is the default (else the first by name).
             catalog,
             default_model,
+            approval_key: None,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

@@ -469,6 +469,20 @@ components:
             $ref: '#/components/schemas/GatewayProvider'
         audit_public_key:
           $ref: '#/components/schemas/AuditKey'
+        approval_key:
+          type: object
+          nullable: true
+          description: >-
+            The approval signing key (plan step P5.3), held in memory only and never returned. Absent until the admin
+            has one; the gateway then signs nothing.
+          required: [version, pkcs8]
+          properties:
+            version:
+              type: integer
+              description: Changes when the key is rotated.
+            pkcs8:
+              type: string
+              description: The Ed25519 private key, PKCS#8, base64url without padding.
         generation_timeout_secs:
           type: integer
           description: >-

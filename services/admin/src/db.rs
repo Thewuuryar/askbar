@@ -232,6 +232,15 @@ const MIGRATIONS: &[&str] = &[
          note       TEXT NOT NULL DEFAULT '',
          PRIMARY KEY (source, host, port)
      );",
+    // The approval signing key (plan step P5.3): the PKCS#8 private key encrypted with `admin.key` like a provider key, so
+    // the backup (`admin.db` and `admin.key`, ADR 0013) holds it only under the backup encryption. `version` rises on rotation.
+    "CREATE TABLE approval_keys (
+         id         INTEGER PRIMARY KEY CHECK (id = 1),
+         key_enc    BLOB    NOT NULL,
+         public_key BLOB    NOT NULL,
+         version    INTEGER NOT NULL,
+         created_at INTEGER NOT NULL
+     );",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

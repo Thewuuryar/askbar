@@ -8,6 +8,7 @@ pub mod admin_api;
 pub mod alerter_link;
 pub mod alerts;
 pub mod api_key;
+pub mod approval_key;
 pub mod audit_key;
 pub mod audit_read;
 pub mod auditor_link;

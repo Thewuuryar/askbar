@@ -224,6 +224,7 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
         // Every pair is approved, the first the default (ADR 0014).
         catalog: models.iter().map(|(id, m)| CatalogEntry { provider_id: (*id).into(), model: (*m).into() }).collect(),
         default_model: models.first().map(|(id, m)| model_id(id, m)),
+        approval_key: None,
     }
 }
 
@@ -629,6 +630,27 @@ async fn a_turn_the_server_never_finishes_is_ended_as_interrupted_and_a_finish_i
     tokio::time::sleep(Duration::from_millis(500)).await;
     let b_row = rig.rows(&format!("SELECT status FROM spans WHERE id = '{b}'"));
     assert_eq!(b_row[0][0], "done", "the first finish is the one that counts");
+}
+
+#[tokio::test]
+async fn the_approval_key_is_held_after_a_push_that_carries_it_and_appears_nowhere() {
+    const APPROVAL: &str = "marker-approval-key-bytes";
+    let rig = rig().await;
+    assert!(rig.gw.approval_key().is_none(), "fail closed before the first push");
+    let mut c = config(&rig, 1, &[("p", "m")]);
+    rig.push(&c).await;
+    assert!(rig.gw.approval_key().is_none(), "a push without one holds none");
+    c.version = 2;
+    c.approval_key = Some(askbar_proto::gateway::ApprovalSigningKey { version: 3, pkcs8: APPROVAL.into() });
+    let pushed = rig.push(&c).await;
+    let mut seen = pushed.text().await.unwrap();
+    assert_eq!(rig.gw.approval_key().map(|k| k.version), Some(3));
+    let status = rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap();
+    seen.push_str(&status.text().await.unwrap());
+    seen.push_str(&format!("{:?}", rig.rows("SELECT * FROM admin_actions")));
+    c.approval_key = Some(askbar_proto::gateway::ApprovalSigningKey { version: 4, pkcs8: String::new() });
+    assert_eq!(rig.push(&c).await.status(), 400, "an empty key is refused");
+    assert!(!seen.contains(APPROVAL), "{seen}");
 }
 
 #[tokio::test]

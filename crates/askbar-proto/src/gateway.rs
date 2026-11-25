@@ -46,6 +46,20 @@ impl fmt::Debug for GatewayProvider {
     }
 }
 
+/// The approval signing key (plan step P5.3): the PKCS#8 Ed25519 private key, base64url without padding, and the version
+/// of the pair, which changes on rotation. Held in memory only; no `Debug` output shows the key.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalSigningKey {
+    pub version: u64,
+    pub pkcs8: String,
+}
+
+impl fmt::Debug for ApprovalSigningKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApprovalSigningKey").field("version", &self.version).field("pkcs8", &"(set)").finish()
+    }
+}
+
 /// `PUT /config`: everything the gateway needs to run. Replaces the whole of the earlier one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GatewayConfig {
@@ -79,6 +93,9 @@ pub struct GatewayConfig {
     /// is not empty.
     #[serde(default)]
     pub default_model: Option<String>,
+    /// The key approvals are signed with. Absent until the admin has one to push; the gateway then signs nothing.
+    #[serde(default)]
+    pub approval_key: Option<ApprovalSigningKey>,
 }
 
 fn yes() -> bool {
@@ -274,9 +291,11 @@ mod tests {
             paused_users: vec![],
             catalog: vec![],
             default_model: None,
+            approval_key: Some(ApprovalSigningKey { version: 1, pkcs8: "marker-approval-key".into() }),
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
+            assert!(!shown.contains("marker-approval-key"), "{shown}");
             assert!(shown.contains("(set)"));
         }
     }

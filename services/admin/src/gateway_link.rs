@@ -109,6 +109,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         paused_users: snap.paused_user_ids,
         catalog: catalog.models,
         default_model: catalog.default,
+        approval_key: crate::approval_key::signing_key(conn, secrets),
     };
     config.version = version_of(&config);
     Ok(config)
@@ -240,6 +241,9 @@ impl GatewayLink {
         let managed = crate::cpa::managed_key(state).await;
         let config = {
             let db = state.db.lock().await;
+            if crate::approval_key::ensure(db.conn(), &state.secrets).is_err() {
+                return Sync::NotReady("The admin could not make its approval key.".into());
+            }
             match build_config(db.conn(), &state.secrets, managed.as_ref()) {
                 Ok(c) => c,
                 Err(_) => return Sync::NotReady("The admin could not read its settings.".into()),

@@ -112,6 +112,7 @@ async fn gateway(up: &str) -> G {
         paused_users: vec![],
         catalog: vec![],
         default_model: None,
+        approval_key: None,
     };
     let r = http.put(format!("{url}/api/model-gateway/v1/config")).bearer_auth(ADM).json(&cfg).send().await.unwrap();
     assert_eq!(r.status(), 200);
