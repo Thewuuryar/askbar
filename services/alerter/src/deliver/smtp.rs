@@ -55,8 +55,13 @@ fn mailbox(address: &str) -> Option<Mailbox> {
     address.parse().ok()
 }
 
-fn transport(c: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>, Problem> {
-    let mut b = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(c.host.clone()).port(c.port).timeout(Some(COMMAND_TIMEOUT));
+/// With a `relay` (`host:port`, the egress proxy's) the connection goes there; the certificate is still checked for the real host.
+fn transport(c: &SmtpConfig, relay: Option<&str>) -> Result<AsyncSmtpTransport<Tokio1Executor>, Problem> {
+    let (host, port) = match relay {
+        Some(r) => r.rsplit_once(':').and_then(|(h, p)| Some((h.to_string(), p.parse().ok()?))).ok_or(Problem::Unreachable)?,
+        None => (c.host.clone(), c.port),
+    };
+    let mut b = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host).port(port).timeout(Some(COMMAND_TIMEOUT));
     b = match c.tls {
         SmtpTls::None => b.tls(Tls::None),
         SmtpTls::Starttls => b.tls(Tls::Required(TlsParameters::new(c.host.clone()).map_err(|_| Problem::Tls)?)),
@@ -89,7 +94,7 @@ fn problem(e: &lettre::transport::smtp::Error) -> Problem {
 }
 
 /// Sends one alert as one message. The subject and the body are the alerter's own text.
-pub async fn send(c: &SmtpConfig, severity: Severity, r: &Rendered) -> Result<(), Problem> {
+pub async fn send(c: &SmtpConfig, relay: Option<&str>, severity: Severity, r: &Rendered) -> Result<(), Problem> {
     let (from, to) = (mailbox(&c.from).ok_or(Problem::Refused)?, mailbox(&c.to).ok_or(Problem::Refused)?);
     let prefix = match severity {
         Severity::Info => "",
@@ -103,7 +108,7 @@ pub async fn send(c: &SmtpConfig, severity: Severity, r: &Rendered) -> Result<()
         .header(ContentType::TEXT_PLAIN)
         .body(r.body.clone())
         .map_err(|_| Problem::Refused)?;
-    let transport = transport(c)?;
+    let transport = transport(c, relay)?;
     match tokio::time::timeout(TOTAL_TIMEOUT, transport.send(mail)).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(problem(&e)),
@@ -114,6 +119,7 @@ pub async fn send(c: &SmtpConfig, severity: Severity, r: &Rendered) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     fn cfg() -> SmtpConfig {
         SmtpConfig {
@@ -148,5 +154,35 @@ mod tests {
         for b in bad {
             assert!(validate(&b).is_err(), "{b:?}");
         }
+    }
+
+    /// A fake relay speaks SMTP up to STARTTLS. The client must have connected to it rather than to the real host, asked for
+    /// STARTTLS, and begun the handshake for the real host name (its ClientHello names it). A full handshake would need a TLS
+    /// server and a certificate, which no dependency of this crate provides.
+    #[tokio::test]
+    async fn mail_goes_to_the_relay_and_starttls_begins_for_the_real_host() {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        let server = tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let (r, mut w) = s.into_split();
+            let mut r = BufReader::new(r);
+            let mut line = String::new();
+            w.write_all(b"220 fake\r\n").await.unwrap();
+            r.read_line(&mut line).await.unwrap();
+            assert!(line.starts_with("EHLO"), "{line}");
+            w.write_all(b"250-fake\r\n250 STARTTLS\r\n").await.unwrap();
+            line.clear();
+            r.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "STARTTLS\r\n");
+            w.write_all(b"220 go ahead\r\n").await.unwrap();
+            let mut hello = [0u8; 512];
+            let n = r.read(&mut hello).await.unwrap();
+            assert_eq!(hello[0], 0x16, "a TLS handshake record");
+            assert!(hello[..n].windows(16).any(|w| w == b"mail.example.com"), "SNI names the real host");
+        });
+        let r = Rendered { title: "t".into(), body: "b".into() };
+        assert!(send(&cfg(), Some(&addr), Severity::Info, &r).await.is_err());
+        server.await.unwrap();
     }
 }

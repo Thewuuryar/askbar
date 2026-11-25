@@ -231,11 +231,11 @@ services:
       - model-gateway-token:/model-gateway-token:ro
 
   # Alert delivery (ADR 0055): /api/alerter/v1 on two listeners, one on audit-alerter for the auditor and one on alerter-admin
-  # for the admin, each on the address its alias gives and never a wildcard, because it also sits on alerter-outbound. Runs as
+  # for the admin, each on the address its alias gives and never a wildcard, because it also sits on egress-alerter. Runs as
   # uid 10005 from the image, with no exception to the hardening above, and 128 MB. Two volumes: alerter-data (the repeat
   # ledger: keys, times and counts, no secret and no content) and its credential volume, read-only. The delivery settings are
-  # the admin's, pushed in memory (nothing secret is on a volume). alerter-outbound is the only network with a route out
-  # that it joins, and the only one with nothing else on it.
+  # the admin's, pushed in memory (nothing secret is on a volume). It has no route out of its own: the egress proxy
+  # carries its alerts and release check, and relays its mail.
   alerter:
     build:
       context: .
@@ -252,12 +252,16 @@ services:
       ASKBAR_ALERTER_AUDITOR_ADDR: alerter-auditor-host:8085
       ASKBAR_ALERTER_ADMIN_ADDR: alerter-admin-host:8085
       ASKBAR_AUDIT_API_URL: http://auditor:8083
+      # Addresses: ntfy and the release check go through the proxy's listener, mail through its relay port (ADR 0056).
+      ASKBAR_EGRESS_PROXY_URL: http://egress-alerter-host:3128
+      ASKBAR_EGRESS_RELAY_ADDR: egress-alerter-host:2525
     networks:
       audit-alerter:
         aliases: [alerter-auditor-host]
       alerter-admin:
         aliases: [alerter-admin-host]
-      alerter-outbound: {}
+      # Its only way out: the proxy's listeners for it, on a network of the two of them.
+      egress-alerter: {}
     volumes:
       - alerter-data:/alerter-data
       # The hashes of the tokens it accepts and the token it sends the auditor, made by bootstrap. Read-only.
