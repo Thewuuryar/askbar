@@ -219,7 +219,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
   Files: `clients/desktop/ui/main.js`, `clients/desktop/src-tauri/src/{main,remote}.rs`, `clients/desktop/tests/`.
   Do: a per-message "Search the web" toggle, shown only when the user has the permission; the queries and a sources list under the reply. Links open in the system browser; the popup itself gets no network permission (ADR 0019 rule 6). Escape Markdown as today.
   Accept: client tests cover the toggle, the sources list, and that a source link doesn't load inside the app.
-- [ ] **W5.5** `test(e2e): quick search with the mock model and a fixture search engine` · haiku · after W5.3, W5.4
+- [x] **W5.5** `test(e2e): quick search with the mock model and a fixture search engine` · haiku · after W5.3, W5.4
   Files: `tests/e2e/`, `scripts/smoke.sh`.
   Do: a fixture `searxng` response and fixture pages, no real internet; extend the mock LLM to propose queries and cite sources.
 - [ ] **W5.6** `docs(docs): quick search in the user and admin guides` · haiku · after W5.5

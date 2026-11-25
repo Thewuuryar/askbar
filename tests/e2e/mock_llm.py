@@ -12,9 +12,12 @@ that comes after text has been delivered). With stream_options.include_usage a f
 (cached_tokens is non-zero when the message contains "cached"). POST /v1/messages answers in Anthropic's streaming format with the same modes.
 "hang" accepts the request and sends nothing until the client closes;
 "drop" sends two content deltas and closes the connection without [DONE].
+Quick search: the server's query-proposal call gets a JSON array of two queries, and the answer call (the prompt holds
+<untrusted_web_content>) gets a reply that cites [1] and [2] and says how many numbered sources it was given.
 """
 import json
 import os
+import re
 import socket
 import socketserver
 import struct
@@ -37,6 +40,8 @@ def greet(name):
 | `-v`   | verbose |
 
 Anything else?"""
+
+QUERIES = '["smoke-w55-query-alpha", "smoke-w55-query-beta"]'
 
 SLOW = "Streaming slowly so you can press Stop. " * 40
 
@@ -174,6 +179,10 @@ class Handler(BaseHTTPRequestHandler):
         brisk = "brisk" in last.lower()
         slow = brisk or "slow" in last.lower()
         text = SLOW if slow else REPLY
+        if "You propose web search queries" in system:
+            text = QUERIES
+        elif "<untrusted_web_content>" in last:
+            text = f"From the sources [1] and [2]: sources seen {len(re.findall(r'^\[\d+\] ', last, re.M))}."
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-cache")
