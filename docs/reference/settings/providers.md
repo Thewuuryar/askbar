@@ -21,3 +21,7 @@ Use a Claude or ChatGPT subscription as a provider. The CPA provider answers onc
 ## Models people can use
 
 The list of models people can pick. It applies to every user and client, and a message that names no model uses the default.
+
+## Model for each job
+
+Each job (chat, writing a search query, writing a search answer) uses the one approved model pinned to it. Pick a model from the approved list and press Save, or press Clear to remove the pin. A request for a job with no model pinned is refused, and its tokens count against the same budget as every other reply. If a pinned model stops being approved, the page marks it Not approved and the gateway is not given the pin. The same pins are set through the admin API route `/api/admin/v1/roles/{role}`.

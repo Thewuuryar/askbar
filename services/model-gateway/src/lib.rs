@@ -520,7 +520,7 @@ impl Gateway {
             refuse_at_gate(self, req, "user_pause", "user_paused", serde_json::json!({ "paused": true }));
             return Err(ApiError::new(ErrorCode::UserPaused, "Replies are paused for this user by the administrator."));
         }
-        // A request for a role needs a model pinned to it. The pin is not used yet: the model named still is (plan W4.1).
+        // A request for a role needs a model pinned to it (plan W4.1); `chat` has already swapped that model in.
         if let Err(code) = pinned_model(&cfg.role_pins, req.role) {
             refuse_at_gate(self, req, "role_pin", code.as_str(), serde_json::json!({ "role": req.role }));
             return Err(ApiError::new(code, "No model is pinned for that role. Pin one, or send without a role."));
@@ -605,7 +605,7 @@ fn valid_id(s: &str) -> bool {
 
 async fn chat(
     State(gw): State<Arc<Gateway>>,
-    Json(req): Json<ChatRequest>,
+    Json(mut req): Json<ChatRequest>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, Failure> {
     let Some(cfg) = gw.applied() else {
         return Err(ApiError::new(ErrorCode::NotConfigured, "The gateway has not received its settings yet. Try again in a few seconds.")
@@ -613,6 +613,11 @@ async fn chat(
     };
     if !valid_id(&req.generation_id) || !valid_id(&req.user_id) {
         return Err(bad("generation_id and user_id are 1 to 64 letters, digits, - or _."));
+    }
+    // A request for a role uses the model pinned to it, whatever provider and model it named (plan W4.2). A role with no
+    // pin is refused by `gates`; a pin the catalog does not approve is refused there too.
+    if let Ok(Some((provider_id, model))) = pinned_model(&cfg.role_pins, req.role).map(|p| p.and_then(|p| p.split_once('/'))) {
+        (req.provider_id, req.model) = (provider_id.to_string(), model.to_string());
     }
     let Some(mut provider) = cfg.providers.get(&req.provider_id).cloned() else {
         return Err(ApiError::new(ErrorCode::NotFound, "No such provider."));
@@ -634,7 +639,11 @@ async fn chat(
     turn.model = Some(provider.model.clone());
     turn.user_id = Some(req.user_id.clone());
     turn.client_id = req.client_id.clone();
-    turn.attrs = Some(serde_json::json!({ "space_id": req.space_id, "conversation_id": req.conversation_id }));
+    let mut turn_attrs = serde_json::json!({ "space_id": req.space_id, "conversation_id": req.conversation_id });
+    if let Some(role) = req.role {
+        turn_attrs["role"] = serde_json::json!(role);
+    }
+    turn.attrs = Some(turn_attrs);
     if let Err(why) = gw.audit.open(&turn).await {
         // Record the refusal when the auditor is back, and call no provider.
         let mut f = finish("refused");
@@ -694,6 +703,9 @@ async fn run_attempts(
         // The body the provider is sent, as this gateway holds it. Sealed once the auditor has acknowledged the span.
         let provider_request = llm::build_body(&provider, &system, &messages).to_string();
         let mut attrs = serde_json::json!({ "retry_index": retry_index });
+        if let Some(role) = req.role {
+            attrs["role"] = serde_json::json!(role);
+        }
         if provider_request.len() > MAX_PAYLOAD_BYTES {
             attrs["truncated"] = true.into();
         }

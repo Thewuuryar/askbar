@@ -33,6 +33,7 @@ pub const SETTING_ANCHORS: &[(&str, &str)] = &[
     ("settings/providers#providers", "providers-title"),
     ("settings/providers#claude-and-chatgpt-accounts", "cpa-title"),
     ("settings/providers#models-people-can-use", "catalog-title"),
+    ("settings/providers#model-for-each-job", "roles-title"),
     ("settings/people#users", "users-title"),
     ("settings/people#paired-clients", "clients-title"),
     ("settings/services#running-services", "services-title"),

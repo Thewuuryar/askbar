@@ -34,6 +34,7 @@ pub mod notify;
 pub mod pages;
 pub mod reference;
 pub mod restore;
+pub mod roles;
 pub mod routes;
 pub mod sealed;
 pub mod secrets;
@@ -251,6 +252,9 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/mcp/permissions"), mcp::list)
         .put(&v1("/mcp/permissions/{user}"), mcp::put)
         .delete(&v1("/mcp/permissions/{user}"), mcp::delete)
+        .get(&v1("/roles"), roles::list)
+        .put(&v1("/roles/{role}"), roles::put)
+        .delete(&v1("/roles/{role}"), roles::delete)
         .get(&v1("/network"), network::get_network)
         .put(&v1("/network"), network::put_network)
         .post(&v1("/network/apply"), network::apply_network)

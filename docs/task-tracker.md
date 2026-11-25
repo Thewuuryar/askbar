@@ -7,7 +7,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | Plan | Completed | In progress | Not started | Total |
 | --- | --- | --- | --- | --- |
 | [Refactor](plan-refactor.md) | 37 | 0 | 0 | 37 |
-| [Order of work and web search](plan-priorities.md) | 4 | 0 | 7 | 11 |
+| [Order of work and web search](plan-priorities.md) | 5 | 0 | 6 | 11 |
 | [Audit viewer](plan-audit-viewer.md) | 4 | 0 | 5 | 9 |
 | [Tiered routing Phase 0: records and docs](plan-tiered-routing/phase-0-docs.md) | 2 | 0 | 15 | 17 |
 | [Tiered routing Phase 1: records](plan-tiered-routing/phase-1-records.md) | 0 | 0 | 29 | 29 |
@@ -22,9 +22,9 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 0 | 0 | 11 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **111** | **0** | **192** | **303** |
+| **Total** | **112** | **0** | **191** | **303** |
 
-## Completed (111)
+## Completed (112)
 
 ### Refactor (track 0)
 
@@ -72,6 +72,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[O0.2](plan-priorities.md)** point the tiered routing plan at the new order · W0
 - [x] **[O0.3](plan-priorities.md)** reorder the post-v1 plan · W0
 - [x] **[W4.1](plan-priorities.md)** add model roles and role pins · W4
+- [x] **[W4.2](plan-priorities.md)** pin a model for each role · W4
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -159,11 +160,10 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (192)
+## Not started (191)
 
 ### Order of work and web search (track 1)
 
-- [ ] **[W4.2](plan-priorities.md)** pin a model for each role · W4
 - [ ] **[W5.1](plan-priorities.md)** add quick search types, limits and constants · W5
 - [ ] **[W5.2](plan-priorities.md)** approve quick search calls by fixed rules · W5
 - [ ] **[W5.3](plan-priorities.md)** answer a message with quick search · W5

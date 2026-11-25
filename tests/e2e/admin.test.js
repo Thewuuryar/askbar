@@ -779,6 +779,21 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.match(await defaultModel(), /\/mock-model-2$/, 'discarding goes back to what is saved');
     assert.equal(await page.isHidden('#catalog-form-save-bar'), true);
   });
+  await step('A model is pinned to a job, saved, and cleared again', async () => {
+    const row = 'tr[data-role="search.query"]';
+    assert.equal(await page.locator('#roles tr').count(), 3, 'one row per job');
+    assert.match(await page.innerText(row), /None/);
+    assert.equal(await page.isDisabled(row + ' button >> text=Clear'), true, 'nothing to clear yet');
+    await page.selectOption(row + ' select', { index: 1 });
+    await page.click(row + ' button >> text=Save');
+    await page.waitForFunction(() => /mock-model/.test(document.querySelector('tr[data-role="search.query"] td:nth-child(2)').textContent));
+    assert.doesNotMatch(await page.innerText(row + ' td:nth-child(2)'), /Not approved/);
+    await page.reload();
+    await page.waitForSelector(row + ' code');
+    assert.match(await page.innerText(row + ' td:nth-child(2)'), /mock-model/, 'the pin persisted');
+    await page.click(row + ' button >> text=Clear');
+    await page.waitForFunction(() => /None/.test(document.querySelector('tr[data-role="search.query"] td:nth-child(2)').textContent));
+  });
   await step('Test sends a message through the provider and shows success', async () => {
     await page.click('tr[data-name="mock"] [data-action="test"]');
     await page.waitForFunction(() => /OK|Failed/.test(document.querySelector('tr[data-name="mock"] .test-result').textContent));

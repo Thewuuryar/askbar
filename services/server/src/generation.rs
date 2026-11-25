@@ -461,6 +461,8 @@ struct Finisher {
     user_id: String,
     client_id: Option<String>,
     provider_id: String,
+    /// What the reply is for; its tokens are recorded under it.
+    role: Option<askbar_proto::gateway::Role>,
     /// The provider and model serving the reply, once an attempt starts; the reply is labelled with them.
     by: Option<crate::ReplyBy>,
     conversation_id: String,
@@ -532,8 +534,8 @@ impl Finisher {
         if let Some(u) = self.usage {
             let db = self.state.db.lock().unwrap_or_else(|e| e.into_inner());
             let _ = db.conn().execute(
-                "INSERT INTO token_usage (id, user_id, client_id, provider_id, tokens_in, tokens_out, created_at, space_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO token_usage (id, user_id, client_id, provider_id, tokens_in, tokens_out, created_at, space_id, role)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     crate::ids::new_id(),
                     self.user_id,
@@ -542,7 +544,8 @@ impl Finisher {
                     u.input.unwrap_or(0) as i64,
                     u.output.unwrap_or(0) as i64,
                     crate::auth::now(),
-                    self.space.id
+                    self.space.id,
+                    self.role.and_then(|r| serde_json::to_value(r).ok()).and_then(|v| v.as_str().map(str::to_string))
                 ],
             );
         }
@@ -847,6 +850,7 @@ fn spawn_run(
         user_id: user_id.to_string(),
         client_id: client_id.map(str::to_string),
         provider_id: provider_id.to_string(),
+        role: None,
         by: None,
         conversation_id: conversation_id.to_string(),
         text: String::new(),
@@ -999,7 +1003,7 @@ async fn via_gateway(
     let request = GatewayRequest {
         provider_id: provider.id.clone(),
         model: model.to_string(),
-        role: None,
+        role: fin.role,
         user_id: fin.user_id.clone(),
         client_id: fin.client_id.clone(),
         space_id: Some(fin.space.id.clone()),
