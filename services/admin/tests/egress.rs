@@ -24,6 +24,8 @@ struct FakeProxy {
     running: Mutex<Option<u64>>,
     pushes: Mutex<Vec<Value>>,
     denied: Mutex<Vec<Value>>,
+    /// Extra source names `GET /status` reports (a proxy that has the `searxng` and `fetch` listeners).
+    listeners: Mutex<Vec<&'static str>>,
 }
 type Fake = Arc<FakeProxy>;
 
@@ -36,8 +38,10 @@ async fn status(State(f): State<Fake>, h: HeaderMap) -> Result<Json<Value>, Stat
         return Err(StatusCode::UNAUTHORIZED);
     }
     let v = *f.running.lock().unwrap();
+    let sources: serde_json::Map<String, Value> =
+        f.listeners.lock().unwrap().iter().map(|s| (s.to_string(), json!({ "allowed": 0, "denied": {} }))).collect();
     Ok(Json(
-        json!({ "configured": v.is_some(), "version": v, "boot_id": "b", "open_tunnels": 0, "sources": {}, "recent_denied": *f.denied.lock().unwrap() }),
+        json!({ "configured": v.is_some(), "version": v, "boot_id": "b", "open_tunnels": 0, "sources": sources, "recent_denied": *f.denied.lock().unwrap() }),
     ))
 }
 
@@ -287,4 +291,43 @@ async fn the_denied_attempts_are_the_last_status_and_a_proxy_that_is_down_is_not
     down.sync(&t2.admin).await;
     let (_, body) = t2.call(M::GET, path, json!(null)).await;
     assert_eq!((body["online"].clone(), body["error"].clone()), (json!(false), json!("The egress proxy does not answer.")));
+}
+
+#[tokio::test]
+async fn searxng_and_fetch_are_pushed_only_to_a_proxy_that_reports_them_and_none_is_private() {
+    let (t, fake, link) = rig().await;
+    assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
+    let push = fake.pushes.lock().unwrap().last().cloned().unwrap();
+    assert!(push["sources"].get("searxng").is_none() && push["sources"].get("fetch").is_none());
+
+    *fake.listeners.lock().unwrap() = vec!["searxng", "fetch"];
+    assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
+    let push = fake.pushes.lock().unwrap().last().cloned().unwrap();
+    let want: Vec<String> = askbar_admin::constants::SEARXNG_EGRESS_HOSTS.iter().map(|h| h.to_string()).collect();
+    let mut got = hosts(&push, "searxng");
+    assert!(got.iter().all(|e| e.1 == 443 && !e.2 && !e.3));
+    got.sort();
+    assert_eq!(got.into_iter().map(|e| e.0).collect::<Vec<_>>(), {
+        let mut w = want.clone();
+        w.sort();
+        w
+    });
+    let fetch = push["sources"]["fetch"]["entries"].as_array().unwrap();
+    assert_eq!(fetch.len(), 2);
+    for (port, plain) in [(443, false), (80, true)] {
+        let e = fetch.iter().find(|e| e["port"].as_u64().unwrap_or(443) == port).unwrap();
+        assert_eq!(
+            (e["any_public"].as_bool(), e["plain_http"].as_bool().unwrap_or(false), e["host"].as_str().unwrap_or("")),
+            (Some(true), plain, "")
+        );
+    }
+    assert!(!push.to_string().contains("\"allow_private\":true"));
+    let sources = push["sources"].as_object().unwrap();
+    assert_eq!(sources.len(), 5);
+
+    // A proxy that loses the listeners gets the sources dropped again (no error).
+    fake.listeners.lock().unwrap().retain(|s| *s != "searxng");
+    assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
+    let push = fake.pushes.lock().unwrap().last().cloned().unwrap();
+    assert!(push["sources"].get("searxng").is_none() && push["sources"].get("fetch").is_some());
 }

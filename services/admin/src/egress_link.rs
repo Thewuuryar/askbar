@@ -2,7 +2,7 @@
 //!
 //! The proxy denies everything until it is given an allowlist per source, and holds it in memory only. The admin derives the
 //! allowlists (never typed): `model-gateway` gets its providers' base URLs, `alerter` its ntfy server, its mail server (the
-//! `relay` entry) and GitHub, `cpa` the fixed [`CPA_EGRESS_HOSTS`]. Every 12 seconds it reads the proxy's `GET /status` and
+//! `relay` entry) and GitHub, `cpa` the fixed [`CPA_EGRESS_HOSTS`], and, when the proxy reports them, `searxng` (the fixed engine hosts) and `fetch` (`any_public`, ports 443 and 80). Every 12 seconds it reads the proxy's `GET /status` and
 //! pushes with `PUT /config` when the proxy is unconfigured or runs another version (a hash of the config, so a restarted
 //! proxy is seen at once). No entry is `allow_private` unless the administrator approved that destination for that source
 //! (`egress_approvals`, P4.4a): an approval is the only way a private address is allowed, and its change is an audited action. Each push is recorded in the auditor first (source, count, version:
@@ -115,8 +115,9 @@ fn approve(entries: &mut Vec<Entry>, a: &Approval) {
     }
 }
 
-/// What the proxy should run, from `admin.db`.
-pub fn build_config(conn: &Connection, secrets: &crate::secrets::AdminSecrets) -> EgressConfig {
+/// What the proxy should run, from `admin.db`. `searxng` and `fetch` (P5A.19) are included only when the proxy reports a listener
+/// for them in `status`: it refuses a config naming a source it does not have.
+pub fn build_config(conn: &Connection, secrets: &crate::secrets::AdminSecrets, status: &EgressStatus) -> EgressConfig {
     let gateway = crate::server_link::build_snapshot(conn)
         .map(|s| s.providers.iter().filter_map(|p| entry_of_url(&p.base_url)).collect())
         .unwrap_or_default();
@@ -126,10 +127,14 @@ pub fn build_config(conn: &Connection, secrets: &crate::secrets::AdminSecrets) -
     }
     alerter.push(Entry { host: "api.github.com".into(), ..plain_entry() });
     let cpa = crate::constants::CPA_EGRESS_HOSTS.iter().map(|h| Entry { host: (*h).into(), ..plain_entry() }).collect();
+    let searxng = crate::constants::SEARXNG_EGRESS_HOSTS.iter().map(|h| Entry { host: (*h).into(), ..plain_entry() }).collect();
+    // The fetch client sends http targets in absolute form (no CONNECT), so port 80 needs `plain_http`. `any_public` takes no host.
+    let fetch = vec![Entry { any_public: true, ..plain_entry() }, Entry { any_public: true, port: 80, plain_http: true, ..plain_entry() }];
     let approvals = read_approvals(conn).unwrap_or_default();
     EgressConfig {
-        sources: [("model-gateway", gateway), ("alerter", alerter), ("cpa", cpa)]
+        sources: [("model-gateway", gateway), ("alerter", alerter), ("cpa", cpa), ("searxng", searxng), ("fetch", fetch)]
             .into_iter()
+            .filter(|(name, _)| SOURCES[..3].contains(name) || status.sources.contains_key(*name))
             .map(|(name, mut entries)| {
                 approvals.iter().filter(|a| a.source == name).for_each(|a| approve(&mut entries, a));
                 (name.to_string(), rules(entries))
@@ -340,12 +345,12 @@ impl EgressLink {
 
     /// Read the proxy's status and push the allowlists if it needs them.
     pub async fn sync(&self, state: &AdminState) -> Sync {
+        let Some(status) = self.status_now().await else { return Sync::Unreachable };
         let config = {
             let db = state.db.lock().await;
-            build_config(db.conn(), &state.secrets)
+            build_config(db.conn(), &state.secrets, &status)
         };
         let version = config.version();
-        let Some(status) = self.status_now().await else { return Sync::Unreachable };
         if status.configured && status.version == Some(version) {
             self.link.set_error(None);
             return Sync::Current;
