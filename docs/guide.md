@@ -41,9 +41,10 @@ flowchart TB
         server["<b>server</b><br/>Chats and space files<br/>No provider keys, no outbound route"]
         auditor["<b>auditor</b><br/>Append-only log, hash chain<br/>No outbound route"]
         admin["<b>admin</b><br/>Secrets, settings, pairing<br/>Backups and restart requests"]
-        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch, direct outbound"]
-        cpa["<b>cpa</b><br/>Optional subscription login<br/>Direct outbound"]
-        alerter["<b>alerter</b><br/>Sends alerts, checks releases<br/>Direct outbound"]
+        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch, no route out"]
+        cpa["<b>cpa</b><br/>Optional subscription login<br/>No route out"]
+        alerter["<b>alerter</b><br/>Sends alerts, checks releases<br/>No route out"]
+        egressProxy["<b>egress-proxy</b><br/>Allowlist per source, default deny<br/>Route out besides Caddy"]
         bootstrap["<b>bootstrap</b><br/>No network. Writes per-link tokens,<br/>then exits. Re-run from the host to rotate"]
     end
 
@@ -65,11 +66,14 @@ flowchart TB
     admin -->|"config, restarts"| server
     admin -->|"config, restarts, keys, budgets"| modelGateway
     modelGateway --> cpa
-    modelGateway --> providers
-    cpa --> providers
+    modelGateway -->|"provider calls"| egressProxy
+    cpa -->|"provider calls"| egressProxy
+    admin -->|"allowlists"| egressProxy
+    egressProxy --> providers
     auditor -->|"alert events"| alerter
     admin -->|"release check"| alerter
-    alerter --> alerts
+    alerter -->|"alerts, release check"| egressProxy
+    egressProxy --> alerts
     admin -->|"encrypted backups"| backup
 
     classDef key stroke-width:3px
@@ -169,15 +173,16 @@ That starts these containers, with `bootstrap` (no network, exits when it has ma
 | `askbar-server` | uid 10002 | `client-api`, `server-api`, `gateway-server`, `audit-server` | nothing |
 | `askbar-admin` | uid 10001 | `server-api`, `cpa-admin`, `audit-admin`, `gateway-admin`, `alerter-admin` | nothing (a unix socket) |
 | `askbar-auditor` | uid 10003 | `audit-admin`, `audit-alerter`, `audit-caddy`, `audit-model-gateway`, `audit-server` only | nothing |
-| `askbar-model-gateway` | uid 10004 | `gateway-server`, `gateway-admin`, `audit-model-gateway`, `cpa-gateway`, `outbound` | nothing |
-| `askbar-alerter` | uid 10005 | `audit-alerter`, `alerter-admin`, `alerter-outbound` | nothing |
-| `askbar-cpa` | root (group 10001) | `cpa-admin`, `cpa-gateway`, `outbound` | nothing |
+| `askbar-model-gateway` | uid 10004 | `gateway-server`, `gateway-admin`, `audit-model-gateway`, `cpa-gateway`, `egress-model-gateway` | nothing |
+| `askbar-alerter` | uid 10005 | `audit-alerter`, `alerter-admin`, `egress-alerter` | nothing |
+| `askbar-cpa` | root (group 10001) | `cpa-admin`, `cpa-gateway`, `egress-cpa` | nothing |
+| `askbar-egress-proxy` | uid 10006 | `egress-admin`, `egress-model-gateway`, `egress-cpa`, `egress-alerter`, `egress-outbound` | nothing |
 
 `server-api` is an `internal` network shared by the admin and the server's server API. No address is fixed: the server has the alias `server-api-host` on that network only, listens on the address it resolves to (port 8082), and the admin calls `http://server-api-host:8082`. So the server API answers on `server-api` and nowhere else. Caddy is the only thing the outside world can reach.
 
 ### Docker networks
 
-Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has fifteen networks (`edge`, `client-api`, `server-api`, `cpa-admin`, `cpa-gateway`, `audit-admin`, `audit-alerter`, `audit-caddy`, `audit-model-gateway`, `audit-server`, `alerter-admin`, `alerter-outbound`, `gateway-admin`, `gateway-server` and `outbound`). Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
+Askbar gives each link between two services its own network, so a service reaches only the services it has to ([architecture.md](architecture.md#links)). The stack has eighteen networks (`edge`, `client-api`, `server-api`, `cpa-admin`, `cpa-gateway`, `audit-admin`, `audit-alerter`, `audit-caddy`, `audit-model-gateway`, `audit-server`, `alerter-admin`, `gateway-admin`, `gateway-server`, `egress-admin`, `egress-model-gateway`, `egress-cpa`, `egress-alerter` and `egress-outbound`). Each network takes a subnet from Docker's address pools, and with Docker's default settings a host has about 30 to share between all its Compose projects. When they run out, `docker compose up` fails with:
 
 ```text
 could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network
@@ -252,7 +257,7 @@ Lets a Claude or ChatGPT subscription act as an OpenAI-compatible provider. It s
 2. Open the address and approve. The browser then lands on an address starting `http://localhost` that will not load if the admin is on another machine. Copy that whole address from the address bar and paste it into the box. **Finish**.
 3. A provider named **CPA** appears on the Providers page, already holding the key the admin made for CLIProxyAPI. Choose its model from the dropdown. Its name, address and key are fixed.
 
-The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins `cpa-gateway` (`model-gateway` reaches it there), `cpa-admin` (the admin runs logins there) and `outbound` (its route out, the same network `model-gateway` uses; it is not on `edge`); its API is never published.
+The admin makes CLIProxyAPI's config and API key itself (nobody copies a key anywhere). CLIProxyAPI joins `cpa-gateway` (`model-gateway` reaches it there), `cpa-admin` (the admin runs logins there) and `egress-cpa` (its way out, through the egress proxy, which allows only the Anthropic and OpenAI hosts it needs; it is not on `edge`); its API is never published.
 
 ### Configuration reference
 
@@ -302,7 +307,7 @@ The audit store has its own container, `askbar-auditor` ([ADR 0051](adr/0051-aud
 
 ### model-gateway
 
-Provider calls and provider keys have their own container, `askbar-model-gateway` ([ADR 0054](adr/0054-model-gateway.md), [ADR 0014](adr/0014-model-gateway-and-providers.md)). It runs as uid 10004 with no capabilities and no data volume: **the keys live in its memory only.** Its API is `/api/model-gateway/v1` ([docs/openapi/model-gateway.v1.yaml](openapi/model-gateway.v1.yaml)) and it is never public. It has two listeners, one on each network it shares with a caller, each on the address its alias gives (`gateway-server-host`, `gateway-admin-host`, port 8084) and never a wildcard, because it also joins `outbound`, the one network besides `edge` with a route out (`cpa` joins it too, for the same reason). Direct outbound access is how v1 reaches providers ([ADR 0006](adr/0006-v1-outbound-access-and-alerts.md)).
+Provider calls and provider keys have their own container, `askbar-model-gateway` ([ADR 0054](adr/0054-model-gateway.md), [ADR 0014](adr/0014-model-gateway-and-providers.md)). It runs as uid 10004 with no capabilities and no data volume: **the keys live in its memory only.** Its API is `/api/model-gateway/v1` ([docs/openapi/model-gateway.v1.yaml](openapi/model-gateway.v1.yaml)) and it is never public. It has two listeners, one on each network it shares with a caller, each on the address its alias gives (`gateway-server-host`, `gateway-admin-host`, port 8084) and never a wildcard. It has no route out of its own: provider calls leave through the egress proxy on `egress-model-gateway` ([ADR 0056](adr/0056-egress-proxy.md)).
 
 **The server asks it for every reply**, on `gateway-server`, with its own token, and has no key and no route to a provider. If the gateway has no configuration yet (it just started) or the auditor cannot take the record, the reply fails with a sentence and nothing is sent to a provider; ask again in a few seconds.
 
@@ -324,13 +329,13 @@ Alerts have their own container, `askbar-alerter` ([ADR 0055](adr/0055-alerter.m
 
 **What sends alerts.** The admin sends seven: **backup failed** (a scheduled backup could not be made; at most once a day), **backup missed** (no backup has succeeded for 26 hours), **restore performed** (a restore was done), **chain mismatch** (the audit trail was rolled back, rewritten or edited; one alert for each finding), **rejected token** (a service refused the admin's token on a link; one for each episode, naming the link), **restart loop** (the server, `model-gateway` or the alerter restarted three times within ten minutes) and **budget threshold** (a day's or a month's token budget is 80% used, a warning, and 100%, critical; one of each for each period, subscription providers not counted, and only for a limit you have set). Each is also a line on every admin page for a day, and a log line with no secret in it. The auditor sends the others: **audit content opened** (an unseal), **unseal limits changed**, **retention changed** (and to how many days), **backup key changed**, **audit disk low** (under 1 GiB free, again only after it has been over 1.25 GiB) and **critical** (under 256 MiB), **a component has gone quiet** (nothing from the server, `model-gateway`, the alerter or the admin for five minutes) and **Caddy has gone quiet** (a reply began and, fifteen minutes later, Caddy has sent no access line since), and **the admin restarted three times in ten minutes**. None of them carries content, a key or a passphrase.
 
-- **Networks.** `audit-alerter` (with the auditor) and `alerter-admin` (with the admin), both `internal`, and `alerter-outbound`, which only the alerter joins and which is the alerter's one route out (it is not `outbound`, where `model-gateway` sits, so nothing else shares a network with it that can reach the internet). Its two listeners are on the addresses of the two internal networks, never on `alerter-outbound`.
+- **Networks.** `audit-alerter` (with the auditor) and `alerter-admin` (with the admin), both `internal`, and `egress-alerter`, which holds the alerter and the egress proxy only. The alerter has no route out of its own: ntfy, the mail relay and GitHub are reached through the proxy ([ADR 0056](adr/0056-egress-proxy.md)). Its two listeners are on the addresses of `audit-alerter` and `alerter-admin`, never a wildcard.
 - **Volumes.** `alerter-data` (the repeat ledger: which alerts were sent when and how many repeats were held back, no secret and no content) and `alerter-token` (its credential volume, read-only). The delivery settings, including a ntfy topic and token, are the admin's, pushed to it and kept in its memory, never on a volume.
 - **Tokens.** `auditor-alerter` (the auditor sends events), `admin-alerter` (the admin configures it and sends its own events) and `alerter-auditor` (it appends the outcome of each alert to the auditor, as metadata only), made by `bootstrap`.
 
 ### Starting and stopping services
 
-The admin site's **Services** page shows whether the server, `model-gateway`, the alerter, the admin, Caddy and CLIProxyAPI answer, and can restart each (it asks first, in the row, and says what that will interrupt). No service has the Docker socket ([ADR 0005](adr/0005-no-controller-and-self-restart.md)): the server and the admin restart themselves through their own endpoints and Docker's restart policy starts them again (the server is back within a minute; you sign in to the admin again), Caddy has its configuration pushed again, and CLIProxyAPI is restarted by a small supervisor in its image (`askbar-cpa`, [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md)), which also restarts it when its config changes or it crashes. A service refuses a restart in its first 30 seconds, and the server and admin also restart themselves if their own health check fails three times in a row. Starting or stopping a service is done from the host (`docker compose stop server`). Only a signed-in person can restart, not an admin API key; each attempt is recorded, and six a minute is the limit. See [SECURITY.md](../SECURITY.md) for what this trusts.
+The admin site's **Services** page shows whether the server, `model-gateway`, the alerter, the admin, Caddy and CLIProxyAPI answer, and can restart each (it asks first, in the row, and says what that will interrupt). The egress proxy's recent denied requests are in the **Blocked outbound requests** section of the same page. No service has the Docker socket ([ADR 0005](adr/0005-no-controller-and-self-restart.md)): the server and the admin restart themselves through their own endpoints and Docker's restart policy starts them again (the server is back within a minute; you sign in to the admin again), Caddy has its configuration pushed again, and CLIProxyAPI is restarted by a small supervisor in its image (`askbar-cpa`, [ADR 0037](adr/0037-askbar-cpa-image-and-supervisor.md)), which also restarts it when its config changes or it crashes. A service refuses a restart in its first 30 seconds, and the server and admin also restart themselves if their own health check fails three times in a row. Starting or stopping a service is done from the host (`docker compose stop server`). Only a signed-in person can restart, not an admin API key; each attempt is recorded, and six a minute is the limit. See [SECURITY.md](../SECURITY.md) for what this trusts.
 
 **Server environment** (already set in `compose.yaml`; useful without Docker): `ASKBAR_CLIENT_API_ADDR`, `ASKBAR_SERVER_API_ADDR` (`ip:port`, or `host:port` resolved once at start-up to exactly one address; never `0.0.0.0`), `ASKBAR_SERVER_TOKEN_HASH_FILE`, `ASKBAR_DATA_DIR`, `ASKBAR_SERVER_TOKEN_DIR` (its tokens for the gateway and the auditor), `ASKBAR_GATEWAY_URL` and `ASKBAR_AUDIT_API_URL`. **Model-gateway:** `ASKBAR_GATEWAY_SERVER_ADDR`, `ASKBAR_GATEWAY_ADMIN_ADDR`, `ASKBAR_GATEWAY_TOKEN_DIR`, `ASKBAR_AUDIT_API_URL`. **Admin:** `ASKBAR_ADMIN_SOCKET`, `ASKBAR_ADMIN_DATA_DIR`, `ASKBAR_ADMIN_SECRETS_DIR`, `ASKBAR_ADMIN_TOKEN_DIR`, `ASKBAR_SERVER_API_URL`, `ASKBAR_GATEWAY_URL`, `ASKBAR_AUDIT_API_URL`, `ASKBAR_CADDY_SOCKET`, `ASKBAR_CADDY_SECRETS_DIR`, `ASKBAR_PUBLIC_URL`. **Auditor:** `ASKBAR_AUDIT_API_ADDRS` (one `host:port` for each network, such as `auditor-admin-host:8083`), `ASKBAR_AUDIT_INGEST_ADDR` (`auditor-ingest-host:8086`, Caddy's access lines), `ASKBAR_AUDIT_DIR`, `ASKBAR_AUDITOR_TOKEN_DIR`.
 
