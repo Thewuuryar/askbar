@@ -198,7 +198,7 @@ SPEC = {
   "bootstrap": ("", "server-token admin-token auditor-token model-gateway-token alerter-token egress-proxy-token mcp-gateway-token", ""),
   "server": ("audit-server client-api gateway-server server-api", "server-token:ro", ""),
   "admin": ("alerter-admin audit-admin cpa-admin egress-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
-  "auditor": ("audit-admin audit-alerter audit-caddy audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
+  "auditor": ("audit-admin audit-alerter audit-caddy audit-mcp-gateway audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
   "model-gateway": ("audit-model-gateway cpa-gateway egress-model-gateway gateway-admin gateway-server", "model-gateway-token:ro", ""),
   "alerter": ("alerter-admin audit-alerter egress-alerter", "alerter-data alerter-token:ro", ""),
   "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
@@ -243,6 +243,8 @@ routed = {s for s in S if nets[s] & OPEN} - {"mock-llm"}  # the dev mock LLM sit
 out(routed == {"caddy", "egress-proxy"}, f"only caddy and egress-proxy are on a network with a route out (found: {' '.join(sorted(routed))})")
 for a, b in SEPARATE:
     out(not nets[a] & nets[b], f"{a} shares no network with {b}")
+# P5A.9a: the front's audit network has the auditor alone until the front is added (P5A.12)
+out({s for s in S if "audit-mcp-gateway" in nets[s]} == {"auditor"}, "only the auditor is on audit-mcp-gateway")
 PY
 )
 CFG=$(docker compose -p "$PROJECT" --profile dev config --format json 2>/dev/null)
@@ -400,7 +402,7 @@ case "$admin_token" in mgt_*) pass "the admin's token has the admin-server prefi
 # file it has already given away. After a rotation the admin and the server read the new files on restart.
 before=$(docker exec "$ADMIN" sh -c 'cat /admin-token/call/admin-server.token' 2>/dev/null)
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap 2>/dev/null)
-[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore\nkept admin-egress-proxy\nkept server-mcp-gateway\nkept admin-mcp-gateway')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
+[ "$out" = "$(printf 'kept admin-server\nkept admin-auditor-append\nkept admin-auditor-read\nkept server-model-gateway\nkept admin-model-gateway\nkept model-gateway-auditor\nkept server-auditor\nkept model-gateway-auditor-read\nkept auditor-alerter\nkept admin-alerter\nkept alerter-auditor\nkept admin-auditor-restore\nkept admin-egress-proxy\nkept server-mcp-gateway\nkept admin-mcp-gateway\nkept mcp-gateway-auditor')" ] && [ "$(docker exec "$ADMIN" cat /admin-token/call/admin-server.token 2>/dev/null)" = "$before" ] \
   && pass "a second bootstrap run keeps the token" || fail "a second bootstrap run: $out"
 out=$(docker compose -p "$PROJECT" run --rm --no-deps bootstrap rotate admin-server 2>/dev/null)
 printf '%s' "$out" | grep -q '^rotated admin-server$' && printf '%s' "$out" | grep -q '^Restart from the admin: admin, server$' \
@@ -425,11 +427,12 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$AUDITOR" 2>/dev/null)" != true 
 health yes
 uid 10003
 caps yes
-nets audit-admin audit-alerter audit-caddy audit-model-gateway audit-server|the auditor is on the audit-* networks only (audit-admin, audit-alerter, audit-caddy, audit-model-gateway, audit-server)
+nets audit-admin audit-alerter audit-caddy audit-mcp-gateway audit-model-gateway audit-server|the auditor is on the audit-* networks only (audit-admin, audit-alerter, audit-caddy, audit-mcp-gateway, audit-model-gateway, audit-server)
 owner $AUDITOR|/auditor-token/accept/admin-auditor-append.sha256|10003 444|the auditor's append hash file (owner, mode)
 owner $AUDITOR|/auditor-token/accept/admin-auditor-read.sha256|10003 444|the auditor's read hash file (owner, mode)
 owner $AUDITOR|/auditor-token/accept/model-gateway-auditor-read.sha256|10003 444|the auditor's gateway read hash file (owner, mode)
 owner $AUDITOR|/auditor-token/accept/admin-auditor-restore.sha256|10003 444|the auditor's restore hash file (owner, mode)
+owner $AUDITOR|/auditor-token/accept/mcp-gateway-auditor.sha256|10003 444|the auditor's mcp-gateway hash file (owner, mode)
 dirs $AUDITOR|10003 500|the auditor's|/auditor-token /auditor-token/accept
 EOF
   docker exec "$AUDITOR" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 \

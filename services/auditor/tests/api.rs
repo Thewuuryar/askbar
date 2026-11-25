@@ -20,6 +20,7 @@ const ADMIN_READ: &str = "admin-auditor-read";
 const GATEWAY_READ: &str = "model-gateway-auditor-read";
 const ALERTER: &str = "alerter-auditor";
 const RESTORE: &str = "admin-auditor-restore";
+const MCP_GATEWAY: &str = "mcp-gateway-auditor";
 
 async fn start() -> T {
     start_with(Limits::default()).await
@@ -28,7 +29,7 @@ async fn start() -> T {
 /// No alert rules: the API rig has never run them.
 async fn start_with(limits: Limits) -> T {
     let dir = std::env::temp_dir().join(format!("askbar-auditor-{}", ulid::Ulid::new()));
-    let links = [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER, RESTORE];
+    let links = [SERVER, GATEWAY, ADMIN_APPEND, ADMIN_READ, GATEWAY_READ, ALERTER, RESTORE, MCP_GATEWAY];
     common::start_on(dir, limits, &links, false).await
 }
 
@@ -126,6 +127,17 @@ async fn each_link_may_call_only_its_own_routes_and_anything_else_is_403() {
     }
     let r = t.as_(SERVER, M::POST, "/admin-actions", Some(json!({}))).await;
     assert_eq!(r.status, 403, "only the admin's append token records admin actions");
+
+    // The MCP gateway's front (ADR 0057): hello and `tool` spans, and no other kind. It reads nothing and records no admin action.
+    ok(t.as_(MCP_GATEWAY, M::POST, "/hello", Some(json!({ "boot_id": "b3" }))).await, 200, "front hello");
+    ok(t.as_(MCP_GATEWAY, M::POST, "/spans", Some(span("f1", "t3", "tool"))).await, 201, "the front opens a tool span");
+    for kind in ["turn", "attempt", "agent_step", "step", "gate"] {
+        let r = t.as_(MCP_GATEWAY, M::POST, "/spans", Some(span("f2", "t3", kind))).await;
+        assert_eq!((r.status, r.code()), (403, "forbidden".into()), "the front may not open a {kind} span");
+    }
+    ok(t.as_(MCP_GATEWAY, M::POST, "/spans/f1/finish", Some(finish("done"))).await, 201, "the front finishes");
+    assert_eq!(t.as_(MCP_GATEWAY, M::GET, "/traces", None).await.status, 403);
+    assert_eq!(t.as_(MCP_GATEWAY, M::POST, "/admin-actions", Some(json!({}))).await.status, 403);
 
     // The gateway's link: every kind of span.
     for (i, kind) in ["turn", "attempt", "tool", "agent_step", "step", "gate"].iter().enumerate() {
