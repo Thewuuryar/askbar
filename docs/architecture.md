@@ -141,6 +141,7 @@ Every link and the network it uses. Every network except `edge` and `egress-outb
 | admin to the auditor (action records, reads, restore) | `audit-admin` |
 | model-gateway to the auditor (model-call spans) | `audit-model-gateway` |
 | alerter to the auditor (delivery records) and the auditor to the alerter (alert events) | `audit-alerter` |
+| the MCP gateway's front and the auditor (`tool` spans) | `audit-mcp-gateway` |
 | Caddy to the auditor (access lines, no token) | `audit-caddy` |
 | Caddy to certificate authorities | `edge` |
 | model-gateway to `cpa` | `cpa-gateway` |
@@ -193,6 +194,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `admin` | `egress-proxy` | Allowlists (`PUT /config`), status, restart | Per-link token (`admin-egress-proxy`) |
 | `server` | `mcp-gateway` | Tool calls with the signed approval | Per-link token (`server-mcp-gateway`) |
 | `admin` | `mcp-gateway` | Config (`PUT /config`) and status | Per-link token (`admin-mcp-gateway`) |
+| `mcp-gateway` | `auditor` | `tool` spans (start, finish, payloads) and hello; no read | Per-link token (`mcp-gateway-auditor`) |
 | `alerter` | `auditor` | Delivery records (`alert-deliveries`) | Alerter append token |
 | `server`, `model-gateway` | `auditor` | Append records, including `model-gateway` span starts | Service append token |
 | Caddy | `auditor` | Append access logs, to the ingest listener | None: a network of the two, and the listener answers nothing |

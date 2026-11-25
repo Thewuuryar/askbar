@@ -17,7 +17,7 @@ pub struct Link {
 
 /// Only links whose receiver exists: `admin-server` (step 2.1), the auditor's two admin links (2.4), and the
 /// three `model-gateway` links (3.1, ADR 0054), the server's link to the auditor (3.1, second half), and the
-/// alerter's three links (4.1, ADR 0055) the auditor's restore link (6.3, ADR 0013) the egress proxy's link (4.1c, ADR 0056) and the MCP gateway's two (5A.6a, ADR 0057).
+/// alerter's three links (4.1, ADR 0055) the auditor's restore link (6.3, ADR 0013) the egress proxy's link (4.1c, ADR 0056) and the MCP gateway's three (5A.6a, 5A.9a, ADR 0057).
 pub const LINKS: &[Link] = &[
     Link { name: ADMIN_SERVER, caller: "admin", receiver: "server", prefix: "mgt_" }, // names-ok: the token prefix already issued
     Link { name: ADMIN_AUDITOR_APPEND, caller: "admin", receiver: "auditor", prefix: "audapp_" },
@@ -42,6 +42,8 @@ pub const LINKS: &[Link] = &[
     // The MCP gateway (plan step 5A.6a, ADR 0057): the server calls its tools, the admin pushes its config.
     Link { name: SERVER_MCP_GATEWAY, caller: "server", receiver: "mcp-gateway", prefix: "srvmcp_" },
     Link { name: ADMIN_MCP_GATEWAY, caller: "admin", receiver: "mcp-gateway", prefix: "admmcp_" },
+    // The front writes its `tool` spans to the auditor (plan step 5A.9a, ADR 0057).
+    Link { name: MCP_GATEWAY_AUDITOR, caller: "mcp-gateway", receiver: "auditor", prefix: "mcpaud_" },
 ];
 
 /// A service with a credential volume `<name>-token`, and the uid that reads it (ADR 0003).

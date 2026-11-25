@@ -18,6 +18,7 @@
 #   cpa-gateway  model-gateway and CLIProxyAPI, nothing else. `internal`.
 #   audit-alerter  the auditor and the alerter, nothing else. `internal`. The auditor sends its alert events on it, and the
 #               alerter appends the outcome of each alert (ADR 0055); alerter-admin (the admin and the alerter) is the same.
+#   audit-mcp-gateway  the auditor and the MCP gateway's front, nothing else. `internal`. The front writes its `tool` spans on it (ADR 0057).
 #   egress-admin, egress-model-gateway, egress-cpa, egress-alerter  the egress proxy and one caller each. `internal`. A caller
 #               reaches a provider, ntfy or a mail server only through the proxy (ADR 0056).
 #   egress-outbound  the egress proxy's route out. Not `internal`. The proxy and, in dev, the mock LLM, nothing else. Only
@@ -174,7 +175,7 @@ services:
     environment:
       # The token API on the address its alias has on each of the three networks of its callers, never a wildcard, so
       # nothing on audit-caddy reaches it; the ingest listener for Caddy's access lines on audit-caddy alone (ADR 0051).
-      ASKBAR_AUDIT_API_ADDRS: auditor-admin-host:8083,auditor-model-gateway-host:8083,auditor-server-host:8083,auditor-alerter-host:8083
+      ASKBAR_AUDIT_API_ADDRS: auditor-admin-host:8083,auditor-model-gateway-host:8083,auditor-server-host:8083,auditor-alerter-host:8083,auditor-mcp-gateway-host:8083
       ASKBAR_AUDIT_INGEST_ADDR: auditor-ingest-host:8086
     networks:
       audit-admin:
@@ -186,6 +187,9 @@ services:
       # The alerter appends the outcome of each alert here, and the auditor sends its events to the alerter on it (ADR 0055).
       audit-alerter:
         aliases: [auditor-alerter-host]
+      # The MCP gateway's front writes its tool spans here (ADR 0057); its service comes in P5A.12.
+      audit-mcp-gateway:
+        aliases: [auditor-mcp-gateway-host]
       # Caddy's access lines. The ingest listener only; the token API is not on this network.
       audit-caddy:
         aliases: [auditor-ingest-host]
@@ -431,6 +435,9 @@ networks:
     internal: true
   # The auditor and the alerter, nothing else. No route out.
   audit-alerter:
+    internal: true
+  # The auditor and the MCP gateway's front, nothing else. No route out.
+  audit-mcp-gateway:
     internal: true
   # The alerter's listener for the admin. The admin and the alerter, nothing else. No route out.
   alerter-admin:

@@ -18,8 +18,8 @@ use askbar_audit::{AdminActionWrite, AlertDeliveryWrite, AppendError, PayloadWri
 use askbar_proto::audit as wire;
 use askbar_proto::http::ApiError;
 use askbar_proto::links::{
-    ADMIN_AUDITOR_APPEND, ADMIN_AUDITOR_READ, ADMIN_AUDITOR_RESTORE, ALERTER_AUDITOR, MODEL_GATEWAY_AUDITOR, MODEL_GATEWAY_AUDITOR_READ,
-    SERVER_AUDITOR,
+    ADMIN_AUDITOR_APPEND, ADMIN_AUDITOR_READ, ADMIN_AUDITOR_RESTORE, ALERTER_AUDITOR, MCP_GATEWAY_AUDITOR, MODEL_GATEWAY_AUDITOR,
+    MODEL_GATEWAY_AUDITOR_READ, SERVER_AUDITOR,
 };
 use askbar_proto::paths::{self, AUDIT_V1};
 use askbar_proto::ErrorCode;
@@ -263,6 +263,7 @@ pub const LINKS: &[(&str, &str, Routes)] = &[
     (ADMIN_AUDITOR_READ, "admin-read", ADMIN_READ),
     (MODEL_GATEWAY_AUDITOR_READ, "model-gateway-read", GATEWAY_READ),
     (ALERTER_AUDITOR, "alerter", ALERTER_APPEND),
+    (MCP_GATEWAY_AUDITOR, "mcp-gateway", SERVICE_APPEND),
     (ADMIN_AUDITOR_RESTORE, "admin-restore", ADMIN_RESTORE),
 ];
 
@@ -285,11 +286,12 @@ pub fn links(token_dir: &FsPath) -> Links {
 }
 
 /// Which kinds of span a caller may open. Only `model-gateway` opens model-call spans (ADR 0010 rule 2); the
-/// server may open the checks that come before one.
+/// server may open the checks that come before one, and the MCP gateway's front only `tool` spans (ADR 0057).
 fn may_start(caller: &str, kind: wire::SpanKind) -> bool {
     match caller {
         "model-gateway" => true,
         "server" => kind == wire::SpanKind::Gate,
+        "mcp-gateway" => kind == wire::SpanKind::Tool,
         _ => false,
     }
 }

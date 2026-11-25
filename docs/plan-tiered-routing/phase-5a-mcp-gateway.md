@@ -83,7 +83,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Files: `services/mcp-gateway/src/{approval,call}.rs`, tests.
   Do: `POST /api/mcp-gateway/v1/tools/{tool}/call` takes the exact arguments and the approval; recompute the action hash, run `verify` with the pushed public key and an in-memory one-time ID store (window from `constants.rs`; entries expire with the window); any failure refuses with problem+json (ADR 0023) and a distinct code, before anything else runs.
   Accept: unsigned, replayed, swapped, expired and wrong-key approvals are each refused; a valid one passes to the next check; two calls racing with one approval let exactly one through.
-- [ ] **P5A.9a** `feat(auditor): add the mcp-gateway audit link` · sonnet · after P5A.6 **[draft PR: network, credential volume]**
+- [x] **P5A.9a** `feat(auditor): add the mcp-gateway audit link` · sonnet · after P5A.6 **[draft PR: network, credential volume]**
   Files: `services/auditor/src/lib.rs` (`LINKS`, `may_start`), `compose.yaml`, `services/bootstrap/src/{links,write}.rs`, `scripts/check-isolation.sh`, tests.
   Do: add an `mcp-gateway-auditor` entry to `LINKS` with its bootstrap token; add the audit network `audit-mcp-gateway` for the front in compose; add a `may_start` arm for `mcp-gateway` that allows `tool` spans only. Amend ADR 0010 and ADR 0051 in P5A.34 and P5A.35.
   Accept: the front can open a tool span and nothing else (a `turn` or `gate` start is refused); `scripts/check-isolation.sh` passes (CI).
