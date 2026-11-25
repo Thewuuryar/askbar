@@ -196,20 +196,21 @@ def sp(s): return s.split()
 # service: networks | named volumes (name:ro = read-only) | published ports
 SPEC = {
   "bootstrap": ("", "server-token admin-token auditor-token model-gateway-token alerter-token egress-proxy-token mcp-gateway-token", ""),
-  "server": ("audit-server client-api gateway-server server-api", "server-token:ro", ""),
-  "admin": ("alerter-admin audit-admin cpa-admin egress-admin gateway-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
+  "server": ("audit-server client-api gateway-server mcp-server server-api", "server-token:ro", ""),
+  "admin": ("alerter-admin audit-admin cpa-admin egress-admin gateway-admin mcp-admin server-api", "cpa-config admin-data admin-secrets backup admin-token:ro admin-run caddy-run caddy-secrets", ""),
   "auditor": ("audit-admin audit-alerter audit-caddy audit-mcp-gateway audit-model-gateway audit-server", "auditor-data auditor-token:ro", ""),
   "model-gateway": ("audit-model-gateway cpa-gateway egress-model-gateway gateway-admin gateway-server", "model-gateway-token:ro", ""),
   "alerter": ("alerter-admin audit-alerter egress-alerter", "alerter-data alerter-token:ro", ""),
-  "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
+  "egress-proxy": ("egress-admin egress-alerter egress-cpa egress-fetch egress-model-gateway egress-outbound", "egress-proxy-token:ro", ""),
+  "mcp-gateway": ("audit-mcp-gateway egress-fetch mcp-admin mcp-searxng mcp-server", "mcp-gateway-token:ro", ""),
   "mock-llm": ("edge egress-outbound", "", ""),
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
   "cpa": ("cpa-admin cpa-gateway egress-cpa", "cpa-config cpa-auth", ""),
 }
 OPEN = {"edge", "egress-outbound"}  # the networks with a route out
 ADD = {"bootstrap": "CHOWN", "caddy": "NET_BIND_SERVICE"}
-SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa"), ("egress-proxy", "server"), ("egress-proxy", "auditor"), ("egress-proxy", "caddy")]
-out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, egress-proxy, mock-llm, caddy and cpa")
+SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa"), ("egress-proxy", "server"), ("egress-proxy", "auditor"), ("egress-proxy", "caddy"), ("mcp-gateway", "model-gateway"), ("mcp-gateway", "alerter"), ("mcp-gateway", "caddy"), ("mcp-gateway", "cpa")]
+out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, mcp-gateway, egress-proxy, mock-llm, caddy and cpa")
 nets = {s: set(S[s].get("networks") or {}) for s in S}
 for s, (n, v, p) in SPEC.items():
     d = S.get(s)
@@ -243,8 +244,9 @@ routed = {s for s in S if nets[s] & OPEN} - {"mock-llm"}  # the dev mock LLM sit
 out(routed == {"caddy", "egress-proxy"}, f"only caddy and egress-proxy are on a network with a route out (found: {' '.join(sorted(routed))})")
 for a, b in SEPARATE:
     out(not nets[a] & nets[b], f"{a} shares no network with {b}")
-# P5A.9a: the front's audit network has the auditor alone until the front is added (P5A.12)
-out({s for s in S if "audit-mcp-gateway" in nets[s]} == {"auditor"}, "only the auditor is on audit-mcp-gateway")
+# P5A.12: each of the front's networks has the front and one peer (searxng joins mcp-searxng in P5A.13)
+for n, who in (("audit-mcp-gateway", {"auditor", "mcp-gateway"}), ("mcp-server", {"server", "mcp-gateway"}), ("mcp-admin", {"admin", "mcp-gateway"}), ("egress-fetch", {"egress-proxy", "mcp-gateway"}), ("mcp-searxng", {"mcp-gateway"})):
+    out({s for s in S if n in nets[s]} == who, f"only {' and '.join(sorted(who))} {'is' if len(who) == 1 else 'are'} on {n}")
 PY
 )
 CFG=$(docker compose -p "$PROJECT" --profile dev config --format json 2>/dev/null)
@@ -301,7 +303,7 @@ CLIENT_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$CLIENT_NET\
 [ "$(http "$CLIENT_NET" "http://$CLIENT_IP:8082/api/server/v1/health")" = 0 ] && pass "nothing on the client-api network answers on 8082" || fail "the server port answers on the client-api network"
 [ "$(http "$EDGE" "http://$SERVER_API/api/server/v1/health")" = 0 ] && pass "a container on edge cannot reach the server API address" || fail "the server API address is reachable from edge"
 admin_nets=$(nets_of "$ADMIN")
-[ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_egress-admin ${PROJECT}_gateway-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin, alerter-admin and egress-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
+[ "$admin_nets" = "${PROJECT}_alerter-admin ${PROJECT}_audit-admin ${PROJECT}_cpa-admin ${PROJECT}_egress-admin ${PROJECT}_gateway-admin ${PROJECT}_mcp-admin ${PROJECT}_server-api " ] && pass "the admin is on server-api, cpa-admin, audit-admin, gateway-admin, alerter-admin, egress-admin and mcp-admin only (all internal: no route out, never edge)" || fail "the admin's networks are: $admin_nets"
 
 echo "== 3. What the server can see"
 refused "the server cannot list /admin-secrets" docker exec "$SERVER" ls /admin-secrets
@@ -628,7 +630,7 @@ fi
 echo "== 3d6. The server has no route out and no key (ADR 0054)"
 if [ "$(docker inspect -f '{{.State.Running}}' "$SERVER" 2>/dev/null)" != true ]; then fail "the server is not running"; else
   svc_profile "$SERVER" "the server" <<EOF
-nets audit-server client-api gateway-server server-api|the server is on audit-server, client-api, gateway-server and server-api only
+nets audit-server client-api gateway-server mcp-server server-api|the server is on audit-server, client-api, gateway-server, mcp-server and server-api only
 EOF
   docker exec "$SERVER" bash -c 'timeout 4 bash -c "echo > /dev/tcp/1.1.1.1/443"' >/dev/null 2>&1 && fail "the server reached the internet" || pass "the server has no route out"
   docker exec "$SERVER" bash -c 'timeout 4 getent hosts example.com' >/dev/null 2>&1 && fail "the server resolved an outside name" || pass "the server cannot resolve an outside name"
@@ -815,6 +817,42 @@ print(call('PUT', '/api/admin/v1/alerts', {'ntfy': None})[0])" >/dev/null 2>&1
   fi
 fi
 
+echo "== 3d7a. The MCP gateway's front (ADR 0057)"
+MCPG=askbar-mcp-gateway
+MG_SRV="${PROJECT}_mcp-server"; MG_ADM="${PROJECT}_mcp-admin"; MG_FETCH="${PROJECT}_egress-fetch"
+if [ "$(docker inspect -f '{{.State.Running}}' "$MCPG" 2>/dev/null)" != true ]; then fail "the MCP gateway's front is not running"; else
+  svc_profile "$MCPG" "the MCP gateway's front" <<EOF
+health yes
+uid 10007
+caps yes
+nets audit-mcp-gateway egress-fetch mcp-admin mcp-searxng mcp-server|the front is on audit-mcp-gateway, egress-fetch, mcp-admin, mcp-searxng and mcp-server only
+owner $MCPG|/mcp-gateway-token/accept/server-mcp-gateway.sha256|10007 444|the front's server hash file (owner, mode)
+owner $MCPG|/mcp-gateway-token/accept/admin-mcp-gateway.sha256|10007 444|the front's admin hash file (owner, mode)
+owner $MCPG|/mcp-gateway-token/call/mcp-gateway-auditor.token|10007 400|the front's auditor token file (owner, mode)
+dirs $MCPG|10007 500|the front's|/mcp-gateway-token /mcp-gateway-token/call /mcp-gateway-token/accept
+EOF
+  MG_SRV_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MG_SRV\").IPAddress}}" "$MCPG")
+  MG_ADM_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MG_ADM\").IPAddress}}" "$MCPG")
+  MG_FETCH_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MG_FETCH\").IPAddress}}" "$MCPG")
+  [ "$(http "$MG_SRV" "http://$MG_SRV_IP:8087/api/mcp-gateway/v1/health" GET)" = 200 ] && pass "the server's listener answers on mcp-server" || fail "the server's listener does not answer on mcp-server"
+  [ "$(http "$MG_ADM" "http://$MG_ADM_IP:8087/api/mcp-gateway/v1/health" GET)" = 200 ] && pass "the admin's listener answers on mcp-admin" || fail "the admin's listener does not answer on mcp-admin"
+  # Nothing answers on egress-fetch but the proxy: a positive control in the same container, then every port of the front.
+  got=$(py --network "$MG_FETCH" -e "X_IP=$MG_FETCH_IP" -- '
+import os, socket
+def up(h, p):
+    try: socket.create_connection((h, p), timeout=4).close(); return 1
+    except Exception: return 0
+print("proxy", up("egress-fetch-host", 3128), "front", up(os.environ["X_IP"], 8087))' 2>/dev/null | tail -1)
+  [ "$got" = "proxy 1 front 0" ] && pass "on egress-fetch the proxy answers and the front does not" || fail "on egress-fetch: '$got'"
+  [ "$(http "$EDGE" "http://$MG_SRV_IP:8087/api/mcp-gateway/v1/health" GET)" = 0 ] && pass "a container on edge cannot reach the front" || fail "the front is reachable from edge"
+  # No route to the server's API (8082, or the client API on 8080) or the admin's (8084), though the front shares a network with each.
+  for t in server/8082 server/8080 admin/8084; do
+    docker exec "$MCPG" bash -c "exec 3<>/dev/tcp/$t" >/dev/null 2>&1 && fail "the front reaches ${t%/*} on ${t#*/}" || pass "the front cannot reach ${t%/*} on ${t#*/}"
+  done
+  docker exec "$MCPG" bash -c 'exec 3<>/dev/tcp/auditor-mcp-gateway-host/8083' >/dev/null 2>&1 && pass "the front reaches the auditor on audit-mcp-gateway" || fail "the front cannot reach the auditor"
+  docker exec "$MCPG" bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' >/dev/null 2>&1 && fail "the front reached the internet directly" || pass "the front has no direct route out"
+fi
+
 echo "== 3d8. The egress proxy (ADR 0056)"
 EGP=askbar-egress-proxy
 EGP_OUT="${PROJECT}_egress-outbound"
@@ -823,7 +861,7 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$EGP" 2>/dev/null)" != true ]; t
 health yes
 uid 10006
 caps yes
-nets egress-admin egress-alerter egress-cpa egress-model-gateway egress-outbound|the egress proxy is on egress-admin, egress-alerter, egress-cpa, egress-model-gateway and egress-outbound only
+nets egress-admin egress-alerter egress-cpa egress-fetch egress-model-gateway egress-outbound|the egress proxy is on egress-admin, egress-alerter, egress-cpa, egress-fetch, egress-model-gateway and egress-outbound only
 owner $EGP|/egress-proxy-token/accept/admin-egress-proxy.sha256|10006 444|the egress proxy's admin hash file (owner, mode)
 dirs $EGP|10006 500|the egress proxy's|/egress-proxy-token /egress-proxy-token/call /egress-proxy-token/accept
 owner $ADMIN|/admin-token/call/admin-egress-proxy.token|10001 400|the admin's egress proxy token file (owner, mode)
@@ -855,7 +893,7 @@ echo "== 3d9. The egress proxy denies by default and blocks private addresses (A
 # Throwaway containers on each source's network talk to the proxy's listener for that source. The stand-in upstream sits on
 # egress-outbound (the proxy's one route out) and answers "askbar-standin-ok" on 8080 and 8081.
 P45_SRC=askbar-egress-standin; P45_FRESH=askbar-egress-fresh; P45_NET="${PROJECT}_p45-fresh"
-P45_MG="${PROJECT}_egress-model-gateway"; P45_CPA="${PROJECT}_egress-cpa"; P45_AL="${PROJECT}_egress-alerter"
+P45_MG="${PROJECT}_egress-model-gateway"; P45_CPA="${PROJECT}_egress-cpa"; P45_AL="${PROJECT}_egress-alerter"; P45_FE="${PROJECT}_egress-fetch"
 P45_STAND_PY='
 import http.server as h, threading
 class H(h.BaseHTTPRequestHandler):
@@ -917,7 +955,7 @@ for h, p in (('$P45_SRC', 8080), ('$P45_SRC', 8081)):
 P45_PIDS=""; p45_clean
 if [ "$(docker inspect -f '{{.State.Running}}' "$EGP" 2>/dev/null)" != true ]; then fail "the egress proxy is not running"; else
   # (2) No route out of a source's network, with a positive control in the same container: the proxy's listener answers there.
-  for pair in "model-gateway $P45_MG egress-model-gateway-host" "cpa $P45_CPA egress-cpa-host" "alerter $P45_AL egress-alerter-host"; do
+  for pair in "model-gateway $P45_MG egress-model-gateway-host" "cpa $P45_CPA egress-cpa-host" "alerter $P45_AL egress-alerter-host" "fetch $P45_FE egress-fetch-host"; do
     set -- $pair
     got=$(py --network "$2" -e "X_PROXY=$3:3128" -- '
 import os, socket

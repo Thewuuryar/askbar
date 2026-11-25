@@ -29,6 +29,8 @@ services:
     container_name: askbar-staging-model-gateway
   alerter:
     container_name: askbar-staging-alerter
+  mcp-gateway:
+    container_name: askbar-staging-mcp-gateway
   egress-proxy:
     container_name: askbar-staging-egress-proxy
   caddy:
