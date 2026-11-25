@@ -17,6 +17,7 @@ pub mod models;
 pub mod provider_test;
 pub mod router;
 pub mod seal;
+pub mod task;
 pub mod usage;
 
 use askbar_proto::audit::{SpanFinish, SpanKind, SpanStart};
@@ -84,6 +85,8 @@ struct Applied {
     quick_search: askbar_proto::quick_search::QuickSearchLimits,
     /// Whether quick search is on for everyone (plan P8.6e).
     quick_search_enabled: bool,
+    /// The task limits (plan phase 5B): the token cap a task's calls are held to, and its tool-call limit.
+    task_limits: askbar_proto::research::TaskLimits,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -112,6 +115,8 @@ pub struct Gateway {
     running: Mutex<Vec<Running>>,
     /// What quick search approvals have been given, for the per-reply and per-hour limits.
     quick: Mutex<approval::QuickCounts>,
+    /// What each research task has used, for its token cap and tool-call limit.
+    pub tasks: Mutex<task::TaskCounts>,
 }
 
 impl Gateway {
@@ -127,6 +132,7 @@ impl Gateway {
             reader: std::sync::OnceLock::new(),
             running: Mutex::new(Vec::new()),
             quick: Mutex::default(),
+            tasks: Mutex::default(),
         })
     }
 
@@ -298,7 +304,11 @@ fn bad(detail: impl Into<String>) -> Failure {
 }
 
 async fn status(State(gw): State<Arc<Gateway>>) -> Json<serde_json::Value> {
-    Json(askbar_service::status::body(gw.config_version(), &gw.boot_id))
+    let mut body = askbar_service::status::body(gw.config_version(), &gw.boot_id);
+    let (cap_75, cap_90) = gw.tasks.lock().unwrap_or_else(|e| e.into_inner()).totals();
+    body["task_cap_75"] = cap_75.into();
+    body["task_cap_90"] = cap_90.into();
+    Json(body)
 }
 
 // ------------------------------------------------------------------ models and the provider test
@@ -426,6 +436,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         role_pins: c.role_pins.clone(),
         quick_search: c.quick_search,
         quick_search_enabled: c.quick_search_enabled,
+        task_limits: c.task_limits,
     })
 }
 
@@ -438,6 +449,22 @@ impl Gateway {
     /// How long an approval lasts: the pushed value, or the `askbar-proto` default before the first push.
     pub fn approval_ttl_secs(&self) -> u32 {
         self.applied().map_or(askbar_proto::DEFAULT_APPROVAL_TTL_SECS, |a| a.approval_ttl_secs)
+    }
+
+    /// The task limits: the pushed ones, or the `askbar-proto` defaults before the first push.
+    fn task_limits(&self) -> askbar_proto::research::TaskLimits {
+        self.applied().map_or(askbar_proto::research::TaskLimits::DEFAULT, |a| a.task_limits)
+    }
+
+    /// Count one tool call of `task`, or refuse with `task_tool_calls` once it has made as many as it may. For
+    /// `POST /approvals/research` (P5B.2), which takes it back with `release_tool_call` if no approval is given.
+    pub fn reserve_tool_call(&self, task: &str) -> Result<(), ErrorCode> {
+        let limit = self.task_limits().tool_calls;
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).reserve_tool_call(task, limit)
+    }
+
+    pub fn release_tool_call(&self, task: &str) {
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).release_tool_call(task);
     }
 
     /// Put `c` in place of the configuration, or say why not (a sentence for a person). The keys it carries are held in
@@ -550,6 +577,13 @@ impl Gateway {
         if !cfg.catalog.contains(&(req.provider_id.clone(), req.model.clone())) {
             refuse_at_gate(self, req, "model_catalog", "model_not_approved", serde_json::json!({ "approved": false }));
             return Err(ApiError::new(ErrorCode::ModelNotApproved, "That model is not approved. Pick another one."));
+        }
+        // A task's calls stop at its token cap, whatever the budget. Not atomic with the count after the call: calls
+        // in flight together may overshoot once.
+        let cap = cfg.task_limits.token_cap;
+        if req.role.is_some_and(Role::is_task) && self.tasks.lock().unwrap_or_else(|e| e.into_inner()).at_cap(&req.generation_id, cap) {
+            refuse_at_gate(self, req, "task_token_cap", "task_token_cap", serde_json::json!({ "token_cap": cap }));
+            return Err(ApiError::new(ErrorCode::TaskTokenCap, "This task has used all the tokens it may."));
         }
         let (daily, monthly) = (cfg.budget.daily_tokens, cfg.budget.monthly_tokens);
         if (daily.is_none() && monthly.is_none()) || cfg.free.contains(&req.provider_id) {
@@ -812,6 +846,10 @@ async fn run_attempts(
                     return;
                 }
                 gw.audit.finish(&attempt_id, end);
+                if let (true, Some(u)) = (req.role.is_some_and(Role::is_task), r.usage) {
+                    let used = u.input.unwrap_or(0) + u.output.unwrap_or(0);
+                    gw.tasks.lock().unwrap_or_else(|e| e.into_inner()).add_tokens(&req.generation_id, used, cfg.task_limits.token_cap);
+                }
                 if r.outcome == StreamOutcome::Completed {
                     // What this reply used counts toward the budget, unless the provider is a subscription.
                     if let Some(u) = r.usage.filter(|_| !cfg.free.contains(&req.provider_id)) {

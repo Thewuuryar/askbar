@@ -61,12 +61,18 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [config_version, boot_id]
+                required: [config_version, boot_id, task_cap_75, task_cap_90]
                 properties:
                   config_version:
                     type: [integer, 'null']
                   boot_id:
                     type: string
+                  task_cap_75:
+                    type: integer
+                    description: Tasks that have used 75% of the token cap since this process started. A count; no task or user is named.
+                  task_cap_90:
+                    type: integer
+                    description: The same for 90%.
         '401':
           $ref: '#/components/responses/Unauthorized'
   /api/model-gateway/v1/config:
@@ -240,6 +246,15 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: >-
+            A research task (a request whose `role` is a task role, with the generation id as the task id) has used its
+            token cap (`task_token_cap`). Nothing was called. The refusal is a `blocked` `task_token_cap` gate span in
+            the generation's trace.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '403':
           description: >-
             The administrator paused replies for this user (`user_paused`). Nothing was called. The refusal is a `blocked`
