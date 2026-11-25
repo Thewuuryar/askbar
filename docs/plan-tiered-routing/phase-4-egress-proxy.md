@@ -114,7 +114,7 @@ Steps marked **[draft PR]** change `compose.yaml`, a Dockerfile, a network or a 
 - [x] **P4.7d** `docs(adr): amend 0055: the alerter delivers through the proxy` · haiku · after P4.7c
   Files: `docs/adr/0055-alerter.md`. Do: `egress-alerter` replaces `alerter-outbound`; ntfy and the release check use `CONNECT`, mail uses the relay; the checks line. Accept: `scripts/check-docs.sh` passes.
 
-- [ ] **P4.7e** `docs(adr): amend 0042: cpa reaches providers through the proxy` · haiku · after P4.7d
+- [x] **P4.7e** `docs(adr): amend 0042: cpa reaches providers through the proxy` · haiku · after P4.7d
   Files: `docs/adr/0042-cpa.md` (its network list; ADR 0037's "as today" networks line is history and gets a pointer to this amendment in the same commit). Do: `egress-cpa` replaces `outbound`, and the mechanism P4.3b found. Accept: `scripts/check-docs.sh` passes.
 
 - [ ] **P4.7f** `docs(adr): amend 0040: the admin pushes the egress allowlists` · haiku · after P4.7e
