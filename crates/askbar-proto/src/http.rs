@@ -91,6 +91,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::ToolTimeout => "The tool did not finish in time.",
         ErrorCode::ToolResultTooLarge => "The tool result is over the size limit and was not returned.",
         ErrorCode::ToolUpstreamFailed => "The tool's backing service failed.",
+        ErrorCode::FetchRefused => "The fetch was refused.",
         ErrorCode::Internal => "Something went wrong on the server.",
     }
 }

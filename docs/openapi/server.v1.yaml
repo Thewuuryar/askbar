@@ -421,6 +421,7 @@ components:
           - tool_timeout
           - tool_result_too_large
           - tool_upstream_failed
+          - fetch_refused
           - internal
     Snapshot:
       type: object

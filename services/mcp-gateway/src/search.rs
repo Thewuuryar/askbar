@@ -3,6 +3,7 @@
 //! ([`Remembered::contains`]). The query and the results are never logged; the front counts outcomes only.
 
 use crate::constants::*;
+use crate::fetch_rules::check;
 use crate::registry::{handler, Handler, ToolCall};
 use askbar_proto::ErrorCode;
 use serde_json::{json, Value};
@@ -18,7 +19,7 @@ pub struct Remembered(Mutex<VecDeque<(String, VecDeque<String>)>>);
 
 impl Remembered {
     /// Remembers `urls` for the task, keeping at most `cap` of its newest.
-    fn add(&self, task_id: &str, urls: &[String], cap: usize) {
+    pub(crate) fn add(&self, task_id: &str, urls: &[String], cap: usize) {
         let mut tasks = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let i = tasks.iter().position(|(t, _)| t == task_id).unwrap_or_else(|| {
             if tasks.len() >= MAX_REMEMBERED_TASKS {
@@ -88,7 +89,7 @@ async fn ask(client: &reqwest::Client, addr: &str, query: &str, limit: Duration)
     Some(body)
 }
 
-/// The first `n` usable results as `{title, url, snippet}`; a result without an http(s) URL is skipped. None if the body is not a `searxng` answer.
+/// The first `n` usable results as `{title, url, snippet}`; a result whose URL `fetch` would refuse is skipped. None if the body is not a `searxng` answer.
 fn parse(body: &[u8], n: usize) -> Option<Vec<Value>> {
     let v: Value = serde_json::from_slice(body).ok()?;
     let text = |r: &Value, k: &str, max: usize| r[k].as_str().unwrap_or_default().chars().take(max).collect::<String>();
@@ -99,12 +100,10 @@ fn parse(body: &[u8], n: usize) -> Option<Vec<Value>> {
     Some(results.take(n).collect())
 }
 
-/// An absolute http or https URL with a host, no control or space characters and a bounded length.
+/// A URL `fetch` can take, so a remembered URL is always fetchable. The query-string rule is left out here: a URL with one is
+/// fetchable when its action is signed with `query_data` (ADR 0019 rule 3).
 fn http_url(u: &str) -> bool {
-    let rest = ["http://", "https://"].iter().find_map(|s| u.get(..s.len()).filter(|p| p.eq_ignore_ascii_case(s)).map(|_| &u[s.len()..]));
-    u.len() <= MAX_URL_CHARS
-        && rest.is_some_and(|r| !r.starts_with(['/', '?', '#']) && !r.is_empty())
-        && !u.chars().any(|c| c.is_control() || c == ' ')
+    u.len() <= MAX_URL_CHARS && check(u, true).is_ok()
 }
 
 #[cfg(test)]
@@ -167,6 +166,8 @@ mod tests {
             task_id: task.into(),
             user: "alice".into(),
             config: Default::default(),
+            audit: None,
+            span_id: String::new(),
         };
         assert!(h(call("t1")).await.is_ok());
         assert!(store.contains("t1", "https://r.example/1"));

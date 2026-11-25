@@ -55,11 +55,12 @@ pub enum ErrorCode {
     ToolTimeout,
     ToolResultTooLarge,
     ToolUpstreamFailed,
+    FetchRefused,
     Internal,
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 37] = [
+    pub const ALL: [ErrorCode; 38] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -96,6 +97,7 @@ impl ErrorCode {
         ErrorCode::ToolTimeout,
         ErrorCode::ToolResultTooLarge,
         ErrorCode::ToolUpstreamFailed,
+        ErrorCode::FetchRefused,
         ErrorCode::Internal,
     ];
 
@@ -138,6 +140,7 @@ impl ErrorCode {
             ErrorCode::ToolTimeout => "tool_timeout",
             ErrorCode::ToolResultTooLarge => "tool_result_too_large",
             ErrorCode::ToolUpstreamFailed => "tool_upstream_failed",
+            ErrorCode::FetchRefused => "fetch_refused",
             ErrorCode::Internal => "internal",
         }
     }
@@ -158,7 +161,11 @@ impl ErrorCode {
             ErrorCode::ClientTooOld => 426,
             ErrorCode::ClientVersionMissing | ErrorCode::BadRequest | ErrorCode::ModelNotApproved => 400,
             ErrorCode::Unauthorized => 401,
-            ErrorCode::Forbidden | ErrorCode::PasswordChangeRequired | ErrorCode::UserPaused | ErrorCode::ToolNotPermitted => 403,
+            ErrorCode::Forbidden
+            | ErrorCode::PasswordChangeRequired
+            | ErrorCode::UserPaused
+            | ErrorCode::ToolNotPermitted
+            | ErrorCode::FetchRefused => 403,
             ErrorCode::ApprovalUnsignable => 400,
             ErrorCode::ApprovalUnsigned
             | ErrorCode::ApprovalSignatureInvalid
@@ -214,6 +221,7 @@ impl ErrorCode {
             ErrorCode::ToolTimeout => "The tool took too long",
             ErrorCode::ToolResultTooLarge => "The tool result is too large",
             ErrorCode::ToolUpstreamFailed => "The tool's backing service failed",
+            ErrorCode::FetchRefused => "The fetch was refused",
             ErrorCode::Internal => "Something went wrong on the server",
         }
     }
@@ -379,9 +387,10 @@ mod tests {
                 | ErrorCode::ToolTimeout
                 | ErrorCode::ToolResultTooLarge
                 | ErrorCode::ToolUpstreamFailed
+                | ErrorCode::FetchRefused
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 37);
+        assert_eq!(ErrorCode::ALL.len(), 38);
     }
 }

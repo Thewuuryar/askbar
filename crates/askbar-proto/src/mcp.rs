@@ -44,6 +44,15 @@ pub const DEFAULT_TOOL_RESULT_MAX_BYTES: u64 = 1024 * 1024;
 pub const MAX_TOOL_RESULT_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const _: () = assert!(DEFAULT_TOOL_RESULT_MAX_BYTES >= DEFAULT_FETCH_MAX_BYTES);
 
+/// The response content types `fetch` accepts (the type before any `;`, lower case). Fixed, not pushed: no push can widen it.
+pub const FETCH_CONTENT_TYPES: [&str; 4] = ["text/html", "text/plain", "application/xhtml+xml", "application/json"];
+
+/// The only ports `fetch` reaches, named or implied by the scheme. Fixed, not pushed.
+pub const FETCH_PORTS: [u16; 2] = [80, 443];
+
+/// The datamark character (spotlighting, W5.3 marks fetched text with it). `fetch` only strips it from a page, so a page cannot forge a marker.
+pub const DATAMARK: char = '\u{02C6}';
+
 /// The built-in tools a user can be given. Off by default (ADR 0019): a user holds a tool only when the admin pushes it.
 pub const TOOLS: [&str; 2] = ["search", "fetch"];
 
