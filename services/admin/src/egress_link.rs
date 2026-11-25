@@ -242,6 +242,28 @@ pub async fn list_denied(State(state): St) -> Json<serde_json::Value> {
     })
 }
 
+/// `GET /api/admin/v1/egress/status`: per source the entries the admin pushed (derived again from `admin.db`, as the next push
+/// would be) and the allowed and denied counts from the proxy's last status. No path, URL or token is in it.
+pub async fn status(State(state): St) -> Json<serde_json::Value> {
+    let Some(l) = state.egress.get() else {
+        return Json(serde_json::json!({ "online": false, "error": "No link to the egress proxy is set up.", "sources": {} }));
+    };
+    let last = l.last.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let cfg = build_config(state.db.lock().await.conn(), &state.secrets, &last);
+    let sources: serde_json::Map<_, _> = cfg
+        .sources
+        .into_iter()
+        .map(|(name, r)| {
+            let stats = last.sources.get(&name);
+            (
+                name,
+                serde_json::json!({ "entries": r.entries, "allowed": stats.map_or(0, |s| s.allowed), "denied": stats.map(|s| &s.denied) }),
+            )
+        })
+        .collect();
+    Json(serde_json::json!({ "online": l.online(), "error": l.last_error(), "sources": sources }))
+}
+
 /// How a check went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sync {
@@ -261,12 +283,15 @@ pub struct EgressLink {
     link: LinkClient,
     /// `recent_denied` of the last status the proxy answered (kept in memory only, like the proxy's own).
     denied: std::sync::Mutex<Vec<Denied>>,
+    /// The last status the proxy answered, for its per-source counts.
+    last: std::sync::Mutex<EgressStatus>,
 }
 
 impl EgressLink {
     pub fn new(base: &str, token: String) -> Arc<EgressLink> {
         Arc::new(EgressLink {
             denied: Default::default(),
+            last: Default::default(),
             link: LinkClient::new(base, token, LINK, "egress-proxy", askbar_proto::paths::EGRESS_PROXY_V1, Duration::from_secs(15)),
         })
     }
@@ -301,6 +326,7 @@ impl EgressLink {
         self.link.online.store(ok.is_some(), Ordering::Relaxed);
         if let Some(st) = &ok {
             *self.denied.lock().unwrap_or_else(|e| e.into_inner()) = st.recent_denied.clone();
+            *self.last.lock().unwrap_or_else(|e| e.into_inner()) = st.clone();
             self.link.restarts.saw(&st.boot_id);
         } else {
             self.link.set_error(Some(match result {

@@ -1490,6 +1490,125 @@ paths:
                           description: Unix seconds.
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /api/admin/v1/egress/status:
+    get:
+      operationId: getEgressStatus
+      summary: Per outbound source, the entries the admin pushed and the proxy's allowed and denied counts.
+      description: "The entries are derived again from the admin's settings, as the next push would be. The counts are from the proxy's last status (every 12 seconds) and reset when it restarts. No path, URL or token is in it. Session only."
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The sources.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [online, error, sources]
+                properties:
+                  online:
+                    type: boolean
+                  error:
+                    type: [string, 'null']
+                  sources:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      required: [entries, allowed, denied]
+                      properties:
+                        entries:
+                          type: array
+                          items:
+                            type: object
+                            required: [host, port, plain_http, allow_private, relay, any_public]
+                            properties:
+                              host:
+                                type: string
+                              port:
+                                type: integer
+                              plain_http:
+                                type: boolean
+                              allow_private:
+                                type: boolean
+                              relay:
+                                type: boolean
+                              any_public:
+                                type: boolean
+                        allowed:
+                          type: integer
+                        denied:
+                          type: [object, 'null']
+                          description: Denied attempts by reason code.
+                          additionalProperties:
+                            type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/v1/mcp/status:
+    get:
+      operationId: getMcpStatus
+      summary: The MCP front's state and the approval key's fingerprint.
+      description: "From the admin's link to the front: whether it answers, the last error as a sentence, the configuration version the admin pushes and the one the front reports (null until it is configured), and its calls by outcome. A front with no configuration refuses every call. The approval key is shown by a fingerprint (the first 16 hex digits of the SHA-256 of the public key) and its version only. Session only."
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [online, error, configured, pushed_version, reported_version, calls, approval_key]
+                properties:
+                  online:
+                    type: boolean
+                  error:
+                    type: [string, 'null']
+                  configured:
+                    type: boolean
+                  pushed_version:
+                    type: integer
+                  reported_version:
+                    type: [integer, 'null']
+                  calls:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  approval_key:
+                    type: [object, 'null']
+                    required: [fingerprint, version]
+                    properties:
+                      fingerprint:
+                        type: string
+                      version:
+                        type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/v1/mcp/approval-key/rotate:
+    post:
+      operationId: rotateMcpApprovalKey
+      summary: Make a new approval key. Needs a fresh sign-in.
+      description: "A new key under the next version, pushed at once: the public key to the MCP front and the private key to `model-gateway`. Approvals signed with the old key stop being accepted. Needs a session signed in within the last 10 minutes; an API key is refused. The action is recorded in the auditor first, and refused with 503 if it cannot be. No key is returned."
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: The new key's fingerprint and version.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [fingerprint, version]
+                properties:
+                  fingerprint:
+                    type: string
+                  version:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/AuditorUnavailable'
   /api/admin/v1/egress/approvals:
     get:
       operationId: listEgressApprovals

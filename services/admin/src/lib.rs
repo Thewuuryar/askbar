@@ -287,6 +287,9 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .delete(&v1("/cpa/accounts/{name}"), cpa::remove_account)
         .get(&v1("/services"), services::list)
         .get(&v1("/egress/denied"), egress_link::list_denied)
+        .get(&v1("/egress/status"), egress_link::status)
+        .get(&v1("/mcp/status"), mcp::status)
+        .post(&v1("/mcp/approval-key/rotate"), mcp::rotate_key)
         .post(&v1("/services/{name}/restart"), services::restart)
         // Sealed content is the person's alone: no admin API key can start a session or look into one (ADR 0011).
         .get(&v1("/audit/session"), admin_api::get_unseal_session)

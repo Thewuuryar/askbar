@@ -53,6 +53,7 @@
   const tabs = [
     { id: 'home', load: loadHome },
     { id: 'providers', load: loadProviders },
+    { id: 'mcp', load: loadMcp },
     { id: 'services', load: loadServices },
     { id: 'people', load: loadClients },
     { id: 'general', load: loadSettings },
@@ -1161,6 +1162,75 @@
     onError: pageFailed,
   });
   function loadServices() { liveDenied.start(); return liveServices.start(); }
+  // ------------------------------------------------------------------ MCP page
+  // Every value from a service (outcomes, hosts, errors) is written with textContent only.
+  const MCP_TOOLS = ['search', 'fetch'];
+  let mcpBusy = false;
+  async function setMcpTool(user, held, tool, on) {
+    mcpBusy = true;
+    pageError('');
+    const allowed = (held.allowed || []).filter((t) => t !== tool);
+    if (on) allowed.push(tool);
+    try { await api('PUT', '/api/admin/v1/mcp/permissions/' + encodeURIComponent(user.id), { allowed, denied: held.denied || [] }); } catch (ex) { pageError(ex.message); }
+    mcpBusy = false;
+    liveMcp.refresh({ force: true });
+  }
+  function mcpPermRow(u, perms) {
+    const held = perms[u.id] || { allowed: [], denied: [] };
+    return ui.el('tr', { 'data-user': u.id },
+      ui.el('td', { text: u.name }),
+      ...MCP_TOOLS.map((tool) => {
+        const denied = (held.denied || []).includes(tool);
+        const box = ui.el('input', { type: 'checkbox', 'aria-label': u.name + ': ' + tool, disabled: denied });
+        box.checked = (held.allowed || []).includes(tool);
+        box.addEventListener('change', () => setMcpTool(u, held, tool, box.checked));
+        return ui.el('td', null, ui.el('label', { class: 'check' }, box, denied ? ' Denied' : box.checked ? ' On' : ' Off'));
+      }));
+  }
+  const mcpDeniedTotal = (d) => Object.values(d || {}).reduce((a, b) => a + b, 0);
+  const mcpEntry = (e) => e.any_public ? 'any public host, port ' + e.port : e.host + ':' + e.port + (e.plain_http ? ' (plain HTTP)' : '') + (e.relay ? ' (mail relay)' : '');
+  const liveMcp = ui.live(() => Promise.all([
+    api('GET', '/api/admin/v1/users'), api('GET', '/api/admin/v1/mcp/permissions'),
+    api('GET', '/api/admin/v1/mcp/status'), api('GET', '/api/admin/v1/egress/status'),
+  ]), {
+    every: 'STATUS_EVERY_SECS',
+    when: appShownNow,
+    skip: () => mcpBusy,
+    render([users, perms, st, eg], ctx) {
+      ui.rows($('mcp-perms'), users, (u) => mcpPermRow(u, perms), {
+        key: (u) => u.id + '|' + JSON.stringify(perms[u.id] || null), force: ctx.force, empty: 'No people yet.',
+      });
+      const banner = $('mcp-banner');
+      banner.textContent = '';
+      if (!st.configured) {
+        banner.appendChild(ui.notice('warning', 'The MCP front has no configuration, so it refuses every call.',
+          st.online ? 'The admin pushes it within seconds.' : (st.error || 'The MCP front does not answer.')));
+      }
+      $('mcp-front-state').replaceChildren(ui.status(st.online ? 'ok' : 'warning', st.online ? 'Answering' : 'Not answering'));
+      $('mcp-front-versions').textContent = 'Pushed version ' + st.pushed_version + ' · reported version ' + (st.reported_version == null ? 'none' : st.reported_version) + (st.error ? ' · ' + st.error : '');
+      ui.rows($('mcp-calls'), Object.entries(st.calls), ([k, n]) => ui.el('tr', null, ui.el('td', { text: k }), ui.el('td', { class: 'num', text: String(n) })),
+        { key: ([k, n]) => k + '|' + n, force: ctx.force, empty: 'No call yet.' });
+      $('mcp-fingerprint').textContent = st.approval_key ? st.approval_key.fingerprint : 'none';
+      $('mcp-key-version').textContent = st.approval_key ? String(st.approval_key.version) : '0';
+      const note = $('mcp-egress-note');
+      note.textContent = eg.online ? '' : (eg.error || 'The egress proxy does not answer.') + ' The counts are from its last answer.';
+      note.hidden = eg.online;
+      const rows = ['searxng', 'fetch'].filter((n) => eg.sources[n]).map((n) => [n, eg.sources[n]]);
+      ui.rows($('mcp-egress'), rows, ([n, s]) => ui.el('tr', null,
+        ui.el('td', { text: n }), ui.el('td', { text: s.entries.map(mcpEntry).join(', ') || 'none' }),
+        ui.el('td', { class: 'num', text: String(s.allowed) }), ui.el('td', { class: 'num', text: String(mcpDeniedTotal(s.denied)) })),
+        { key: ([n, s]) => n + '|' + JSON.stringify(s), force: ctx.force, empty: 'The egress proxy reports neither source yet.' });
+    },
+    onError: pageFailed,
+  });
+  on('mcp-rotate', 'click', async () => {
+    const sure = await ui.confirm({ title: 'Rotate the approval key?', body: 'Approvals signed with the old key stop working at once. It needs a sign-in within the last 10 minutes.', action: 'Rotate' });
+    if (!sure) return;
+    pageError('');
+    try { await api('POST', '/api/admin/v1/mcp/approval-key/rotate'); ui.toast('Approval key rotated.'); } catch (ex) { pageError(ex.message); }
+    liveMcp.refresh({ force: true });
+  });
+  function loadMcp() { return liveMcp.start(); }
   // -------------------------------------------------------- providers and models (plan step 5.5)
 
   // ---- Claude and ChatGPT accounts (CLIProxyAPI): connect an account without a terminal. The paste step (the

@@ -16,7 +16,7 @@ May start any time after G0 (G12 is the same gate); numbered after Phase 6, with
 
 Track 1 runs P8.6a, P8.6c to P8.6f, P8.8a and P8.9a as stage W6 of [plan-priorities.md](../plan-priorities.md). Every page writes host names, errors and other values from a service with `textContent` only. Each change is an audited admin action, refused if its record cannot be appended. Server registry pages (P8.6g) wait for P5A.16 and are not part of W6.
 
-- [ ] **P8.6a** `feat(admin): add the MCP page` · sonnet · after P5A.18, P5A.19
+- [x] **P8.6a** `feat(admin): add the MCP page` · sonnet · after P5A.18, P5A.19
   Files: `services/admin/src/{mcp,mcp_link,approval_key,egress_link,routes}.rs`, a new `mcp.html` template, `services/admin/src/ui/*.js`, `docs/openapi/admin.v1.yaml`, `services/admin/tests/{mcp,mcp_link,openapi}.rs`.
   Do:
   - **Tool permissions:** a table of users with a `search` and a `fetch` switch each, over the existing `/mcp/permissions` routes. Default off, as P5A.17 stores it.
