@@ -233,7 +233,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 - G13: decided 2026-11-24, no third-party gateway: an own Rust front with native `search` and `fetch`.
 - G9: decided 2026-11-24: `ring` for Ed25519, sign and verify in `askbar-service`, the `mcp-gateway` and `searxng` containers. Open: accepting the MCP gateway ADR.
 - G14: decided 2026-11-24: engines duckduckgo, brave, mojeek and wikipedia. Host list approved 2026-11-25: api.mwmbl.org, html.duckduckgo.com, search.brave.com, search.yahoo.com (engines as shipped: duckduckgo, brave, yahoo, mwmbl; mojeek is inactive upstream and wikipedia needs a contact URL).
-- G15: decided 2026-11-24: fetch has its own egress source; the proxy blocks private ranges, the front does the rest. Open: robots.txt.
+- G15: decided 2026-11-24: fetch has its own egress source; the proxy blocks private ranges, the front does the rest. robots.txt: not read for user-initiated searches (decided 2026-11-25).
 - G16: decided 2026-11-24: the 10-point checklist in Phase 5A approves each further MCP server.
 
 Gate definitions are in the [tiered routing plan](plan-tiered-routing.md#owner-gates).

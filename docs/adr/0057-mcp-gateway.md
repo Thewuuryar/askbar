@@ -45,4 +45,4 @@ Invariants once built: no call runs before its audit span is acknowledged; no un
 
 ## Amendments
 
-(none yet)
+- 2026-11-25 (accepted by the owner): no counsel reviews the AGPL-3.0 reading of the `searxng` container (an unmodified upstream image in a separate container, source link in the notices). A release check, `scripts/check-searxng-image.sh --release`, re-verifies before each release the conditions the reading rests on: the `searxng` Dockerfile stage only adds `docker/searxng/settings.yml` and `start.sh` to the pinned image, `docker/searxng` holds nothing else, the notices row names the image, the licence and a source link at the pinned version, and compose adds no build argument or volume over upstream code.
