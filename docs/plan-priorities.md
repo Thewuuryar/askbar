@@ -222,7 +222,7 @@ Until then, roles use admin-pinned models, usage counts against token budgets pe
 - [x] **W5.5** `test(e2e): quick search with the mock model and a fixture search engine` · haiku · after W5.3, W5.4
   Files: `tests/e2e/`, `scripts/smoke.sh`.
   Do: a fixture `searxng` response and fixture pages, no real internet; extend the mock LLM to propose queries and cite sources.
-- [ ] **W5.6** `docs(docs): quick search in the user and admin guides` · haiku · after W5.5
+- [x] **W5.6** `docs(docs): quick search in the user and admin guides` · haiku · after W5.5
   Files: `docs/guide.md`, the admin reference pages for search and fetch permissions, `docs/reference/audit/model-calls.md`.
   Do: say what leaves the house (search queries to the engines `searxng` uses; fetched URLs), that search is off until the admin turns it on, and what each step record holds.
 

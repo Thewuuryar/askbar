@@ -148,6 +148,18 @@ A reply is produced by the server, not by the window. The question is saved firs
 - **Refusals.** When the administrator has switched replies off (the kill switch in Settings), a daily or monthly token limit is used up, or the audit key has not been made yet, your account is paused, or the model you chose is not approved, the window says so in words and keeps what you typed. A busy server is tried once more by itself.
 - **Failed questions are not resent.** A question that got no reply stays in the conversation but is not sent to the model with your next one, so a question the provider refuses can't stick the conversation. To retry it, send it again (or **Try again** after a timeout).
 
+## Searching the web
+
+A reply can be answered from the web. It is off until your administrator gives you the search permission: the **Search the web** button appears only for people who hold it. Press it, and your next message is answered from the web. The reply lists the queries it searched and its sources; a source the app could not read says **not read**. Links in the sources open in your system browser after the popup shows the whole address and you press Open, as for any link. A reply that did not search says so in words: search is not turned on for you, is unavailable right now, or found no pages.
+
+What leaves the house, and only this:
+
+- **Search queries:** up to 3 per message, 200 characters each, written by the model from your message alone (not the history or files). They go to the search engines SearXNG uses (DuckDuckGo, Brave, Yahoo and mwmbl) through the egress proxy.
+- **Page addresses:** up to 3 per message, taken only from the search results. They go to those sites themselves, through the egress proxy, on ports 80 and 443, never to a private address. A result with a query string is shown as not read and is not requested.
+- The model sees the text of each page marked as untrusted data, and the page text is not kept: the conversation holds only your question and the answer.
+
+Your message still goes to the model for the reply, as for any reply. The other limit is 10 searches per person per hour. The admin sets the search permission and the models for the search jobs; see [People & clients](reference/settings/people.md#search-and-fetch-permissions) and [Providers & models](reference/settings/providers.md#model-for-each-job).
+
 ## Hotkeys by platform
 
 `Super+A` is accepted (`hotkey: "Super+A"`) and works on X11, but Windows reserves it for Quick Settings and GNOME for the app grid, so the default is `Ctrl+Shift+Space`. If a hotkey can't be registered, the window opens with the reason.
