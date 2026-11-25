@@ -32,4 +32,4 @@ Each service must work with a read-only root filesystem and limited memory, so l
 
 - 2026-11-08: rule 6, a `CHOWN`-only exception for `bootstrap`, and rule 7, its check ([0050](0050-bootstrap-chown-exception.md)).
 - 2026-11-10: merged in 0050; the rules above are how they stand.
-- 2026-11-25 (proposed, not yet accepted by the owner): the egress proxy (ADR 0056) runs under the shared hardening block with no exception: uid 10006, 128 MB, 256 pids, a read-only credential volume `egress-proxy-token` and no data volume. `scripts/check-isolation.sh` checks them.
+- 2026-11-25 (accepted by the owner): the egress proxy (ADR 0056) runs under the shared hardening block with no exception: uid 10006, 128 MB, 256 pids, a read-only credential volume `egress-proxy-token` and no data volume. `scripts/check-isolation.sh` checks them.
