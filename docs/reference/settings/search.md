@@ -8,20 +8,53 @@ settings: [search]
 
 # Search
 
-Quick search answers a message from the web. This page holds its switch, its limits and what it has used.
+Quick search answers a message from the web. This page holds its switch, its limits and what it has used. A person can search only when the admin has given them the Search permission on [MCP](mcp.md#tool-permissions) too.
 
 ## Quick search
 
-The switch turns web search off for everyone at once; answers then say the search is off. Each person's own permission is on [MCP](mcp.md). The four limits (searches per question, characters per search, pages read per question and searches per person per hour) each show their value, default and range; Save keeps a new value and Reset goes back to the default. The two models the search jobs use are chosen under Model for each job on [Providers](providers.md).
+The switch turns web search off for everyone at once. It is on by default, and it is separate from the kill switch, which stops every reply. While it is off, a reply that would have searched says the search is turned off by the administrator, and nothing is sent to the search engines. Turning it on again applies at the next configuration push, with no restart.
+
+The four quick-search limits are below. Each one shows its value. Save keeps a new value, and Reset goes back to the default. A value outside its range is refused, and the reason is shown as text. Each change is an audited admin action.
+
+| Limit | Name in the API | Default | Minimum | Maximum | Unit |
+|---|---|---|---|---|---|
+| Searches per question | `max_queries` | 3 | 1 | 5 | count |
+| Characters per search | `max_query_chars` | 200 | 20 | 200 | characters |
+| Pages read per question | `max_pages` | 3 | 1 | 5 | count |
+| Searches per person per hour | `searches_per_user_hour` | 10 | 1 | 100 | count |
+
+The line above the table names the two models the search jobs use: one writes the query and one writes the answer. Pick them under Model for each job on [Providers](providers.md#model-for-each-job).
 
 ## Search engine
 
-Whether searxng answered the MCP front's last search (the admin cannot reach searxng itself), and the engines searxng asks with the egress host each one needs. A failed last search shows as down until a search works again; before any search it says so.
+Whether the MCP front's last search worked, and the engines searxng asks, each with the egress host it needs. The front records its own last real search; the admin does not probe searxng. So an idle searxng that is down shows as answering until a search runs, and a search that fails shows as down at the next poll, about 12 seconds later. Before any search since the front started it says No search yet. If the front does not answer, the state is Not known.
+
+| Engine | Egress host |
+|---|---|
+| DuckDuckGo | `html.duckduckgo.com` |
+| Brave | `search.brave.com` |
+| Yahoo | `search.yahoo.com` |
+| mwmbl | `api.mwmbl.org` |
+
+These are fixed with the install: a test checks that each engine has its host and that no host lacks an engine. Nothing is typed here. The hosts are allowed on [Egress](egress.md#allowlist).
 
 ## MCP limits
 
-The limits of the MCP front: page size, time limits, redirects, result counts and the lifetime of an approval. Each shows its value, default and range.
+The limits of the MCP front, which runs Search and Fetch. Each shows its value, with Save and Reset, and the same range rule as the quick-search limits.
+
+| Limit | Name in the API | Default | Minimum | Maximum | Unit |
+|---|---|---|---|---|---|
+| Largest page | `fetch_max_bytes` | 1048576 | 65536 | 5242880 | bytes |
+| Fetch time limit | `fetch_timeout_secs` | 20 | 1 | 60 | seconds |
+| Redirects followed | `fetch_redirects` | 3 | 0 | 5 | count |
+| Tool call time limit | `tool_call_timeout_secs` | 30 | 5 | 120 | seconds |
+| Approval lifetime | `one_time_id_window_secs` | 120 | 10 | 600 | seconds |
+| Results per search | `search_results` | 8 | 1 | 20 | count |
+| Result links remembered per task | `remembered_urls` | 50 | 10 | 200 | count |
+| Largest tool result | `tool_result_max_bytes` | 1048576 | 65536 | 8388608 | bytes |
+
+The approval lifetime is how long a one-time ID from a search can be used. Each change reaches the front on its next push.
 
 ## Usage
 
-Searches, fetches and refusals per day, and the turns, tokens and cost of the two model jobs (writing the query, writing the answer). It is read from the audit trail, shows no query, address or page text, and counts the newest 200 conversations at most.
+Searches, fetches and refusals for each of the last 7 days, and for each model job (writing the query, writing the answer) the turns, tokens in and out, and cost per day. Cost uses the prices set on [Providers](providers.md). The figures come from the audit trail, not the server's database. They are read from the newest 200 conversations at most, and the note above the tables says when older days may be incomplete. Only counts, tokens and cost are shown: no query, address or page text.

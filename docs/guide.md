@@ -158,7 +158,7 @@ What leaves the house, and only this:
 - **Page addresses:** up to 3 per message, taken only from the search results. They go to those sites themselves, through the egress proxy, on ports 80 and 443, never to a private address. A result with a query string is shown as not read and is not requested.
 - The model sees the text of each page marked as untrusted data, and the page text is not kept: the conversation holds only your question and the answer.
 
-Your message still goes to the model for the reply, as for any reply. The other limit is 10 searches per person per hour. The admin sets the search permission and the models for the search jobs; see [People & clients](reference/settings/people.md#search-and-fetch-permissions) and [Providers & models](reference/settings/providers.md#model-for-each-job).
+Your message still goes to the model for the reply, as for any reply. The other limit is 10 searches per person per hour. The admin sets the search permission for each person on the [MCP](reference/settings/mcp.md#tool-permissions) page, or through the API (see [People & clients](reference/settings/people.md#search-and-fetch-permissions)), and the models for the search jobs (see [Providers & models](reference/settings/providers.md#model-for-each-job)).
 
 ## Hotkeys by platform
 
