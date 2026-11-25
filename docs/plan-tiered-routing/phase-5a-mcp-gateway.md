@@ -161,7 +161,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
 - [x] **P5A.34** `docs(adr): amend 0010: the mcp-gateway audit link` · haiku · after P5A.9a. Files: `0010-auditor.md`.
 - [x] **P5A.35** `docs(adr): amend 0051: the mcp-gateway may start tool spans` · haiku · after P5A.9a. Files: `0051-auditor.md` (the `may_start` arm).
 
-Phase end: full checks, PR. The orchestrator opens it for the owner. G14 stays open until the host list is approved; G16 opens again for every further server.
+Phase end: full checks, PR. The orchestrator opens it for the owner. G14 is approved (2026-11-25); G16 opens again for every further server.
 
 ## Decisions and open owner notes
 
