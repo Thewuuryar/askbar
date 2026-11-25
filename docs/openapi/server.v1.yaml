@@ -410,6 +410,13 @@ components:
           - password_change_required
           - server_unavailable
           - conflict
+          - approval_unsignable
+          - approval_unsigned
+          - approval_signature_invalid
+          - approval_action_swapped
+          - approval_expired
+          - approval_replayed
+          - tool_not_available
           - internal
     Snapshot:
       type: object

@@ -15,6 +15,12 @@ pub struct Config {
     pub one_time_id_window_secs: u32,
     pub search_results: u32,
     pub remembered_urls: u32,
+    /// The approval public key: 64 hex characters (32 raw bytes). None until the admin pushes one; every call is refused then.
+    #[serde(default)]
+    pub approval_public_key: Option<String>,
+    /// The version of that key, for the admin's records. Not checked against anything.
+    #[serde(default)]
+    pub approval_key_version: u64,
 }
 
 impl Default for Config {
@@ -27,6 +33,8 @@ impl Default for Config {
             one_time_id_window_secs: DEFAULT_ONE_TIME_ID_WINDOW_SECS,
             search_results: DEFAULT_SEARCH_RESULTS,
             remembered_urls: DEFAULT_REMEMBERED_URLS,
+            approval_public_key: None,
+            approval_key_version: 0,
         }
     }
 }
@@ -41,11 +49,21 @@ impl Config {
             && (MIN_ONE_TIME_ID_WINDOW_SECS..=MAX_ONE_TIME_ID_WINDOW_SECS).contains(&self.one_time_id_window_secs)
             && (MIN_SEARCH_RESULTS..=MAX_SEARCH_RESULTS).contains(&self.search_results)
             && (MIN_REMEMBERED_URLS..=MAX_REMEMBERED_URLS).contains(&self.remembered_urls);
+        let ok = ok && self.approval_public_key.as_ref().is_none_or(|k| k.len() == 64 && self.public_key_bytes().is_some());
         if ok {
             Ok(())
         } else {
             Err("A value is outside its bounds (askbar-proto, mcp).")
         }
+    }
+
+    /// The approval public key as raw bytes, if one is set and is hex.
+    pub fn public_key_bytes(&self) -> Option<Vec<u8>> {
+        let k = self.approval_public_key.as_deref()?;
+        if !k.is_ascii() || k.len() % 2 != 0 {
+            return None;
+        }
+        (0..k.len()).step_by(2).map(|i| u8::from_str_radix(&k[i..i + 2], 16).ok()).collect()
     }
 
     /// The version: the first 8 bytes of the SHA-256 of the content, so equal content has an equal version.
@@ -66,6 +84,10 @@ mod tests {
         let b = Config { search_results: 9, ..a.clone() };
         assert_ne!(a.version(), b.version());
         assert_eq!(a.version(), Config::default().version());
-        assert!(Config { fetch_redirects: MAX_FETCH_REDIRECTS + 1, ..a }.validate().is_err());
+        assert!(Config { fetch_redirects: MAX_FETCH_REDIRECTS + 1, ..a.clone() }.validate().is_err());
+        assert!(Config { approval_public_key: Some("ab".repeat(32)), ..a.clone() }.validate().is_ok());
+        for bad in ["ab", &"zz".repeat(32), &"é".repeat(32)] {
+            assert!(Config { approval_public_key: Some(bad.to_string()), ..a.clone() }.validate().is_err(), "{bad}");
+        }
     }
 }

@@ -80,6 +80,13 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::NotConfigured => "The service has not received its settings yet. Try again in a few seconds.",
         ErrorCode::PasswordChangeRequired => "The admin password is still the published one. Change it before anything else.",
         ErrorCode::Conflict => "The request conflicts with the current state.",
+        ErrorCode::ApprovalUnsignable => "The tool action cannot be signed.",
+        ErrorCode::ApprovalUnsigned => "The approval carries no signature.",
+        ErrorCode::ApprovalSignatureInvalid => "The approval signature is not valid.",
+        ErrorCode::ApprovalActionSwapped => "The approval is for a different action.",
+        ErrorCode::ApprovalExpired => "The approval has expired.",
+        ErrorCode::ApprovalReplayed => "The approval was already used.",
+        ErrorCode::ToolNotAvailable => "The tool is not available yet.",
         ErrorCode::Internal => "Something went wrong on the server.",
     }
 }

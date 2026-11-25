@@ -79,7 +79,7 @@ This is the policy text for approving each further MCP server (G16, decided 2026
   Do: follow what P4.1c did for `admin-egress-proxy` (`git show` that commit if it landed, else read its step): link `server-mcp-gateway` (caller `server`, receiver `mcp-gateway`, prefix `srvmcp_`) and `admin-mcp-gateway` (caller `admin`, prefix `admmcp_`), one volume, uid 10007. The server's and the admin's start conditions in bootstrap include the new tokens.
   Accept: bootstrap tests list both links and tokens; the Links table test passes; `cargo test -p askbar-bootstrap -p askbar-proto`; CI `isolation` job green.
 - [x] **P5A.7** `feat(mcp-gateway): generate agentgateway config from pushed config` · dropped: no agentgateway (G13). The pushed registry is read directly by the front (P5A.6, P5A.10, P5A.11).
-- [ ] **P5A.8** `feat(mcp-gateway): verify the signed approval before any tool call` · sonnet · after P5.5, P5A.6
+- [x] **P5A.8** `feat(mcp-gateway): verify the signed approval before any tool call` · sonnet · after P5.5, P5A.6
   Files: `services/mcp-gateway/src/{approval,call}.rs`, tests.
   Do: `POST /api/mcp-gateway/v1/tools/{tool}/call` takes the exact arguments and the approval; recompute the action hash, run `verify` with the pushed public key and an in-memory one-time ID store (window from `constants.rs`; entries expire with the window); any failure refuses with problem+json (ADR 0023) and a distinct code, before anything else runs.
   Accept: unsigned, replayed, swapped, expired and wrong-key approvals are each refused; a valid one passes to the next check; two calls racing with one approval let exactly one through.
