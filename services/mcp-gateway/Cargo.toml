@@ -11,6 +11,8 @@ askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
 # The `approval` feature: the Ed25519 check of a signed tool action (used from P5A.7 on).
 askbar-service = { path = "../../crates/askbar-service", features = ["approval"] }
 axum = "0.8"
+# gzip pages (the owner chose a decompression crate): pure Rust, no C library. Not reqwest's own `gzip` feature, which would unify into the other services.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

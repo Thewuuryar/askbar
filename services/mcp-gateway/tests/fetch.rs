@@ -116,6 +116,17 @@ fn reply(ct: &'static str, body: &str) -> Page {
     Page::Reply(200, vec![("content-type", ct.into())], body.as_bytes().to_vec())
 }
 
+fn enc(ct: &'static str, coding: &str) -> Vec<(&'static str, String)> {
+    vec![("content-type", ct.into()), ("content-encoding", coding.into())]
+}
+
+fn gz(b: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(b).unwrap();
+    e.finish().unwrap()
+}
+
 fn redirect(to: &str) -> Page {
     Page::Reply(302, vec![("location", to.into())], vec![])
 }
@@ -351,6 +362,7 @@ async fn slow_headers_and_a_slow_body_end_at_the_time_limit() {
 #[tokio::test]
 async fn only_the_fixed_content_types_without_encoding_are_returned() {
     let html_body = "<html><script>x()</script><b>bold</b></html>";
+    let bomb = gz(&vec![b'a'; 100 << 20]); // built here, so the timing below is the front's alone
     let pages: Pages = Arc::new(move |k| match k {
         "a.example/html" => reply("text/html; charset=utf-8", html_body),
         "a.example/json" => reply("application/json", "{\"a\":1}"),
@@ -358,10 +370,14 @@ async fn only_the_fixed_content_types_without_encoding_are_returned() {
         "a.example/png" => reply("image/png", html_body),
         "a.example/none" => Page::Reply(200, vec![], html_body.as_bytes().to_vec()),
         "a.example/plain" => reply("text/plain", html_body),
-        "a.example/gzip" => {
-            Page::Reply(200, vec![("content-type", "text/html".into()), ("content-encoding", "gzip".into())], vec![0x1f, 0x8b])
-        }
-        "a.example/br" => Page::Reply(200, vec![("content-type", "text/plain".into()), ("content-encoding", "br".into())], b"x".to_vec()),
+        "a.example/gzip" => Page::Reply(200, enc("text/html", " GZip "), gz(html_body.as_bytes())),
+        "a.example/corrupt" => Page::Reply(200, enc("text/plain", "gzip"), b"not gzip at all".to_vec()),
+        "a.example/cut" => Page::Reply(200, enc("text/plain", "gzip"), gz(b"a page cut short")[..12].to_vec()),
+        "a.example/bomb" => Page::Reply(200, enc("text/plain", "gzip"), bomb.clone()),
+        "a.example/br" => Page::Reply(200, enc("text/plain", "br"), b"x".to_vec()),
+        "a.example/deflate" => Page::Reply(200, enc("text/plain", "deflate"), gz(b"x")),
+        "a.example/gzbr" => Page::Reply(200, enc("text/plain", "gzip, br"), gz(b"x")),
+        "a.example/gzgz" => Page::Reply(200, enc("text/plain", "gzip, gzip"), gz(&gz(b"x"))),
         "a.example/identity" => {
             Page::Reply(200, vec![("content-type", "text/plain".into()), ("content-encoding", "identity".into())], b"ok".to_vec())
         }
@@ -378,14 +394,25 @@ async fn only_the_fixed_content_types_without_encoding_are_returned() {
         ("octet", "content_type"),
         ("png", "content_type"),
         ("none", "content_type"),
-        ("gzip", "content_encoding"),
         ("br", "content_encoding"),
+        ("deflate", "content_encoding"),
+        ("gzbr", "content_encoding"),
+        ("gzgz", "content_encoding"),
     ] {
         let r = get(&f.rig, &format!("http://a.example/{path}")).await;
         assert_eq!((r.0, why(&r)), (403, ("fetch_refused", reason)), "{path}");
     }
+    assert_eq!(text(&get(&f.rig, "http://a.example/gzip").await).as_deref(), Some("bold"), "gzip is decoded, then reduced");
+    for path in ["corrupt", "cut"] {
+        assert_eq!(code(&get(&f.rig, &format!("http://a.example/{path}")).await), (502, "tool_upstream_failed"), "{path}");
+    }
+    // 200 KiB-ish on the wire, 100 MiB decoded: the cap counts decoded bytes and the read stops at once.
+    let t = std::time::Instant::now();
+    let r = get(&f.rig, "http://a.example/bomb").await;
+    assert_eq!(code(&r).1, "tool_result_too_large");
+    assert!(t.elapsed() < std::time::Duration::from_secs(1), "stopped at the cap, not after inflating 100 MiB");
     let heads: Vec<String> = f.proxy.hits.lock().unwrap().iter().map(|h| h.head.to_ascii_lowercase()).collect();
-    assert!(heads.iter().all(|h| h.contains("accept-encoding: identity")), "the front asks for no compression");
+    assert!(heads.iter().all(|h| h.contains("accept-encoding: gzip\r\n")), "the front asks for gzip only");
 }
 
 #[tokio::test]
