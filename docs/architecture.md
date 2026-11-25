@@ -106,6 +106,7 @@ What each container holds, what it can reach, and what taking it over would give
 | **alerter** | `alerter-data` (the repeat ledger); delivery settings in memory; `alerter-token` read-only | the auditor (`audit-alerter`), the egress proxy (`egress-alerter`), which reaches ntfy, the mail relay and GitHub | the alert credentials and the power to send or silence alerts. It never sees content |
 | **caddy** | `caddy-data`, `caddy-config`, `caddy-run`, `admin-run`, `caddy-secrets` (the certificate key, read-only) | the server (`client-api`), the admin socket, the auditor's ingest listener (`audit-caddy`), certificate authorities (`edge`) | the certificate key and all traffic in the clear: client tokens and admin sessions. Only Caddy publishes ports |
 | **cpa** | `cpa-config`, `cpa-auth` (the subscription logins) | the providers, through the egress proxy (`egress-cpa`). It starts no other link: `model-gateway` and the admin call it on `cpa-gateway` and `cpa-admin` | the subscription logins and the prompts routed through it |
+| **searxng** | nothing: no volume, a random `secret_key` in tmpfs; settings baked into the image | the egress proxy (`egress-searxng`), which reaches the engine hosts the admin allows; the front reaches it on `mcp-searxng` | its own queries (the front's search terms) and the results it returns; no secret, no route out but the proxy |
 
 ## When a service is down
 
@@ -144,7 +145,7 @@ Every link and the network it uses. Every network except `edge` and `egress-outb
 | the MCP gateway's front and the auditor (`tool` spans) | `audit-mcp-gateway` |
 | the server to the MCP gateway's front (tools, approved calls) | `mcp-server` |
 | the admin to the MCP gateway's front (status, configuration) | `mcp-admin` |
-| the front to `searxng` (search queries; the service comes in P5A.13) | `mcp-searxng` |
+| the front to `searxng` (search queries) | `mcp-searxng` |
 | Caddy to the auditor (access lines, no token) | `audit-caddy` |
 | Caddy to certificate authorities | `edge` |
 | model-gateway to `cpa` | `cpa-gateway` |
@@ -152,6 +153,7 @@ Every link and the network it uses. Every network except `edge` and `egress-outb
 | `cpa` to the egress proxy (provider calls) | `egress-cpa` |
 | the alerter to the egress proxy (ntfy, the mail relay, the daily release poll) | `egress-alerter` |
 | the front to the egress proxy (the `fetch` source) | `egress-fetch` |
+| `searxng` to the egress proxy (engine queries; the `searxng` source) | `egress-searxng` |
 | the egress proxy to the providers, ntfy, the mail relay and GitHub | `egress-outbound` |
 | the admin to the egress proxy (allowlists, status, approvals) | `egress-admin` |
 

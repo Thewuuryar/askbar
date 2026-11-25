@@ -6,7 +6,7 @@
   "description": "Askbar: services, checks and end-to-end tests. The desktop client is in clients/desktop.",
   "scripts": {
     "test": "npm run test:services && npm run test:desktop",
-    "test:services:core": "scripts/check-docs.sh && scripts/check-ui-tokens.sh && tests/release-compose.test.sh && tests/release-notes.test.sh && tests/name-installers.test.sh && tests/staging-compose.test.sh && cargo test --workspace && python3 tests/e2e/mock_llm_test.py",
+    "test:services:core": "scripts/check-docs.sh && scripts/check-ui-tokens.sh && scripts/check-searxng-image.sh && tests/release-compose.test.sh && tests/release-notes.test.sh && tests/name-installers.test.sh && tests/staging-compose.test.sh && cargo test --workspace && python3 tests/e2e/mock_llm_test.py",
     "test:admin": "node tests/e2e/admin.test.js",
     "test:services": "npm run test:services:core && npm run test:admin",
     "test:desktop": "npm --prefix clients/desktop test",
