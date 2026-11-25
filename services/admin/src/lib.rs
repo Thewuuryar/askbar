@@ -28,6 +28,7 @@ pub mod egress_link;
 pub mod gateway_link;
 pub mod link_client;
 pub mod mcp;
+pub mod mcp_link;
 pub mod network;
 pub mod notify;
 pub mod pages;
@@ -86,6 +87,8 @@ pub struct AdminState {
     pub alerter: std::sync::OnceLock<Arc<alerter_link::AlerterLink>>,
     /// The link to the egress proxy (ADR 0056); set once by `main`. Tests that have none leave it unset.
     pub egress: std::sync::OnceLock<Arc<egress_link::EgressLink>>,
+    /// The link to the MCP gateway's front (ADR 0028); set once by `main`. Tests that have none leave it unset.
+    pub mcp: std::sync::OnceLock<Arc<mcp_link::McpLink>>,
     /// The link to the auditor (ADR 0051); set once by `main`. Tests that have none leave it unset.
     pub auditor: std::sync::OnceLock<Arc<auditor_link::AuditorLink>>,
     /// Where the admin's action records go (ADR 0010); set once by `main`. Tests that have none record nothing.
@@ -136,6 +139,7 @@ impl AdminState {
             gateway: Default::default(),
             alerter: Default::default(),
             egress: Default::default(),
+            mcp: Default::default(),
             auditor: Default::default(),
             actions: Default::default(),
             sealed: Default::default(),

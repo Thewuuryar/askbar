@@ -127,6 +127,8 @@ services:
       ASKBAR_ALERTER_URL: http://alerter-admin-host:8085
       # The egress proxy's listener for the admin, on egress-admin (ADR 0056): the admin gives it the allowlists.
       ASKBAR_EGRESS_PROXY_URL: http://egress-admin-host:8086
+      # The MCP gateway's front, on mcp-admin (ADR 0028): the admin gives it the limits, the permissions and the approval public key.
+      ASKBAR_MCP_GATEWAY_URL: http://mcp-gateway-admin-host:8087
       # The auditor, on audit-admin (ADR 0051): the Audit pages read it with the admin's read token.
       ASKBAR_AUDIT_API_URL: http://auditor:8083
       ASKBAR_PUBLIC_URL: ${ASKBAR_PUBLIC_URL:-}
