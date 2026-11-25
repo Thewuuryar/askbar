@@ -5,8 +5,8 @@
 # Services and networks. There is no controller and no service has the Docker socket: the admin restarts
 # the server and itself through their own endpoints, Caddy by a config reload and CLIProxyAPI by rewriting
 # its config (ADR 0005); Docker's restart policy starts a service that exits.
-#   edge  Caddy, CLIProxyAPI and the mock LLM in dev. Caddy is the only service with published ports. The server is not
-#         on it: it has no route out.
+#   edge  Caddy and the mock LLM in dev. Caddy is the only service with published ports. The server is not on it: it has no
+#         route out.
 #   client-api  Caddy and the server's client API on 8080, nothing else. `internal`.
 #   server-api  the admin and the server's server API, nothing else. `internal`, so it has no route out.
 #   audit-caddy  Caddy and the auditor, nothing else. `internal`. Caddy's access lines go to the auditor's ingest listener on it
@@ -18,8 +18,10 @@
 #   cpa-gateway  model-gateway and CLIProxyAPI, nothing else. `internal`.
 #   audit-alerter  the auditor and the alerter, nothing else. `internal`. The auditor sends its alert events on it, and the
 #               alerter appends the outcome of each alert (ADR 0055); alerter-admin (the admin and the alerter) is the same.
-#   alerter-outbound  the alerter alone. Not `internal`: its route out is for delivering alerts (ntfy and email) and
-#               checking for releases. Nothing else is on it (ADR 0055).
+#   egress-admin, egress-model-gateway, egress-cpa, egress-alerter  the egress proxy and one caller each. `internal`. A caller
+#               reaches a provider, ntfy or a mail server only through the proxy (ADR 0056).
+#   egress-outbound  the egress proxy's route out. Not `internal`. The proxy and, in dev, the mock LLM, nothing else. Only
+#               Caddy (edge, for certificates) and the proxy have a route out.
 # No network pins a subnet or an address; Docker assigns them (docs/guide.md, "Docker networks").
 # The admin joins no network but server-api. Caddy reaches it only through its unix socket (volume admin-run),
 # for /admin. One host serves the admin (/admin), the client API (/api/client) and a 404 for the rest: over HTTPS
@@ -432,10 +434,6 @@ networks:
   # The alerter's listener for the admin. The admin and the alerter, nothing else. No route out.
   alerter-admin:
     internal: true
-  # The alerter's route out, for delivering alerts and checking for releases (ADR 0055, ADR 0006). Not internal. The alerter
-  # alone joins it, so nothing shares a network with it that has a route out, and its listeners are bound to the addresses
-  # of its two internal networks, so it answers nothing here.
-  alerter-outbound:
   # The egress proxy's listener for the admin. The admin and the proxy, nothing else. No route out.
   egress-admin:
     internal: true

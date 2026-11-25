@@ -206,7 +206,7 @@ SPEC = {
   "caddy": ("audit-caddy client-api edge", "caddy-data caddy-config caddy-run admin-run caddy-secrets:ro", "443/tcp 80/tcp"),
   "cpa": ("cpa-admin cpa-gateway egress-cpa", "cpa-config cpa-auth", ""),
 }
-OPEN = {"edge", "outbound", "alerter-outbound", "egress-outbound"}  # the networks with a route out
+OPEN = {"edge", "egress-outbound"}  # the networks with a route out
 ADD = {"bootstrap": "CHOWN", "caddy": "NET_BIND_SERVICE"}
 SEPARATE = [("cpa", "caddy"), ("alerter", "server"), ("alerter", "model-gateway"), ("alerter", "caddy"), ("alerter", "cpa"), ("egress-proxy", "server"), ("egress-proxy", "auditor"), ("egress-proxy", "caddy")]
 out(set(S) == set(SPEC), "the stack declares exactly the services bootstrap, server, admin, auditor, model-gateway, alerter, egress-proxy, mock-llm, caddy and cpa")
@@ -239,6 +239,8 @@ for n in sorted(set().union(*nets.values()) | set(N)):
     if n in N:
         out(bool(N[n].get("internal")) == (n not in OPEN), f"network {n} is {'not ' if n in OPEN else ''}internal")
         out(not (N[n].get("ipam") or {}).get("config"), f"network {n} pins no subnet or range")
+routed = {s for s in S if nets[s] & OPEN} - {"mock-llm"}  # the dev mock LLM sits on egress-outbound only in the dev profile
+out(routed == {"caddy", "egress-proxy"}, f"only caddy and egress-proxy are on a network with a route out (found: {' '.join(sorted(routed))})")
 for a, b in SEPARATE:
     out(not nets[a] & nets[b], f"{a} shares no network with {b}")
 PY
