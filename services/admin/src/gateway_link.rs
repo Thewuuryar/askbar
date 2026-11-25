@@ -113,6 +113,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         approval_ttl_secs: crate::constants::APPROVAL_TTL_SECS,
         role_pins: crate::roles::pushed(conn)?,
         quick_search: crate::limits::quick_search(conn),
+        quick_search_enabled: snap.quick_search_enabled,
     };
     config.version = version_of(&config);
     Ok(config)

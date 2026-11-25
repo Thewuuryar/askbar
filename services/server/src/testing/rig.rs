@@ -216,6 +216,7 @@ impl Rig {
             // The two quick search roles run on the default model, so a test sees the role on the turn, not another model.
             role_pins: [Role::SearchQuery, Role::SearchWriter].into_iter().filter_map(|r| Some((r, default_model.clone()?))).collect(),
             quick_search: snap.quick_search,
+            quick_search_enabled: snap.quick_search_enabled,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

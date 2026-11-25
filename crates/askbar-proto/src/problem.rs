@@ -29,6 +29,8 @@ pub enum ErrorCode {
     QuickSearchQueryCount,
     QuickSearchFetchCount,
     QuickSearchHourlyLimit,
+    /// The administrator turned quick search off for everyone. 503.
+    QuickSearchDisabled,
     AuditKeyMissing,
     /// No backup key is set (ADR 0013): an export cannot be encrypted, so none is made. 503.
     BackupKeyMissing,
@@ -68,7 +70,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 44] = [
+    pub const ALL: [ErrorCode; 45] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
@@ -80,6 +82,7 @@ impl ErrorCode {
         ErrorCode::QuickSearchQueryCount,
         ErrorCode::QuickSearchFetchCount,
         ErrorCode::QuickSearchHourlyLimit,
+        ErrorCode::QuickSearchDisabled,
         ErrorCode::AuditKeyMissing,
         ErrorCode::BackupKeyMissing,
         ErrorCode::BackupNewerRelease,
@@ -129,6 +132,7 @@ impl ErrorCode {
             ErrorCode::QuickSearchQueryCount => "quick_search_query_count",
             ErrorCode::QuickSearchFetchCount => "quick_search_fetch_count",
             ErrorCode::QuickSearchHourlyLimit => "quick_search_hourly_limit",
+            ErrorCode::QuickSearchDisabled => "quick_search_disabled",
             ErrorCode::AuditKeyMissing => "audit_key_missing",
             ErrorCode::BackupKeyMissing => "backup_key_missing",
             ErrorCode::BackupNewerRelease => "backup_newer_release",
@@ -177,6 +181,7 @@ impl ErrorCode {
             | ErrorCode::QuickSearchFetchCount
             | ErrorCode::QuickSearchHourlyLimit => 429,
             ErrorCode::KillSwitch
+            | ErrorCode::QuickSearchDisabled
             | ErrorCode::AuditKeyMissing
             | ErrorCode::BackupKeyMissing
             | ErrorCode::AuditBacklog
@@ -225,6 +230,7 @@ impl ErrorCode {
             ErrorCode::QuickSearchQueryCount => "This reply has used all its searches",
             ErrorCode::QuickSearchFetchCount => "This reply has fetched all its pages",
             ErrorCode::QuickSearchHourlyLimit => "This user has used all searches for this hour",
+            ErrorCode::QuickSearchDisabled => "Quick search is turned off",
             ErrorCode::AuditKeyMissing => "The audit key has not been set up",
             ErrorCode::BackupKeyMissing => "The backup key has not been set up",
             ErrorCode::BackupNewerRelease => "The backup is from a newer release",
@@ -397,6 +403,7 @@ mod tests {
                 | ErrorCode::QuickSearchQueryCount
                 | ErrorCode::QuickSearchFetchCount
                 | ErrorCode::QuickSearchHourlyLimit
+                | ErrorCode::QuickSearchDisabled
                 | ErrorCode::AuditKeyMissing
                 | ErrorCode::BackupKeyMissing
                 | ErrorCode::BackupNewerRelease
@@ -432,6 +439,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 44);
+        assert_eq!(ErrorCode::ALL.len(), 45);
     }
 }

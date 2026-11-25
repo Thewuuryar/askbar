@@ -601,6 +601,7 @@ components:
           - quick_search_query_count
           - quick_search_fetch_count
           - quick_search_hourly_limit
+          - quick_search_disabled
           - audit_key_missing
           - backup_key_missing
           - backup_newer_release
@@ -825,7 +826,7 @@ components:
           type: boolean
           description: >-
             Whether the caller holds the web search permission (the `search` tool of the MCP front), so an app may offer its
-            per-message toggle. Added after 1.0; absent from an older server, read as `false`.
+            per-message toggle. False for everyone while the administrator has turned quick search off. Added after 1.0; absent from an older server, read as `false`.
     Policy:
       type: object
       required: [notice, ai_warning]

@@ -47,6 +47,10 @@ pub struct AdminSettings {
     ai_warning_enabled: Option<bool>,
     #[serde(default)]
     ai_warning_text: Option<String>,
+    /// Quick search for everyone: on unless switched off, apart from the kill switch. Always present when read; a save that leaves
+    /// it out keeps it. Each user's own permission to search is separate.
+    #[serde(default)]
+    quick_search_enabled: Option<bool>,
 }
 
 /// The most characters the wording of the notice and of the warning may have.
@@ -115,6 +119,7 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
         privacy_notice_text: Some(wording_or_default(setting(c, "privacy_notice_text"), askbar_proto::DEFAULT_PRIVACY_NOTICE)),
         ai_warning_enabled: Some(setting(c, "ai_warning_enabled").is_none_or(|v| v.trim() != "0")),
         ai_warning_text: Some(wording_or_default(setting(c, "ai_warning_text"), askbar_proto::DEFAULT_AI_WARNING)),
+        quick_search_enabled: Some(setting(c, "quick_search_enabled").is_none_or(|v| v.trim() != "0")),
     })
 }
 
@@ -146,6 +151,9 @@ pub async fn put_settings(
         if let Some(on) = s.ai_warning_enabled {
             n.add("ai_warning_enabled", serde_json::json!(on));
         }
+        if let Some(on) = s.quick_search_enabled {
+            n.add("quick_search_enabled", serde_json::json!(on));
+        }
     }
     if s.privacy_notice_text.as_deref().is_some_and(|t| t.chars().count() > MAX_NOTICE_CHARS) {
         return Err(bad(&format!("The privacy notice is at most {MAX_NOTICE_CHARS} characters.")));
@@ -155,8 +163,9 @@ pub async fn put_settings(
     }
     let notice_text = s.privacy_notice_text.as_deref().map(|t| wording_to_keep(t, askbar_proto::DEFAULT_PRIVACY_NOTICE));
     let warning_text = s.ai_warning_text.as_deref().map(|t| wording_to_keep(t, askbar_proto::DEFAULT_AI_WARNING));
-    let (notice_on, warning_on) =
-        (s.privacy_notice_enabled.map(|b| if b { "1" } else { "0" }), s.ai_warning_enabled.map(|b| if b { "1" } else { "0" }));
+    let on_off = |b: bool| if b { "1" } else { "0" };
+    let (notice_on, warning_on) = (s.privacy_notice_enabled.map(on_off), s.ai_warning_enabled.map(on_off));
+    let search_on = s.quick_search_enabled.map(on_off);
     if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(bad("The system prompt is too long."));
     }
@@ -222,6 +231,7 @@ pub async fn put_settings(
             ("privacy_notice_text", notice_text.as_deref()),
             ("ai_warning_enabled", warning_on),
             ("ai_warning_text", warning_text.as_deref()),
+            ("quick_search_enabled", search_on),
         ] {
             if let Some(v) = value {
                 pairs.push((key, v));

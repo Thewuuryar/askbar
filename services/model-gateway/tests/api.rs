@@ -215,6 +215,7 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
     GatewayConfig {
         role_pins: Default::default(),
         quick_search: Default::default(),
+        quick_search_enabled: true,
         version,
         providers: models.iter().map(|(id, m)| provider(rig, id, m)).collect(),
         audit_public_key: Some(audit_key()),
@@ -1250,6 +1251,19 @@ async fn quick_search_refuses_when_paused_or_killed() {
     let (rig, _) = qs_rig(true, |c| c.kill_switch = true).await;
     let (s, b) = rig.qs("g1", "u2", "search", json!({"query": "a"})).await;
     assert_eq!((s, b["error"].as_str()), (503, Some("kill_switch")));
+}
+
+#[tokio::test]
+async fn quick_search_turned_off_is_refused_with_its_own_code_and_a_gate_span_without_text() {
+    let (rig, _) = qs_rig(true, |c| c.quick_search_enabled = false).await;
+    let (s, b) = rig.qs("g-off", "u1", "search", json!({"query": QS_MARKER})).await;
+    assert_eq!((s, b["error"].as_str()), (503, Some("quick_search_disabled")));
+    assert!(!b.to_string().contains(QS_MARKER));
+    let rows =
+        rig.wait_rows("SELECT kind, status, error_code, attrs_json FROM spans WHERE trace_id = 'g-off' AND status != 'running'").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0][..3], [json!("gate"), json!("blocked"), json!("quick_search_disabled")]);
+    assert!(!rows[0][3].to_string().contains(QS_MARKER));
 }
 
 #[tokio::test]

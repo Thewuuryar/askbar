@@ -82,6 +82,8 @@ struct Applied {
     role_pins: BTreeMap<Role, String>,
     /// The quick search limits (plan W5.2) that `POST /approvals/quick-search` holds a reply to.
     quick_search: askbar_proto::quick_search::QuickSearchLimits,
+    /// Whether quick search is on for everyone (plan P8.6e).
+    quick_search_enabled: bool,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -420,6 +422,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         approval_ttl_secs: c.approval_ttl_secs,
         role_pins: c.role_pins.clone(),
         quick_search: c.quick_search,
+        quick_search_enabled: c.quick_search_enabled,
     })
 }
 
