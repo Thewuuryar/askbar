@@ -68,6 +68,9 @@ pub fn render(e: &Event) -> Rendered {
         Kind::BudgetThreshold => {
             ("A token budget is near its limit", format!("The {} token budget has reached {}%.", period(f.period), f.percent.unwrap_or(0)))
         }
+        Kind::TaskCapThreshold => {
+            ("A research task is near its token cap", format!("A research task has used {}% of its token cap.", f.percent.unwrap_or(0)))
+        }
         Kind::BackupFailed => ("A backup failed", "The last backup did not finish. Look at the Backup page.".to_string()),
         Kind::BackupMissed => ("A backup is overdue", format!("No backup has finished for {} minutes.", f.minutes.unwrap_or(0))),
         Kind::RestorePerformed => ("A restore was performed", "A backup was restored into this install.".to_string()),

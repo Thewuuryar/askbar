@@ -149,17 +149,20 @@ pub enum Sync {
 
 pub struct GatewayLink {
     link: LinkClient,
+    caps: crate::notify::TaskCapWatch,
 }
 
 impl GatewayLink {
     pub fn new(base: &str, token: String) -> Arc<GatewayLink> {
         Arc::new(GatewayLink {
             link: LinkClient::new(base, token, LINK, "model-gateway", askbar_proto::paths::MODEL_GATEWAY_V1, Duration::from_secs(10)),
+            caps: crate::notify::TaskCapWatch::default(),
         })
     }
 
     pub fn set_notifier(&self, n: Arc<crate::notify::Notifier>) {
-        self.link.set_notifier(n);
+        self.link.set_notifier(n.clone());
+        self.caps.set_notifier(n);
     }
 
     pub fn online(&self) -> bool {
@@ -207,9 +210,11 @@ impl GatewayLink {
     pub async fn status_now(&self) -> Option<(Option<u64>, String)> {
         let result = self.request(reqwest::Method::GET, askbar_service::routes::STATUS, None).await;
         let ok = match &result {
-            Ok((200, body)) => serde_json::from_slice::<serde_json::Value>(body)
-                .ok()
-                .map(|v| (v["config_version"].as_u64(), v["boot_id"].as_str().unwrap_or_default().to_string())),
+            Ok((200, body)) => serde_json::from_slice::<serde_json::Value>(body).ok().map(|v| {
+                let boot = v["boot_id"].as_str().unwrap_or_default().to_string();
+                self.caps.saw(&boot, v["task_cap_75"].as_u64().unwrap_or(0), v["task_cap_90"].as_u64().unwrap_or(0));
+                (v["config_version"].as_u64(), boot)
+            }),
             _ => None,
         };
         self.link.online.store(ok.is_some(), Ordering::Relaxed);

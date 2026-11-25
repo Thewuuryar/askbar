@@ -2,7 +2,7 @@
 //! the alerter, and a note on every admin page for a day. The three go together so that one cannot be forgotten.
 //!
 //! The admin sends only the events it alone can know: `chain_mismatch`, `rejected_token`, `restart_loop` for the services it
-//! polls, and `budget_threshold` (later also the backup ones). Each carries typed fields only; the sentence on the page and
+//! polls, `budget_threshold`, `task_cap_threshold` (later also the backup ones). Each carries typed fields only; the sentence on the page and
 //! in the log is made here from the same fields, never from what a record or a service said.
 
 use crate::sealed::Alert;
@@ -82,6 +82,7 @@ pub fn sentence(kind: Kind, f: &Fields) -> String {
             },
             f.percent.unwrap_or(0)
         ),
+        Kind::TaskCapThreshold => format!("A research task has used {}% of its token cap.", f.percent.unwrap_or(0)),
         other => format!("Alert: {}.", other.name()),
     }
 }
@@ -121,6 +122,37 @@ impl TokenWatch {
     /// Whether the last answer was a `401`.
     pub fn rejected(&self) -> bool {
         self.rejected.load(Ordering::Relaxed)
+    }
+}
+
+/// Turns each rise of the gateway's two task-cap counters (`task_cap_75`, `task_cap_90`) into one alert per crossing: a rise
+/// of N is N alerts. The first reading and a new boot ID only set the baseline, so a restart repeats nothing.
+#[derive(Default)]
+pub struct TaskCapWatch {
+    last: Mutex<Option<(String, u64, u64)>>,
+    notifier: OnceLock<Arc<Notifier>>,
+}
+
+impl TaskCapWatch {
+    pub fn set_notifier(&self, n: Arc<Notifier>) {
+        let _ = self.notifier.set(n);
+    }
+
+    /// The boot ID and counters the gateway reported just now.
+    pub fn saw(&self, boot_id: &str, c75: u64, c90: u64) {
+        let prev = self.last.lock().unwrap_or_else(|e| e.into_inner()).replace((boot_id.to_string(), c75, c90));
+        let Some((boot, p75, p90)) = prev else { return };
+        if boot != boot_id {
+            return;
+        }
+        let Some(n) = self.notifier.get() else { return };
+        for (percent, severity, times) in
+            [(75, Severity::Warning, c75.saturating_sub(p75)), (90, Severity::Critical, c90.saturating_sub(p90))]
+        {
+            for _ in 0..times {
+                n.notify(Kind::TaskCapThreshold, severity, Fields { percent: Some(percent), ..Fields::default() });
+            }
+        }
     }
 }
 
@@ -177,6 +209,29 @@ mod tests {
         assert_eq!(n.notes().len(), MAX_NOTES);
         n.notes.lock().unwrap().iter_mut().for_each(|a| a.at -= NOTE_SECS + 1);
         assert!(n.notes().is_empty());
+    }
+
+    #[test]
+    fn each_rise_of_a_task_cap_counter_is_one_alert_and_a_restart_only_resets_the_baseline() {
+        let n = Arc::new(Notifier::default());
+        let w = TaskCapWatch::default();
+        w.set_notifier(n.clone());
+        let said = || n.notes().into_iter().map(|a| a.text).collect::<Vec<_>>();
+        w.saw("a", 5, 2); // the first reading is the baseline
+        w.saw("a", 5, 2);
+        assert!(said().is_empty());
+        w.saw("a", 6, 2);
+        assert_eq!(said(), ["A research task has used 75% of its token cap."]);
+        w.saw("a", 6, 4); // two crossings between polls: two alerts
+        assert_eq!(said().len(), 3);
+        assert!(said()[1..].iter().all(|t| t.contains("90%")));
+        w.saw("b", 0, 0); // a restart: the counters fell, nothing sent
+        w.saw("b", 0, 0);
+        assert_eq!(said().len(), 3);
+        w.saw("b", 1, 0);
+        assert_eq!(said().len(), 4);
+        w.saw("a", 3, 0); // a new boot id with a higher count is still a baseline
+        assert_eq!(said().len(), 4);
     }
 
     #[test]

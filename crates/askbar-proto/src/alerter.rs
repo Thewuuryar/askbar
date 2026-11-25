@@ -58,6 +58,7 @@ pub enum Kind {
     ChainMismatch,
     RejectedToken,
     BudgetThreshold,
+    TaskCapThreshold,
     BackupFailed,
     BackupMissed,
     RestorePerformed,
@@ -68,7 +69,7 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in a fixed order.
-    pub const ALL: [Kind; 17] = [
+    pub const ALL: [Kind; 18] = [
         Kind::Unsealed,
         Kind::UnsealTimeoutsChanged,
         Kind::RetentionChanged,
@@ -81,6 +82,7 @@ impl Kind {
         Kind::ChainMismatch,
         Kind::RejectedToken,
         Kind::BudgetThreshold,
+        Kind::TaskCapThreshold,
         Kind::BackupFailed,
         Kind::BackupMissed,
         Kind::RestorePerformed,
@@ -103,6 +105,7 @@ impl Kind {
             Kind::ChainMismatch => "chain_mismatch",
             Kind::RejectedToken => "rejected_token",
             Kind::BudgetThreshold => "budget_threshold",
+            Kind::TaskCapThreshold => "task_cap_threshold",
             Kind::BackupFailed => "backup_failed",
             Kind::BackupMissed => "backup_missed",
             Kind::RestorePerformed => "restore_performed",
@@ -111,7 +114,7 @@ impl Kind {
         }
     }
 
-    /// The severity an event of this kind has. `budget_threshold` is `warning` at 80% and `critical` at 100%
+    /// The severity an event of this kind has. `budget_threshold` is `warning` at 80% and `critical` at 100%, `task_cap_threshold` `warning` at 75% and `critical` at 90%
     /// ([`Event::is_well_formed`] checks which); every other kind has one.
     pub fn severity(self) -> Severity {
         match self {
@@ -124,6 +127,7 @@ impl Kind {
             | Kind::RestartLoop
             | Kind::RejectedToken
             | Kind::BudgetThreshold
+            | Kind::TaskCapThreshold
             | Kind::RestorePerformed => Severity::Warning,
             Kind::AuditDiskCritical | Kind::ComponentSilent | Kind::ChainMismatch | Kind::BackupFailed | Kind::BackupMissed => {
                 Severity::Critical
@@ -147,6 +151,7 @@ impl Kind {
             Kind::ChainMismatch
             | Kind::RejectedToken
             | Kind::BudgetThreshold
+            | Kind::TaskCapThreshold
             | Kind::BackupFailed
             | Kind::BackupMissed
             | Kind::RestorePerformed => &[Sender::Admin],
@@ -171,6 +176,7 @@ impl Kind {
             Kind::RestartLoop => &[Field::Service, Field::Count, Field::Minutes],
             Kind::RejectedToken => &[Field::Link],
             Kind::BudgetThreshold => &[Field::Period, Field::Percent],
+            Kind::TaskCapThreshold => &[Field::Percent],
             Kind::BackupMissed => &[Field::Minutes],
             Kind::ReleaseAvailable => &[Field::Version],
         }
@@ -211,7 +217,7 @@ pub struct Fields {
     pub service: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub period: Option<Period>,
-    /// A percent of a budget: 80 or 100.
+    /// A percent: of a budget, 80 or 100; of a task's token cap, 75 or 90.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -297,6 +303,10 @@ impl Event {
                 Some(100) => self.severity == Severity::Critical,
                 _ => self.severity == Severity::Warning,
             },
+            Kind::TaskCapThreshold => match self.fields.percent {
+                Some(90) => self.severity == Severity::Critical,
+                _ => self.severity == Severity::Warning,
+            },
             k => self.severity == k.severity(),
         };
         if !ok_severity {
@@ -312,7 +322,7 @@ impl Event {
         let f = &self.fields;
         let names_ok = [&f.link, &f.service].into_iter().flatten().all(|s| is_plain_name(s))
             && f.version.as_deref().is_none_or(is_plain_name)
-            && f.percent.is_none_or(|p| matches!(p, 80 | 100))
+            && f.percent.is_none_or(|p| matches!(p, 75 | 80 | 90 | 100))
             && f.count.is_none_or(|c| c <= 100_000)
             && f.minutes.is_none_or(|m| m <= 1_000_000);
         if names_ok {
@@ -484,7 +494,7 @@ mod tests {
             assert_eq!(serde_json::to_value(k).unwrap(), serde_json::json!(k.name()));
             assert!(!k.senders().is_empty());
         }
-        assert_eq!(Kind::ALL.len(), 17);
+        assert_eq!(Kind::ALL.len(), 18);
         // Any kind a sender could add is in the list: the enum's own variants are exactly ALL.
         let all: std::collections::BTreeSet<Kind> = Kind::ALL.into_iter().collect();
         assert_eq!(all.len(), Kind::ALL.len());
@@ -553,6 +563,11 @@ mod tests {
         assert_eq!(at(100, Severity::Critical).check(Sender::Admin), Ok(()));
         assert_eq!(at(80, Severity::Critical).check(Sender::Admin), Err(Refusal::Severity));
         assert_eq!(at(50, Severity::Warning).check(Sender::Admin), Err(Refusal::Fields));
+        // The task-cap alert is a warning at 75% and critical at 90%.
+        let cap = |p, s| event(Kind::TaskCapThreshold, s, Fields { percent: Some(p), ..Fields::default() });
+        assert_eq!(cap(75, Severity::Warning).check(Sender::Admin), Ok(()));
+        assert_eq!(cap(90, Severity::Critical).check(Sender::Admin), Ok(()));
+        assert_eq!(cap(90, Severity::Warning).check(Sender::Admin), Err(Refusal::Severity));
     }
 
     #[test]
