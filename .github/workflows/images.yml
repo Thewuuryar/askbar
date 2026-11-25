@@ -123,6 +123,10 @@ jobs:
         run: |
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$COMMIT" FETCH_HEAD || { echo "the tag's commit is not on main" >&2; exit 1; }
+      # The AGPL reading of the searxng image (ADR 0057) is re-verified before a release is published.
+      - name: SearXNG image release check
+        if: env.TAG_RELEASE == 'true'
+        run: scripts/check-searxng-image.sh --release
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'
