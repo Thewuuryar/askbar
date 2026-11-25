@@ -16,9 +16,10 @@ Every API, module, environment variable, UI label and document uses these names 
 | **auditor** | the container that keeps the audit store: services, the alerter and the admin append to it, the admin reads it, and the admin restores an empty store through a link of its own | `/api/audit/v1` | `askbar-auditor`, internal only | services, `askbar-alerter` and `askbar-admin` (append), `askbar-admin` (read and restore) |
 | **model-gateway** | the container that holds provider keys in memory, enforces budgets, the kill switch and the approved model list, opens each model call's audit span, and calls providers | `/api/model-gateway/v1` | `askbar-model-gateway`, internal only | `askbar-server`, `askbar-admin` |
 | **alerter** | the small container that delivers alerts and checks for new releases | `/api/alerter/v1` | `askbar-alerter`, internal only | `askbar-auditor`, `askbar-admin` |
+| **egress-proxy** | the way out for `model-gateway`, `cpa` and the alerter: one allowlist per source, pushed by the admin and denied until it arrives. Caddy is the only other service with a route out | `/api/egress-proxy/v1` | `askbar-egress-proxy`, internal listeners and its route out | `askbar-admin` |
 | **bootstrap** | the container that creates per-link tokens on first start and rotates them when run from the host | none | none | none |
 
-Third-party components keep their product name (`caddy`, `cpa`). These names are reserved for work after 1.0, and nothing in the code uses them yet: **egress proxy**, **MCP gateway**, **judge**, **executor**, **`executor-link`** and `searxng` ([ADR 0019](adr/0019-post-v1-order-and-tools.md), [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md)).
+Third-party components keep their product name (`caddy`, `cpa`). These names are reserved for work after 1.0, and nothing in the code uses them yet: **MCP gateway**, **judge**, **executor**, **`executor-link`** and `searxng` ([ADR 0019](adr/0019-post-v1-order-and-tools.md), [ADR 0020](adr/0020-remote-executor-and-ca-triggers.md)).
 
 ### Other terms
 
@@ -50,9 +51,10 @@ flowchart TB
         server["<b>server</b><br/>Chats and space files<br/>No provider keys, no outbound route"]
         auditor["<b>auditor</b><br/>Append-only log, hash chain<br/>No outbound route"]
         admin["<b>admin</b><br/>Secrets, settings, pairing<br/>Backups and restart requests"]
-        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch, direct outbound"]
-        cpa["<b>cpa</b><br/>Optional subscription login<br/>Direct outbound"]
-        alerter["<b>alerter</b><br/>Sends alerts, checks releases<br/>Direct outbound"]
+        modelGateway["<b>model-gateway</b><br/>Provider keys, budgets,<br/>kill switch, no route out"]
+        cpa["<b>cpa</b><br/>Optional subscription login<br/>No route out"]
+        alerter["<b>alerter</b><br/>Sends alerts, checks releases<br/>No route out"]
+        egressProxy["<b>egress-proxy</b><br/>Allowlist per source, default deny<br/>Route out besides Caddy"]
         bootstrap["<b>bootstrap</b><br/>No network. Writes per-link tokens,<br/>then exits. Re-run from the host to rotate"]
     end
 
@@ -74,11 +76,14 @@ flowchart TB
     admin -->|"config, restarts"| server
     admin -->|"config, restarts, keys, budgets"| modelGateway
     modelGateway --> cpa
-    modelGateway --> providers
-    cpa --> providers
+    modelGateway -->|"provider calls"| egressProxy
+    cpa -->|"provider calls"| egressProxy
+    admin -->|"allowlists"| egressProxy
+    egressProxy --> providers
     auditor -->|"alert events"| alerter
     admin -->|"release check"| alerter
-    alerter --> alerts
+    alerter -->|"alerts, release check"| egressProxy
+    egressProxy --> alerts
     admin -->|"encrypted backups"| backup
 
     classDef key stroke-width:3px
@@ -97,10 +102,10 @@ What each container holds, what it can reach, and what taking it over would give
 | **server** | `DATA_DIR` (the spaces and `control.db`); `server-token` read-only | `model-gateway` (`gateway-server`), the auditor (`audit-server`); Caddy and the admin reach it on `client-api` and `server-api` | every user's conversations, and appends and model calls under its own tokens. No provider key, no audit passphrase, no route out |
 | **admin** | `admin-data`, `admin-secrets` (provider keys, certificate key), `backup`, `cpa-config`; `admin-token` read-only; the sockets `admin-run` and `caddy-run`, and `caddy-secrets` (the certificate key, written here, read-only in Caddy) | the server (`server-api`), `model-gateway` (`gateway-admin`), the auditor (`audit-admin`), the alerter (`alerter-admin`), `cpa` (`cpa-admin`), Caddy by its admin socket. No route out | the provider keys, the settings and the user list, and it can push any configuration. Audit content stays sealed, backups stay encrypted to a key it cannot open, and it has no route out |
 | **auditor** | `auditor-data` (`audit.db`); `auditor-token` read-only | the alerter (`audit-alerter`). No route out | the sealed store: ciphertext, which it cannot open. It could delete or alter records, which the hash chain shows |
-| **model-gateway** | provider keys in memory only; `model-gateway-token` read-only | the auditor (`audit-model-gateway`), `cpa` (`cpa-gateway`), the providers (`outbound`) | the provider keys, and every prompt and reply in flight. It stores no history |
-| **alerter** | `alerter-data` (the repeat ledger); delivery settings in memory; `alerter-token` read-only | the auditor (`audit-alerter`), ntfy, the mail server and GitHub (`alerter-outbound`) | the alert credentials and the power to send or silence alerts. It never sees content |
+| **model-gateway** | provider keys in memory only; `model-gateway-token` read-only | the auditor (`audit-model-gateway`), `cpa` (`cpa-gateway`), the egress proxy (`egress-model-gateway`), which reaches the providers | the provider keys, and every prompt and reply in flight. It stores no history |
+| **alerter** | `alerter-data` (the repeat ledger); delivery settings in memory; `alerter-token` read-only | the auditor (`audit-alerter`), the egress proxy (`egress-alerter`), which reaches ntfy, the mail relay and GitHub | the alert credentials and the power to send or silence alerts. It never sees content |
 | **caddy** | `caddy-data`, `caddy-config`, `caddy-run`, `admin-run`, `caddy-secrets` (the certificate key, read-only) | the server (`client-api`), the admin socket, the auditor's ingest listener (`audit-caddy`), certificate authorities (`edge`) | the certificate key and all traffic in the clear: client tokens and admin sessions. Only Caddy publishes ports |
-| **cpa** | `cpa-config`, `cpa-auth` (the subscription logins) | the providers (`outbound`). It starts no other link: `model-gateway` and the admin call it on `cpa-gateway` and `cpa-admin` | the subscription logins and the prompts routed through it |
+| **cpa** | `cpa-config`, `cpa-auth` (the subscription logins) | the providers, through the egress proxy (`egress-cpa`). It starts no other link: `model-gateway` and the admin call it on `cpa-gateway` and `cpa-admin` | the subscription logins and the prompts routed through it |
 
 ## When a service is down
 
@@ -119,7 +124,7 @@ Docker restarts a service that exits (`restart: unless-stopped`). This is what i
 
 ## Network map
 
-Every link and the network it uses. Every network except `edge`, `outbound` and `alerter-outbound` is `internal`, with no route out. Two links use no network: Caddy and the admin reach each other through unix sockets on shared volumes.
+Every link and the network it uses. Every network except `edge` and `egress-outbound` is `internal`, with no route out. Caddy (`edge`) and the egress proxy (`egress-outbound`) are the only services with a route out. Two links use no network: Caddy and the admin reach each other through unix sockets on shared volumes.
 
 | Link | Network |
 | --- | --- |
@@ -139,8 +144,11 @@ Every link and the network it uses. Every network except `edge`, `outbound` and 
 | Caddy to the auditor (access lines, no token) | `audit-caddy` |
 | Caddy to certificate authorities | `edge` |
 | model-gateway to `cpa` | `cpa-gateway` |
-| model-gateway and `cpa` to the providers | `outbound` |
-| the alerter to ntfy, the mail server and GitHub (the daily release poll) | `alerter-outbound` |
+| model-gateway to the egress proxy (provider calls) | `egress-model-gateway` |
+| `cpa` to the egress proxy (provider calls) | `egress-cpa` |
+| the alerter to the egress proxy (ntfy, the mail relay, the daily release poll) | `egress-alerter` |
+| the egress proxy to the providers, ntfy, the mail relay and GitHub | `egress-outbound` |
+| the admin to the egress proxy (allowlists, status, approvals) | `egress-admin` |
 
 ## Routes
 
@@ -191,7 +199,7 @@ Every link has its own authenticated path and uses separate networks, so a missi
 | `server` | `model-gateway` | Model calls and the approved model list | Per-link token |
 | `model-gateway` | `cpa` | Subscription providers | `cpa` API key |
 
-**Outbound access:** in v1, Caddy, `model-gateway`, `cpa` and `alerter` have direct outbound access. The server and auditor have none. The egress proxy ships first after v1.
+**Outbound access:** Caddy and the egress proxy ([ADR 0056](adr/0056-egress-proxy.md)) are the only services with a route out. `model-gateway`, `cpa` and `alerter` reach the internet only through the proxy, which allows each source the hosts its allowlist names. The server and auditor have none.
 
 ## Volumes
 
