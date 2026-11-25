@@ -77,6 +77,48 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/mcp-gateway/v1/tools:
+    get:
+      operationId: listTools
+      summary: The tools one user holds. The server link only.
+      description: >-
+        `user` is the user ID the server holds (the one an approval names). Only tools the user holds are listed: a user
+        with no permission entry holds none, and a tool in the user's `denied` list is left out even if `allowed` has it.
+        Tools carry a name only; no description is defined yet.
+      parameters:
+        - name: user
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The tools.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tools]
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      type: object
+                      required: [name]
+                      properties:
+                        name: {type: string, enum: [search, fetch]}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: The admin has not pushed the config yet (`not_configured`), with `Retry-After`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /api/mcp-gateway/v1/tools/{id}/call:
     post:
       operationId: callTool
@@ -85,7 +127,7 @@ paths:
         `id` is the tool name. The front rebuilds the action from the path and the body, then checks, in order: a config
         with an approval public key is held (else `503 not_configured`); the approval (its own code for each failure:
         `approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`,
-        `approval_replayed`, `approval_unsignable`); each approval passes once; then a `tool` span (the approval's hash and
+        `approval_replayed`, `approval_unsignable`); each approval passes once; then the user in the approval must hold the tool (`403 tool_not_permitted`, counted as `refused_permission`, no span, nothing runs); then a `tool` span (the approval's hash and
         ID, never the arguments) is written to the auditor and its acknowledgement awaited: without it `503 audit_backlog`
         with `Retry-After`, nothing runs, and this includes a front with no auditor link. The span is closed with the
         outcome. The tools are not built yet and answer `501 tool_not_available`. The admin link gets `403`. No answer repeats an
@@ -112,7 +154,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Another link's token (`forbidden`), or an approval refused (`approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`).
+          description: Another link's token (`forbidden`), or an approval refused (`approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`), or the user does not hold the tool (`tool_not_permitted`).
           content:
             application/problem+json:
               schema:
@@ -124,7 +166,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '501':
-          description: The approval is valid; the next checks and the tools are not built yet (`tool_not_available`).
+          description: The approval and permission are valid; the tools are not built yet (`tool_not_available`).
           content:
             application/problem+json:
               schema:
@@ -221,6 +263,7 @@ components:
           - approval_expired
           - approval_replayed
           - tool_not_available
+          - tool_not_permitted
           - internal
     Status:
       type: object
@@ -273,3 +316,15 @@ components:
           pattern: '^[0-9a-fA-F]{64}$'
           description: The approval public key, 64 hex characters. Absent until the admin pushes one; every call is refused then.
         approval_key_version: {type: integer, minimum: 0, default: 0}
+        permissions:
+          type: object
+          maxProperties: 1000
+          description: >-
+            User ID to the tools that user holds; a user with no entry holds none. Names must be built-in tools; `denied`
+            beats `allowed`.
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            properties:
+              allowed: {type: array, items: {type: string, enum: [search, fetch]}}
+              denied: {type: array, items: {type: string, enum: [search, fetch]}}

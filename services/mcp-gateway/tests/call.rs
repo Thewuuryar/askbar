@@ -94,7 +94,8 @@ async fn start_with(push_key: bool, mode: Auditor) -> Rig {
     if push_key {
         let cfg = json!({"fetch_max_bytes": 1048576, "fetch_timeout_secs": 20, "fetch_redirects": 3, "tool_call_timeout_secs": 30,
             "one_time_id_window_secs": 120, "search_results": 8, "remembered_urls": 50,
-            "approval_public_key": hex(&rig.pk), "approval_key_version": 1});
+            "approval_public_key": hex(&rig.pk), "approval_key_version": 1,
+            "permissions": {"alice": {"allowed": ["fetch", "search"]}, "bob": {"allowed": ["fetch"], "denied": ["fetch"]}}});
         let r = reqwest::Client::new().put(format!("{}/config", rig.url)).bearer_auth(ADMIN).json(&cfg).send().await.unwrap();
         assert_eq!(r.status(), 200);
     }
@@ -117,7 +118,11 @@ fn action(url: &str) -> ToolAction {
 
 /// The body for `url`, approved with `sk`.
 fn body(rig_sk: &[u8], signed_for: &str, sent: &str, id: &str, expires_at: i64) -> Value {
-    let a = sign(&action(signed_for), "task1", "alice", id, expires_at, rig_sk).unwrap();
+    body_for("alice", rig_sk, signed_for, sent, id, expires_at)
+}
+
+fn body_for(user: &str, rig_sk: &[u8], signed_for: &str, sent: &str, id: &str, expires_at: i64) -> Value {
+    let a = sign(&action(signed_for), "task1", user, id, expires_at, rig_sk).unwrap();
     json!({"arguments": {"url": sent}, "destination": "example.com", "provenance": "user", "approval": a})
 }
 
@@ -260,4 +265,49 @@ async fn an_auditor_that_does_not_acknowledge_refuses_the_call_and_the_tool_neve
         assert_eq!(rig.g.status().calls.get("refused_audit_unavailable"), Some(&1));
         assert!(!rig.g.status().calls.contains_key("refused_tool_not_available"));
     }
+}
+
+#[tokio::test]
+async fn a_tool_the_user_does_not_hold_is_refused_before_any_span_and_nothing_runs() {
+    let rig = start(true).await;
+    let u = "https://example.com/a";
+    // bob lists fetch in both lists (deny wins); carol has no entry (holds nothing).
+    for (user, id) in [("bob", "p1"), ("carol", "p2")] {
+        let b = body_for(user, &rig.sk, u, u, id, now() + 60);
+        assert_eq!(code(&post(&rig, SERVER, &b).await), (403, "tool_not_permitted"), "{user}");
+    }
+    // The approval check still comes first: a bad approval for a tool alice holds, and for one carol does not.
+    let mut bad = body_for("carol", &rig.sk, u, u, "p3", now() + 60);
+    bad["approval"]["signature"] = json!("");
+    assert_eq!(code(&post(&rig, SERVER, &bad).await), (403, "approval_unsigned"));
+    assert_eq!(
+        code(&post(&rig, SERVER, &body(&rig.sk, u, "https://example.com/x", "p4", now() + 60)).await),
+        (403, "approval_action_swapped")
+    );
+    assert_eq!(rig.g.status().calls.get("refused_permission"), Some(&2));
+    assert_eq!(rig.g.tool_runs.load(Ordering::SeqCst), 0);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(rig.seen.lock().unwrap().iter().all(|(p, _, _)| !p.contains("/spans")), "no span was opened");
+    // alice holds fetch and still reaches the next step.
+    assert_eq!(code(&post(&rig, SERVER, &body(&rig.sk, u, u, "p5", now() + 60)).await), (501, "tool_not_available"));
+}
+
+#[tokio::test]
+async fn the_list_shows_only_the_tools_the_user_holds() {
+    let rig = start(true).await;
+    let list = |user: &'static str| {
+        let url = format!("{}/tools", rig.url);
+        async move {
+            let r = reqwest::Client::new().get(url).query(&[("user", user)]).bearer_auth(SERVER).send().await.unwrap();
+            (r.status().as_u16(), r.json::<Value>().await.unwrap())
+        }
+    };
+    assert_eq!(list("alice").await, (200, json!({"tools": [{"name": "search"}, {"name": "fetch"}]})));
+    assert_eq!(list("bob").await.1, json!({"tools": []}), "deny wins");
+    assert_eq!(list("carol").await.1, json!({"tools": []}), "no entry, nothing held");
+    let r = reqwest::Client::new().get(format!("{}/tools?user=alice", rig.url)).bearer_auth(ADMIN).send().await.unwrap();
+    assert_eq!(r.status(), 403);
+    let bad = json!({"permissions": {"a": {"allowed": ["shell"]}}});
+    let r = reqwest::Client::new().put(format!("{}/config", rig.url)).bearer_auth(ADMIN).json(&bad).send().await.unwrap();
+    assert_eq!(r.status(), 400, "an unknown tool is refused at the push");
 }

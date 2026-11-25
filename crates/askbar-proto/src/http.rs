@@ -87,6 +87,7 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::ApprovalExpired => "The approval has expired.",
         ErrorCode::ApprovalReplayed => "The approval was already used.",
         ErrorCode::ToolNotAvailable => "The tool is not available yet.",
+        ErrorCode::ToolNotPermitted => "The user does not hold this tool.",
         ErrorCode::Internal => "Something went wrong on the server.",
     }
 }
