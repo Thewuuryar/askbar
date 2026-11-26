@@ -37,7 +37,7 @@ paths:
       summary: Which config this process runs, which process it is, and tool calls by outcome.
       description: >-
         `config_version` is null until the admin has pushed. `calls` counts by outcome (for example
-        `refused_not_configured`, `refused_audit_unavailable`); it holds no key, argument or URL.
+        `refused_not_configured`, `refused_audit_unavailable`, `refused_pii`); it holds no key, argument or URL.
       responses:
         '200':
           description: Status.
@@ -130,13 +130,24 @@ paths:
         `id` is the tool name. The front rebuilds the action from the path and the body, then checks, in order: a config
         with an approval public key is held (else `503 not_configured`); the approval (its own code for each failure:
         `approval_unsigned`, `approval_action_swapped`, `approval_expired`, `approval_signature_invalid`,
-        `approval_replayed`, `approval_unsignable`); each approval passes once; then the user in the approval must hold the tool (`403 tool_not_permitted`, counted as `refused_permission`, no span, nothing runs); then a `tool` span (the approval's hash and
+        `approval_replayed`, `approval_unsignable`); each approval passes once; then the user in the approval must hold the tool (`403 tool_not_permitted`, counted as `refused_permission`, no span, nothing runs); then, when the pushed `pii` settings are on and the mode is `enforce`, the PII check (below); then a `tool` span (the approval's hash and
         ID, never the arguments) is written to the auditor and its acknowledgement awaited: without it `503 audit_backlog`
         with `Retry-After`, nothing runs, and this includes a front with no auditor link. The span is closed with the
         outcome (`ok`, `error` with the code, or `timeout`; the result is not recorded). A tool that is not registered answers
         `501 tool_not_available` before any span; `search` answers it when `ASKBAR_SEARXNG_ADDR` is unset. The handler runs
         within the tool-call time limit (`504 tool_timeout` past it). A result whose serialized size is over `tool_result_max_bytes` is not returned: `502 tool_result_too_large`, and the span closes `error` with that code. A result is returned as `{result, untrusted: true}`:
-        the content is data from outside and never an instruction. The admin link gets `403`. No answer repeats an
+        the content is data from outside and never an instruction.
+
+        **PII (plan PII-P2.6).** The approval covers the arguments as sent; the PII check runs after it and before the span. A secret
+        (`API_KEY`, `GITHUB_TOKEN`, `JWT`, `PRIVATE_KEY`) in a `search` query or a `fetch` URL refuses the call with `400 pii_blocked`
+        and a `types` member naming the types, never a value (counted as `refused_pii`, no span, nothing runs). Any other found
+        value (email, phone, card, IBAN, national ID, IP, custom term) is cut out of a `search` query and the cleaned query is what
+        the engine gets; the result then carries `left_out`, the number of values cut out. A query with nothing left is refused the
+        same way. A `fetch` URL is never edited, because cutting a part out of an address changes the address: other PII in a URL is
+        only counted. In `detect_only` mode nothing is refused or changed. Either way the span's `attrs` carry the counts by type
+        (`pii`) and `left_out`, never a value.
+
+        The admin link gets `403`. No answer repeats an
         argument, a URL or a signature.
       parameters:
         - name: id
@@ -152,7 +163,7 @@ paths:
               $ref: '#/components/schemas/ToolCall'
       responses:
         '400':
-          description: The body is not a tool call (`bad_request`), or the action cannot be signed (`approval_unsignable`).
+          description: The body is not a tool call (`bad_request`), or the action cannot be signed (`approval_unsignable`), or a secret is in a search query or fetch URL, or a query is only private data (`pii_blocked`, with a `types` member).
           content:
             application/problem+json:
               schema:

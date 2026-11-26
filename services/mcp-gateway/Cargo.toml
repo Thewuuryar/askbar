@@ -8,8 +8,8 @@ description = "The MCP gateway's front in its own container: /api/mcp-gateway/v1
 
 [dependencies]
 askbar-proto = { path = "../../crates/askbar-proto", features = ["axum"] }
-# The `approval` feature: the Ed25519 check of a signed tool action (used from P5A.7 on).
-askbar-service = { path = "../../crates/askbar-service", features = ["approval"] }
+# `approval`: the Ed25519 check of a signed tool action. `pii`: the detector for search queries and fetch URLs.
+askbar-service = { path = "../../crates/askbar-service", features = ["approval", "pii"] }
 axum = "0.8"
 # gzip pages (the owner chose a decompression crate): pure Rust, no C library. Not reqwest's own `gzip` feature, which would unify into the other services.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

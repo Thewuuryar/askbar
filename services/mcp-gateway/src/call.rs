@@ -1,9 +1,10 @@
 //! `POST /tools/{tool}/call`: the signed approval is checked first (a problem on any failure, ADR 0023, counted by
-//! outcome), then the user's permission for the tool, then the `tool` span is on record before the registry's handler runs
+//! outcome), then the user's permission for the tool, then the PII check of a query or URL (`pii.rs`, counted as `refused_pii`), then the `tool` span is on record before the registry's handler runs
 //! (ADR 0010 rules 1 to 3). The handler is bounded by the tool-call time limit; its result goes back marked untrusted.
 
 use crate::approval::At;
 use crate::permissions;
+use crate::pii;
 use crate::registry::ToolCall;
 use crate::Gateway;
 use askbar_proto::approval::{Approval, Provenance, ToolAction};
@@ -52,7 +53,7 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         g.count("refused_not_configured");
         return Err(ApiError::new(ErrorCode::NotConfigured, "The gateway has not received its settings yet.").retry_after(5));
     };
-    let action =
+    let mut action =
         ToolAction { tool, arguments: b.arguments, destination: b.destination, provenance: b.provenance, query_data: b.query_data };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let ids = At { store: &g.one_time_ids, now, window: i64::from(config.one_time_id_window_secs) };
@@ -69,6 +70,14 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         g.count("refused_tool_not_available");
         return Err(ApiError::new(ErrorCode::ToolNotAvailable, "The tool is not available."));
     }
+    // The approval covered the original arguments; from here on the cleaned ones run. Counts only go on the span.
+    let checked = match pii::check(&config.pii, &action.tool, &mut action.arguments) {
+        Ok(c) => c,
+        Err(b) => {
+            g.count("refused_pii");
+            return Err(ApiError::new(ErrorCode::PiiBlocked, b.detail).with("types", b.types));
+        }
+    };
     // The span carries the approval's hash (which covers the arguments) and ID, never the
     // arguments, a URL or the signature; sealed arguments are not recorded.
     let Some(audit) = g.audit() else {
@@ -89,7 +98,14 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         model: None,
         user_id: Some(a.user.clone()),
         client_id: None,
-        attrs: Some(serde_json::json!({ "action_hash": a.action_hash, "one_time_id": a.one_time_id })),
+        attrs: Some(match checked.attrs() {
+            Some(serde_json::Value::Object(mut o)) => {
+                o.insert("action_hash".into(), a.action_hash.clone().into());
+                o.insert("one_time_id".into(), a.one_time_id.clone().into());
+                o.into()
+            }
+            _ => serde_json::json!({ "action_hash": a.action_hash, "one_time_id": a.one_time_id }),
+        }),
     };
     // Nothing runs until the auditor has acknowledged the span.
     if let Err(why) = audit.open(&start).await {
@@ -108,6 +124,14 @@ pub async fn call(State(g): State<Arc<Gateway>>, Path(tool): Path<String>, body:
         span_id: id.clone(),
     };
     let run = (g.registry.get(&tool_call.action.tool).expect("checked above"))(tool_call);
+    let left_out = checked.left_out;
+    let run = async move {
+        let mut r = run.await;
+        if let (Ok(serde_json::Value::Object(o)), true) = (&mut r, left_out > 0) {
+            o.insert("left_out".into(), left_out.into());
+        }
+        r
+    };
     let limit = std::time::Duration::from_secs(u64::from(config.tool_call_timeout_secs));
     // Only the outcome goes to the span; the result is not recorded.
     let (status, code, out) = match tokio::time::timeout(limit, run).await {

@@ -10,7 +10,7 @@
 //! step rows (conversation-class data) and the sealed payloads of the model calls.
 
 use crate::generation::Failed;
-use crate::quick_search::{call_model, datamark, parse_queries, refuse, Ctx, McpClient, MARKER, MAX_PAGE_CHARS};
+use crate::quick_search::{call_model, datamark, parse_queries, refuse, Ctx, McpClient, MARKER, MAX_PAGE_CHARS, NOTE_LEFT_OUT};
 use crate::Space;
 use askbar_proto::gateway::Role;
 use askbar_proto::quick_search::QuickSearchLimits;
@@ -486,6 +486,9 @@ async fn research_one(cx: &Ctx<'_>, mcp: &McpClient, question: &str, share: u32,
         d.calls += 1;
         match approved(cx, mcp, "search", json!({ "query": q })).await {
             Ok(r) => {
+                if r["left_out"].as_u64().unwrap_or(0) > 0 && !d.notes.iter().any(|n| n == NOTE_LEFT_OUT) {
+                    d.notes.push(NOTE_LEFT_OUT.into());
+                }
                 for hit in r["results"].as_array().into_iter().flatten() {
                     if let (Some(title), Some(url)) = (hit["title"].as_str(), hit["url"].as_str()) {
                         if !results.iter().any(|(_, u)| u == url) {
@@ -607,7 +610,14 @@ mod tests {
                             0
                         };
                         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                        (r#"["a query"]"#.to_string(), 1)
+                        let q = if last.starts_with("delta") {
+                            r#"["a private query"]"#
+                        } else if last.starts_with("epsilon") {
+                            r#"["a secret query"]"#
+                        } else {
+                            r#"["a query"]"#
+                        };
+                        (q.to_string(), 1)
                     } else {
                         (SUMMARY.to_string(), if last.starts_with("alpha") { 30_000 } else { 1 })
                     };
@@ -624,8 +634,14 @@ mod tests {
             .route(
                 "/api/mcp-gateway/v1/tools/{tool}/call",
                 post(|State(f): State<Arc<Fake>>, Path(tool): Path<String>, Json(b): Json<Value>| async move {
-                    f.calls.lock().unwrap().push((tool.clone(), b));
+                    f.calls.lock().unwrap().push((tool.clone(), b.clone()));
+                    if tool == "search" && b["arguments"]["query"].as_str().is_some_and(|q| q.contains("secret")) {
+                        let p = json!({ "type": "about:blank", "title": "t", "status": 400, "detail": "d", "error": "pii_blocked" });
+                        return (axum::http::StatusCode::BAD_REQUEST, [("content-type", "application/problem+json")], p.to_string())
+                            .into_response();
+                    }
                     if tool == "search" {
+                        let left_out = u64::from(b["arguments"]["query"].as_str().is_some_and(|q| q.contains("private")));
                         let r = |t: &str, u: &str| json!({ "title": t, "url": u, "snippet": "s" });
                         let hits = json!([
                             r("A", "https://a.example/1"),
@@ -634,9 +650,9 @@ mod tests {
                             r("D", "https://d.example/4"),
                             r("E", "https://e.example/5")
                         ]);
-                        return Json(json!({ "result": { "results": hits }, "untrusted": true }));
+                        return Json(json!({ "result": { "results": hits, "left_out": left_out }, "untrusted": true })).into_response();
                     }
-                    Json(json!({ "result": { "text": INJECTION, "truncated": false }, "untrusted": true }))
+                    Json(json!({ "result": { "text": INJECTION, "truncated": false }, "untrusted": true })).into_response()
                 }),
             )
             .with_state(f)
@@ -793,6 +809,15 @@ mod tests {
         assert_eq!(t.count("search") + t.count("fetch"), 3);
         assert_eq!(g.summaries.len(), 1, "the other researcher read nothing");
         assert!(g.notes.iter().all(|n| !n.contains("alpha")));
+    }
+
+    #[tokio::test]
+    async fn a_query_that_lost_private_data_says_so_once_and_a_blocked_one_is_a_failed_search() {
+        let t = start(r#"["delta one", "delta two", "epsilon three"]"#, |_| {}).await;
+        let g = ready(t.gather("g8", &TaskLimits::DEFAULT).await);
+        let left = g.notes.iter().filter(|n| n.as_str() == NOTE_LEFT_OUT).count();
+        assert_eq!(left, 2, "once per researcher that lost a term: {:?}", g.notes);
+        assert!(g.notes.contains(&"A search failed (pii_blocked).".to_string()), "{:?}", g.notes);
     }
 
     #[tokio::test]

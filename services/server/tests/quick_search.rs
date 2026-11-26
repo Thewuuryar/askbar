@@ -59,10 +59,15 @@ fn fake_app(f: Arc<Fake>) -> Router {
             "/api/mcp-gateway/v1/tools/{tool}/call",
             post(|State(f): State<Arc<Fake>>, Path(tool): Path<String>, Json(b): Json<Value>| async move {
                 f.calls.lock().unwrap().push((tool.clone(), b.clone()));
+                if tool == "search" && b["arguments"]["query"].as_str().unwrap().contains("secret") {
+                    let p = json!({ "type": "about:blank", "title": "t", "status": 400, "detail": "d", "error": "pii_blocked" });
+                    return (axum::http::StatusCode::BAD_REQUEST, [("content-type", "application/problem+json")], p.to_string()).into_response();
+                }
                 if tool == "search" {
+                    let left_out = u64::from(b["arguments"]["query"].as_str().unwrap().contains("private"));
                     let r = |t: &str, u: &str| json!({ "title": t, "url": u, "snippet": "s" });
                     let hits = json!([r("A", "https://a.example/1"), r("Q", "https://q.example/?id=1"), r("Bad", "https://bad.example/2"), r("C", "https://c.example/3")]);
-                    return Json(json!({ "result": { "results": hits }, "untrusted": true })).into_response();
+                    return Json(json!({ "result": { "results": hits, "left_out": left_out }, "untrusted": true })).into_response();
                 }
                 if b["arguments"]["url"].as_str().unwrap().contains("bad") {
                     let p = json!({ "type": "about:blank", "title": "t", "status": 403, "detail": "d", "error": "fetch_refused" });
@@ -297,6 +302,14 @@ async fn settings_tell_the_client_whether_the_user_may_search() {
         let s: askbar_proto::Settings = client().get(url).bearer_auth(&t.token).send().await.unwrap().json().await.unwrap();
         assert_eq!(s.web_search, want, "{tools:?} {mcp:?}");
     }
+}
+
+#[tokio::test]
+async fn a_query_that_lost_private_data_is_said_once_and_a_blocked_one_is_a_failed_search() {
+    let t = start(&["search"], r#"["a private one", "a private two", "a secret one"]"#, None).await;
+    let text = text_of(&t.chat().await);
+    assert_eq!(text.matches("Part of the query was left out because it looked like private data.").count(), 1, "{text}");
+    assert!(text.contains("The search for query 3 failed (pii_blocked)."), "{text}");
 }
 
 #[tokio::test]
