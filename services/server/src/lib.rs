@@ -13,6 +13,7 @@ pub mod import;
 pub use askbar_service::ids;
 pub mod llm;
 pub mod quick_search;
+mod research;
 pub mod routes;
 pub mod seal;
 pub mod server_api;

@@ -213,8 +213,11 @@ impl Rig {
             default_model: default_model.clone(),
             approval_key: Some(askbar_proto::gateway::ApprovalSigningKey { version: 1, pkcs8: self.approval_pkcs8.clone() }),
             approval_ttl_secs: askbar_proto::DEFAULT_APPROVAL_TTL_SECS,
-            // The two quick search roles run on the default model, so a test sees the role on the turn, not another model.
-            role_pins: [Role::SearchQuery, Role::SearchWriter].into_iter().filter_map(|r| Some((r, default_model.clone()?))).collect(),
+            // The quick search and research roles run on the default model, so a test sees the role on the turn, not another model.
+            role_pins: [Role::SearchQuery, Role::SearchWriter, Role::ResearchResearcher, Role::ResearchWriter, Role::JudgeReview]
+                .into_iter()
+                .filter_map(|r| Some((r, default_model.clone()?)))
+                .collect(),
             quick_search: snap.quick_search,
             quick_search_enabled: snap.quick_search_enabled,
             task_limits: snap.task_limits,
