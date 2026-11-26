@@ -12,6 +12,8 @@ What the server recorded about each reply: when, for whom, through which provide
 
 Target, not yet built ([plan](../../plan-audit-viewer.md) AV2.1 to AV2.3; the ADR amendments are proposed): a reply's trace also holds `step` spans, written by `model-gateway` only, each a child of an attempt, with the decision and counts and never values. Sealed content has fixed roles: `prompt` (server, only the new message as typed), `request` (server, as typed before redaction, with the history), `provider_request` (`model-gateway`, what the provider received after redaction and canaries, sealed on the attempt) and `reply` (server, what the user saw). Records from before this have `request` and `reply` only.
 
+Target, once personal-data redaction is built ([plan](../../plan-pii-redaction.md); the ADR amendments are proposed): when redaction is on, each attempt also has a `redact` step. Its attributes hold counts by type and action (for example `email` pseudonymized, `secret` blocked), the mode (`detect_only` or `enforce`) and how many placeholders were put back in the reply, and never a value. The text the provider received is the sealed `provider_request`.
+
 ## Quick-search replies
 
 A reply that searched the web has the trace of any reply, plus these records. None of them holds a query, a page or a page's text in its attributes or logs; the message, the queries and the answer are sealed as for any turn.
