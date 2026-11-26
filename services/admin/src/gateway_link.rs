@@ -116,6 +116,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         quick_search_enabled: snap.quick_search_enabled,
         task_limits: snap.task_limits,
         research_enabled: snap.research_enabled,
+        pii: Default::default(),
     };
     config.version = version_of(&config);
     Ok(config)

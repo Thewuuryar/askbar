@@ -152,6 +152,9 @@ pub struct GatewayConfig {
     /// Whether research is on for everyone (plan P5B.1). A configuration that leaves it out keeps research on.
     #[serde(default = "yes")]
     pub research_enabled: bool,
+    /// The PII settings (plan PII-P1.1). Off until the admin turns detection on; left out of the JSON while off.
+    #[serde(default, skip_serializing_if = "crate::pii::PiiConfig::is_default")]
+    pub pii: crate::pii::PiiConfig,
 }
 
 fn default_approval_ttl() -> u32 {
@@ -361,6 +364,7 @@ mod tests {
             quick_search_enabled: true,
             task_limits: Default::default(),
             research_enabled: true,
+            pii: Default::default(),
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
@@ -372,6 +376,9 @@ mod tests {
     #[test]
     fn a_configuration_from_before_the_budget_has_no_limits_no_stop_and_aborts_running_ones() {
         let cfg: GatewayConfig = serde_json::from_str(r#"{"version":1,"providers":[],"audit_public_key":null}"#).unwrap();
+        assert_eq!(cfg.pii, crate::pii::PiiConfig::default(), "a configuration without PII settings has detection off");
+        let old = serde_json::to_value(&cfg).unwrap();
+        assert!(old.get("pii").is_none(), "the default PII settings are left out, so the version does not change");
         assert_eq!(
             (cfg.budget, cfg.kill_switch, cfg.kill_switch_aborts_running, cfg.paused_users),
             (Budget::default(), false, true, vec![])
