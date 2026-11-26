@@ -103,7 +103,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
   Files: `crates/askbar-proto`, `docs/openapi/model-gateway.v1.yaml`, `services/model-gateway/src/lib.rs`.
   Do: a new `ErrorCode`, its entry in the OpenAPI file, and a refusal in `gates()`. Detection runs before `gates()`. The server returns it as `application/problem+json` ([ADR 0023](adr/0023-api-error-format.md)). The refusal attrs carry the type only.
   Accept: a pasted `sk-ant-` key is refused, and the refusal carries no part of it.
-- [ ] **PII-P2.4** `feat(model-gateway): record the redact step` · haiku · after PII-P2.1, PII-P2.2, audit viewer AV2.3
+- [x] **PII-P2.4** `feat(model-gateway): record the redact step` · haiku · after PII-P2.1, PII-P2.2, audit viewer AV2.3
   Do: AV2.3 seals `provider_request` on the attempt span. Check it holds the redacted text. The `redact` step span (kind `step`, under the attempt) gets counts by type and action, and the `restored` count in its attrs.
   Accept: the payload decrypts in the sealed view to the redacted text; the `redact` step shows counts and `restored`, no values.
 - [ ] **PII-P2.6** `feat(mcp-gateway): check search queries and fetch URLs for PII` · sonnet · after PII-P1.2
