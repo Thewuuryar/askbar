@@ -41,4 +41,4 @@ The server shouldn't hold provider keys, and Askbar should work with most cloud 
 A compromised server can still misuse model access through `model-gateway`, within its budgets, configured providers, and approved models ([0016](0016-risk-register.md)).
 
 ## Amendments
-- 2026-11-26 (proposed, not yet accepted by the owner): the gateway is the last hop before a provider, so it also detects personal data in a request and replaces it with placeholders, restored in the reply; the rules are in [0054](0054-model-gateway.md), not repeated here.
+- 2026-11-26 (accepted by the owner): the gateway is the last hop before a provider, so it also detects personal data in a request and replaces it with placeholders, restored in the reply; the rules are in [0054](0054-model-gateway.md), not repeated here.
