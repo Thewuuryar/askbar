@@ -1154,6 +1154,103 @@ async function waitIdle(page) {
     await p.close();
   });
 
+
+  // ------------------------------------------------------------ research (plan P5B.6)
+
+  await step('the research toggle is hidden without settings.research and shown with it', async () => {
+    const p = await open(browser, { webSearch: true });
+    assert.equal(await p.isHidden('#research-toggle'), true);
+    await p.close();
+    const q = await open(browser, { research: true });
+    assert.equal(await q.isVisible('#research-toggle'), true);
+    assert.equal(await q.getAttribute('#research-toggle', 'aria-pressed'), 'false', 'off by default');
+    await q.close();
+  });
+
+  await step('research and search the web exclude each other', async () => {
+    const p = await open(browser, { webSearch: true, research: true });
+    const on = async () => [await p.getAttribute('#search-toggle', 'aria-pressed'), await p.getAttribute('#research-toggle', 'aria-pressed')];
+    await p.click('#search-toggle');
+    assert.deepEqual(await on(), ['true', 'false']);
+    await p.click('#research-toggle');
+    assert.deepEqual(await on(), ['false', 'true']);
+    await p.click('#search-toggle');
+    assert.deepEqual(await on(), ['true', 'false']);
+    await p.close();
+  });
+
+  await step('a message carries research only when toggled, and the toggle resets after sending', async () => {
+    const p = await open(browser, { research: true });
+    await ask(p, 'plain one');
+    await waitIdle(p);
+    await p.click('#research-toggle');
+    await ask(p, 'researched one');
+    await waitIdle(p);
+    assert.equal(await p.getAttribute('#research-toggle', 'aria-pressed'), 'false', 'reset after sending');
+    await ask(p, 'plain two');
+    await waitIdle(p);
+    assert.deepEqual(
+      (await calls(p, 'ask')).map((c) => [c.text, c.research, c.webSearch]),
+      [['plain one', false, false], ['researched one', true, false], ['plain two', false, false]],
+    );
+    await p.close();
+  });
+
+  await step('progress shows fixed status lines in order and goes away with the first text; markup is never an element', async () => {
+    const stages = [
+      { stage: 'splitting' },
+      { stage: 'researching', done: 1, total: 3 },
+      { stage: 'writing' },
+      { stage: 'reviewing' },
+      { stage: '<img src=x onerror="window.__pwned=1">' },
+    ];
+    const p = await open(browser, { research: true, progress: stages });
+    await p.evaluate(() => {
+      window.__seen = [];
+      new MutationObserver(() => {
+        const n = document.querySelector('.msg.assistant .progress');
+        const t = n ? n.textContent : null;
+        if (t && window.__seen[window.__seen.length - 1] !== t) window.__seen.push(t);
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await p.click('#research-toggle');
+    await ask(p, 'report please');
+    await waitIdle(p);
+    const info = await p.evaluate(() => ({
+      seen: window.__seen,
+      left: document.querySelectorAll('.progress').length,
+      imgs: document.querySelectorAll('img').length,
+      pwned: window.__pwned,
+    }));
+    assert.deepEqual(info.seen, ['Planning the research...', 'Researching (1 of 3)...', 'Writing the report...', 'Reviewing the report...', 'Working...']);
+    assert.equal(info.left, 0, 'removed once the text arrives');
+    assert.equal(info.imgs, 0, 'a stage is text, never an element');
+    assert.equal(info.pwned, undefined);
+    await p.close();
+  });
+
+  await step('a research report lists its sources in the server order, and a source link opens only through the system browser', async () => {
+    const p = await open(browser, { research: true, search: SEARCH });
+    await p.click('#research-toggle');
+    await ask(p, 'report please');
+    await waitIdle(p);
+    const items = await p.evaluate(() => [...document.querySelectorAll('.sources li')].map((li) => li.textContent));
+    assert.deepEqual(items.slice(0, 2), ['Rust blog (blog.rust-lang.org)', 'Search page (q.example)not read']);
+    const before = p.url();
+    const prevented = await p.evaluate(() => {
+      const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+      document.querySelector('.sources a').dispatchEvent(ev);
+      return ev.defaultPrevented;
+    });
+    assert.equal(prevented, true, 'preventDefault: the popup does not navigate');
+    assert.equal(await p.innerText('#link-confirm-url'), 'https://blog.rust-lang.org/post');
+    assert.equal((await calls(p, 'open_url')).length, 0, 'nothing opened yet');
+    await p.click('#link-open');
+    assert.deepEqual(await calls(p, 'open_url'), [{ url: 'https://blog.rust-lang.org/post' }]);
+    assert.equal(p.url(), before, 'still the same page');
+    await p.close();
+  });
+
   await browser.close();
   console.log(failures ? `\n${failures} step(s) failed` : '\nall UI steps passed');
   process.exit(failures ? 1 : 0);

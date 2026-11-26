@@ -40,6 +40,7 @@
       // opts.policy stands for what the server says about the privacy notice and the AI warning (ADR 0012); null is "not asked".
       policy: window.__opts.policy || null,
       web_search: !!window.__opts.webSearch, // the user holds the search permission
+      research: !!window.__opts.research, // the user may research
     }),
     // opts.status stands for the server's state: { kind, message, models? } or absent when healthy.
     server_status: () => (window.__opts.status ? JSON.parse(JSON.stringify(window.__opts.status)) : null),
@@ -127,7 +128,7 @@
     hide_window: () => {},
     open_config: () => {},
     open_url: () => {},
-    ask: async ({ conversationId, text, model, webSearch, onEvent, fromOutbox }) => {
+    ask: async ({ conversationId, text, model, webSearch, research, onEvent, fromOutbox }) => {
       cancelFlag = false;
       const st = window.__opts.status;
       if (st && st.kind !== 'model_missing') {
@@ -153,8 +154,10 @@
         ? { id: 'p2', name: 'Backup AI', model: 'backup-2' }
         : { id: 'p1', name: 'Mock AI', model: 'mock-1' };
       onEvent.onmessage({ event: 'provider', ...by });
+      // opts.progress stands for a report's progress events, sent (slowly, so a test can watch) when the message asks for research.
+      if (research) for (const p of window.__opts.progress || []) { onEvent.onmessage({ event: 'progress', ...p }); await sleep(30); }
       // opts.search stands for a quick-search reply's queries and sources, sent when the message asks for the web.
-      if (webSearch && window.__opts.search) onEvent.onmessage({ event: 'search', ...window.__opts.search });
+      if ((webSearch || research) && window.__opts.search) onEvent.onmessage({ event: 'search', ...window.__opts.search });
       // Like the server, a failed turn marks its question with the server's own sentence.
       if (/fail/i.test(text)) {
         question.failed = { code: 'provider_error', message: 'The provider could not answer.' };

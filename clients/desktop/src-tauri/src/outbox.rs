@@ -22,6 +22,9 @@ pub struct OutboxEntry {
     /// Search the web for this send. In memory only (`skip`): a message sent again from "Not sent" goes without it.
     #[serde(skip)]
     pub web_search: bool,
+    /// Research for this send. In memory only, like `web_search`.
+    #[serde(skip)]
+    pub research: bool,
 }
 
 pub struct Outbox {
@@ -64,6 +67,7 @@ impl Outbox {
             text: text.to_string(),
             created_at: now(),
             web_search: false,
+            research: false,
         };
         let mut entries = self.entries();
         entries.push(entry.clone());
