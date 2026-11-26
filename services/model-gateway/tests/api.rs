@@ -454,6 +454,10 @@ async fn a_reply_is_on_record_before_the_provider_is_called_and_the_stream_start
     let attempt = rig.wait_rows("SELECT status, tokens_in, tokens_out, parent_id FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-happy' AND status = 'done'").await;
     assert_eq!(attempt[0][3], json!(span_id));
     assert!(attempt[0][1].as_i64().unwrap() > 0 && attempt[0][2].as_i64().unwrap() > 0, "{attempt:?}");
+    // The provider's stop reason is recorded on that attempt, not left null.
+    let reason =
+        rig.rows("SELECT json_extract(attrs_json, '$.finish_reason') FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-happy'");
+    assert_eq!(reason, vec![vec![json!("stop")]]);
 }
 
 #[tokio::test]

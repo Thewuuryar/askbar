@@ -224,6 +224,8 @@ class Handler(BaseHTTPRequestHandler):
                                            "usage": {"output_tokens": 50}})
                 self.sse("message_stop", {"type": "message_stop"})
             else:
+                # The last text chunk carries the stop reason, as OpenAI-style streams do.
+                self.wfile.write(f"data: {json.dumps({'choices': [{'delta': {'content': ''}, 'finish_reason': 'stop'}]})}\n\n".encode())
                 if (body.get("stream_options") or {}).get("include_usage"):
                     big = re.search(r"^MOCK-TOKENS (\d+)$", last, re.M)
                     out = int(big.group(1)) if big else 50

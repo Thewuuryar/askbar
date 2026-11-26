@@ -95,7 +95,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 
 ### Phase 1: stop reason and input count (record only)
 
-- [ ] **C1.1** `fix(model-gateway): record the provider's finish reason` · haiku
+- [x] **C1.1** `fix(model-gateway): record the provider's finish reason` · haiku
   Files: `services/model-gateway/src/llm.rs`, its tests.
   Do: set `finish_reason` in `decode_event` from OpenAI `choices[].finish_reason` and Anthropic `message_delta.delta.stop_reason`, as the raw string. No enum.
   Accept: unit tests for `stop`, `length`, `end_turn`, `max_tokens`, `model_context_window_exceeded` and a missing reason; the attempt span's `finish_reason` is no longer null in `tests/streaming.rs`.
