@@ -240,6 +240,7 @@ fn model_of(provider_id: &str) -> &'static str {
     match provider_id {
         "bad" => "m-fail",
         "down" => "m-500",
+        "rst" => "m-reset",
         _ => "m",
     }
 }
@@ -800,6 +801,55 @@ async fn enforce_sends_placeholders_and_detect_only_or_off_send_the_request_unch
     let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).to_string();
     for (what, t) in [("spans", &spans), ("status", &status), ("log", &log)] {
         assert!(!t.contains("ann.lee") && !t.contains("7946 0958"), "{what}");
+    }
+}
+
+#[tokio::test]
+async fn enforce_restores_the_reply_and_flushes_held_text_before_an_error() {
+    const EMAIL: &str = "ann.lee@example.org";
+    let logs = LogBuf::default();
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer({
+                let l = logs.clone();
+                move || l.clone()
+            })
+            .finish(),
+    );
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m"), ("rst", "m-reset")]);
+    cfg.pii.enabled = true;
+    cfg.pii.mode = serde_json::from_value(json!("enforce")).unwrap();
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+
+    // The mock echoes the placeholder, bracketed and bare: the client gets the address, the provider only saw the placeholder.
+    let events =
+        rig.chat(&rig.request("p", "gen-restore", &format!("mail {EMAIL}\nMOCK-REPLY it is \u{27e6}EMAIL_1\u{27e7} or EMAIL_1."))).await;
+    assert_eq!(text_of(&events), format!("it is {EMAIL} or {EMAIL}."));
+    assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "{events:?}");
+    let sent = rig.mock.log.lock().unwrap().join("\n");
+    assert!(!sent.contains("ann.lee") && sent.contains("last='mail \u{27e6}EMAIL_1\u{27e7}"), "{sent}");
+    let step = rig.wait_rows("SELECT attrs_json FROM spans WHERE trace_id = 'gen-restore' AND name = 'redact' AND status = 'done'").await;
+    let attrs: Value = serde_json::from_str(step[0][0].as_str().unwrap()).unwrap();
+    assert_eq!((&attrs["pii"]["replaced"], &attrs["pii"]["restored"]), (&json!(1), &json!(2)), "{attrs}");
+
+    // The connection resets while a bare placeholder is the held tail: it is restored and delivered before the error.
+    let events = rig.chat(&rig.request("rst", "gen-held", &format!("mail {EMAIL}\nMOCK-REPLY ab EMAIL_1"))).await;
+    assert_eq!(text_of(&events), format!("ab {EMAIL}"), "{events:?}");
+    assert!(matches!(events.last(), Some(ChatEvent::Error { .. })), "{events:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rig.gw.audit().queued() > 0 {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let status =
+        rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap().text().await.unwrap();
+    let spans = format!("{:?}", rig.rows("SELECT * FROM spans WHERE trace_id IN ('gen-restore', 'gen-held')"));
+    let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).to_string();
+    for (what, t) in [("spans", &spans), ("status", &status), ("log", &log)] {
+        assert!(!t.contains("ann.lee"), "{what}");
     }
 }
 
