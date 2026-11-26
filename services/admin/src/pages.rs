@@ -124,6 +124,7 @@ page!(Search, search, "search", "search.html", "Search");
 page!(Services, services, "services", "services.html", "Services");
 page!(Network, network, "network", "network.html", "Network");
 page!(Security, security, "security", "security.html", "Security");
+page!(Privacy, privacy, "privacy", "privacy.html", "Privacy");
 page!(Backup, backup, "backup", "backup.html", "Backup");
 page!(Notifications, notifications, "notifications", "notifications.html", "Notifications");
 
@@ -145,6 +146,7 @@ pub static PAGES: &[Page] = &[
     Page { slug: "services", label: "Services", group: Group::Settings, icon: "server", lede: "Restart a part of Askbar.", render: services },
     Page { slug: "network", label: "Network", group: Group::Settings, icon: "globe", lede: "The host name, its certificate, and which addresses may open this site.", render: network },
     Page { slug: "security", label: "Security", group: Group::Settings, icon: "shield", lede: "How you sign in to this admin, its keys, how long audit records are kept and sealed content stays open, and the kill switch.", render: security },
+    Page { slug: "privacy", label: "Privacy", group: Group::Settings, icon: "lock", lede: "Finding personal data and secrets in what is sent to model providers and the web, and what to do with each kind.", render: privacy },
     Page { slug: "backup", label: "Backup", group: Group::Settings, icon: "archive", lede: "Encrypted backups of the server's data and this admin's settings.", render: backup },
     Page { slug: "notifications", label: "Notifications", group: Group::Settings, icon: "send", lede: "Where Askbar sends an alert when something needs attention, and how to test it.", render: notifications },
     Page { slug: "reference", label: "Reference", group: Group::Reference, icon: "reference", lede: "What each admin setting does, how the admin site is built, and what the audit alerts mean. Start here.", render: crate::reference::index_html },

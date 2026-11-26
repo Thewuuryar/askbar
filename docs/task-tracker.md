@@ -20,9 +20,9 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 7 | 0 | 3 | 10 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
-| [PII detection and redaction](plan-pii-redaction.md) | 10 | 0 | 1 | 11 |
+| [PII detection and redaction](plan-pii-redaction.md) | 11 | 0 | 0 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **150** | **0** | **161** | **311** |
+| **Total** | **151** | **0** | **160** | **311** |
 
 ## Completed (150)
 
@@ -202,6 +202,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[PII-P2.4](plan-pii-redaction.md)** record the redact step
 - [x] **[PII-P3.1](plan-pii-redaction.md)** store and push PII settings
 - [x] **[PII-P2.6](plan-pii-redaction.md)** check search queries and fetch URLs for PII
+- [x] **[PII-P3.2](plan-pii-redaction.md)** Privacy page
 
 ## In progress (0)
 
@@ -399,10 +400,6 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P10.8](plan-tiered-routing/phase-10-script-library.md)** track success, demote and retire scripts
 - [ ] **[P10.9](plan-tiered-routing/phase-10-script-library.md)** unpromoted or changed scripts do not run
 - [ ] **[P10.10](plan-tiered-routing/phase-10-script-library.md)** amend 0016, 0054, 0039, 0040 for the library
-
-### PII detection and redaction (track 2)
-
-- [ ] **[PII-P3.2](plan-pii-redaction.md)** Privacy page
 
 ### Context checks and canaries (track 3)
 
