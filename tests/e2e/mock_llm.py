@@ -14,6 +14,10 @@ that comes after text has been delivered). With stream_options.include_usage a f
 "drop" sends two content deltas and closes the connection without [DONE].
 Quick search: the server's query-proposal call gets a JSON array of two queries, and the answer call (the prompt holds
 <untrusted_web_content>) gets a reply that cites [1] and [2] and says how many numbered sources it was given.
+Research, by the system prompt: the split gets a JSON array of two sub-questions, the researcher's summary a short text with
+the marker SUMMARY_MARK, the writer a draft that cites [1] and [2] with DRAFT_MARK, and the judge approves unless the question holds
+"MOCK-JUDGE refuse <reason>" (a refusal with that code) or "MOCK-JUDGE malformed" (the verdict with extra text). A line
+"MOCK-TOKENS <n>" makes the call report n completion tokens (the research cap tests).
 A message with a line "MOCK-REPLY <text>" gets exactly <text> as the reply (the judge tests choose its answer this way).
 """
 import json
@@ -43,6 +47,10 @@ def greet(name):
 Anything else?"""
 
 QUERIES = '["smoke-w55-query-alpha", "smoke-w55-query-beta"]'
+
+SUBS = '["smoke-p5b-sub-one", "smoke-p5b-sub-two"]'
+SUMMARY_MARK = "smoke-p5b-summary-marker"
+DRAFT_MARK = "smoke-p5b-draft-marker"
 
 SLOW = "Streaming slowly so you can press Stop. " * 40
 
@@ -182,6 +190,17 @@ class Handler(BaseHTTPRequestHandler):
         text = SLOW if slow else REPLY
         if "You propose web search queries" in system:
             text = QUERIES
+        elif "You split one question" in system:
+            text = SUBS
+        elif "You summarise web pages" in system:
+            text = f"{SUMMARY_MARK}: the page says so."
+        elif "You write cited research reports" in system:
+            text = f"{DRAFT_MARK}: the sources agree [1] and [2]."
+        elif "You review a draft report" in system:
+            j = re.search(r"MOCK-JUDGE (approve|malformed|refuse (\w+))", last)
+            text = ('{"verdict":"approve"}' if not j or j.group(1) == "approve" else
+                    '{"verdict":"approve"} and a word' if j.group(1) == "malformed" else
+                    json.dumps({"verdict": "refuse", "reason": j.group(2)}))
         elif (chosen := re.search(r"^MOCK-REPLY (.*)$", last, re.M)):
             text = chosen.group(1)
         elif "<untrusted_web_content>" in last:
@@ -204,7 +223,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.sse("message_stop", {"type": "message_stop"})
             else:
                 if (body.get("stream_options") or {}).get("include_usage"):
-                    usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+                    big = re.search(r"^MOCK-TOKENS (\d+)$", last, re.M)
+                    out = int(big.group(1)) if big else 50
+                    usage = {"prompt_tokens": 100, "completion_tokens": out, "total_tokens": 100 + out,
                              "prompt_tokens_details": {"cached_tokens": 64 if "cached" in last.lower() else 0}}
                     self.wfile.write(f"data: {json.dumps({'choices': [], 'usage': usage})}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n")
