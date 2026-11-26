@@ -44,6 +44,20 @@ impl SpaceStore {
         Ok(())
     }
 
+    /// Ends the task and its steps as `stopped` unless the run already ended them (a report cut short from outside).
+    pub fn stop_task_if_running(&self, task_id: &str, note: &str) -> Result<(), DbError> {
+        let t = now();
+        self.conn().execute(
+            "UPDATE task_steps SET status = 'stopped', ended_at = ?2 WHERE task_id = ?1 AND status = 'running'",
+            params![task_id, t],
+        )?;
+        self.conn().execute(
+            "UPDATE tasks SET status = 'stopped', note = ?2, ended_at = ?3 WHERE id = ?1 AND status = 'running'",
+            params![task_id, note, t],
+        )?;
+        Ok(())
+    }
+
     /// The id of the user's `running` task of this kind, if any (the `research_busy` check).
     pub fn running_task_of_kind(&self, user_id: &str, kind: &str) -> Result<Option<String>, DbError> {
         Ok(self

@@ -92,6 +92,7 @@ pub async fn chat(
             client_request_id: req.client_request_id,
         },
         web_search,
+        req.research,
     )
     .map_err(IntoResponse::into_response)?;
     let meta = ChatEvent::Meta { conversation_id: sub.conversation_id, generation_id: Some(sub.generation_id), queued: sub.queued };
