@@ -379,6 +379,7 @@
     audit_disk_critical: { fix: 'Services', href: '/admin/services/' },
     component_silent: { fix: 'Services', href: '/admin/services/' },
     caddy_silent: { fix: 'Services', href: '/admin/services/' },
+    context_truncated: { fix: 'Audit', href: '/admin/audit/calls/' },
     restart_loop: { fix: 'Services', href: '/admin/services/' },
     backup_failed: { fix: 'Backup', href: '/admin/backup/' },
     backup_missed: { fix: 'Backup', href: '/admin/backup/' },

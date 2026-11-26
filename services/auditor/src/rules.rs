@@ -32,6 +32,8 @@ pub enum Fed {
     TurnStarted,
     /// Caddy sent an access line.
     AccessLine,
+    /// A span finished with `attrs.context.truncated` true, or a `canary` step finished `front_lost`.
+    ContextTruncated,
 }
 
 /// The two limits on how long sealed content stays open, in minutes, as the last record of a change left them.
@@ -190,6 +192,7 @@ impl Rules {
                 }
             }
             Fed::Hello { .. } => {}
+            Fed::ContextTruncated => self.say(Kind::ContextTruncated, Fields::default()),
             Fed::TurnStarted => self.state.lock().unwrap_or_else(|e| e.into_inner()).caddy.last_turn = Some(now),
             Fed::AccessLine => {
                 let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -294,6 +297,14 @@ pub fn fed_of(record: &askbar_audit::Record) -> Option<Fed> {
         Record::Hello { service, boot_id } => Some(Fed::Hello { service: service.clone(), boot_id: boot_id.clone() }),
         // The server's replies come through `chat` turns; the admin's test of a provider does not go through Caddy.
         Record::Start(s) if s.kind == "turn" && s.name == "chat" => Some(Fed::TurnStarted),
+        // Unsealed attributes only: `context.truncated` on an attempt, `canary.outcome` on the canary step. `absent` and `skipped`
+        // are not truncation (the model ignored the instruction, or the output limit came first).
+        Record::Finish(f) => {
+            let attrs: serde_json::Value = serde_json::from_str(f.attrs_json.as_deref()?).ok()?;
+            let truncated =
+                attrs["context"]["truncated"].as_bool() == Some(true) || attrs["canary"]["outcome"].as_str() == Some("front_lost");
+            truncated.then_some(Fed::ContextTruncated)
+        }
         _ => None,
     }
 }
@@ -357,6 +368,34 @@ pub(crate) mod tests {
             Some(Fed::Hello { service: "admin".into(), boot_id: "b".into() })
         );
         assert_eq!(fed_of(&Record::Setting { key: "retention_days".into(), value: "30".into() }), None);
+    }
+
+    #[test]
+    fn only_a_truncated_context_or_a_lost_canary_is_an_alert() {
+        use askbar_audit::{Record, SpanFinish};
+        let finish =
+            |attrs: Option<&str>| Record::Finish(SpanFinish { id: "s".into(), attrs_json: attrs.map(String::from), ..Default::default() });
+        for no in [
+            None,
+            Some("{}"),
+            Some("not json"),
+            Some(r#"{"context":{"estimated_in":10,"truncated":false,"stop":null}}"#),
+            Some(r#"{"canary":{"planted":true,"outcome":"ok","instruction_version":1}}"#),
+            Some(r#"{"canary":{"planted":true,"outcome":"absent","instruction_version":1}}"#),
+            Some(r#"{"canary":{"planted":true,"outcome":"skipped","instruction_version":1}}"#),
+        ] {
+            assert_eq!(fed_of(&finish(no)), None, "{no:?}");
+        }
+        for yes in [
+            r#"{"context":{"estimated_in":10,"reported_in":2,"truncated":true,"stop":null}}"#,
+            r#"{"canary":{"planted":true,"outcome":"front_lost","instruction_version":1}}"#,
+        ] {
+            assert_eq!(fed_of(&finish(Some(yes))), Some(Fed::ContextTruncated), "{yes}");
+        }
+        let (r, c) = rules();
+        r.fed(&Fed::ContextTruncated, 0);
+        let sent = c.0.lock().unwrap();
+        assert_eq!((sent[0].0, sent[0].1, &sent[0].2), (Kind::ContextTruncated, Severity::Warning, &Fields::default()));
     }
 
     #[test]

@@ -124,7 +124,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
   Files: `crates/askbar-proto/src/gateway.rs`, `services/model-gateway/src/{lib,filter,canary}.rs`, tests.
   Do: add `canary_enabled` and `CANARY_TRIGGER_PCT`. When enabled, a limit is set and the estimate is at or above the trigger, plant A and B and the instruction. Extend the PII filter struct to hold back and strip marker text. Write `attrs.canary = {planted, outcome, instruction_version}` on a `canary` step span under the attempt (AV2.1).
   Accept: property tests split markers at every byte boundary and the client never receives a partial marker; mock-LLM tests for each outcome; no canary when no limit is set or below 70%; nonces appear in no log or attribute (a test greps for them).
-- [ ] **C3.2** `feat(auditor): alert on truncated context` · sonnet · after C3.1 and AV2.1
+- [x] **C3.2** `feat(auditor): alert on truncated context` · sonnet · after C3.1 and AV2.1
   Files: `crates/askbar-proto/src/alerter.rs`, `services/auditor/src/{rules,lib}.rs`, tests.
   Do: add a new `Fed` path for span finish and step records, since `fed_of` maps only `AdminAction`, `Hello` and turn `Start`; raise `ContextTruncated` on `front_lost` or `context.truncated`. Check `services/alerter/src/limits.rs` first and reuse its limits if they fit.
   Accept: `front_lost` or `truncated` raises one alert within the limits; `absent` does not alert.

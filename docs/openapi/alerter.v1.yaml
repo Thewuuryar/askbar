@@ -368,7 +368,7 @@ components:
       type: string
       description: >-
         The auditor sends `unsealed`, `unseal_timeouts_changed`, `retention_changed`, `backup_key_changed`,
-        `audit_disk_low`, `audit_disk_critical`, `component_silent`, `caddy_silent` and `restart_loop` (the admin's, from
+        `audit_disk_low`, `audit_disk_critical`, `component_silent`, `caddy_silent`, `context_truncated` and `restart_loop` (the admin's, from
         its hellos). The admin sends `chain_mismatch`, `rejected_token`, `restart_loop` (the other services'),
         `budget_threshold`, `task_cap_threshold`, `backup_failed`, `backup_missed` and `restore_performed`. `release_available` and `test` are
         the alerter's own and come over no link.
@@ -388,6 +388,7 @@ components:
           - audit_disk_critical
           - component_silent
           - caddy_silent
+          - context_truncated
           - restart_loop
           - chain_mismatch
           - rejected_token

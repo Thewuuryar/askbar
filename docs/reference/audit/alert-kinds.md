@@ -27,7 +27,7 @@ Who sends a kind is one of three links: `auditor` (the audit store's container),
 | `rejected_token` | warning | admin | A service refused the admin's token on a link: one for each episode. |
 | `budget_threshold` | warning, then critical | admin | A day's or a month's token budget reached 80% (warning) or 100% (critical). |
 | `task_cap_threshold` | warning, then critical | admin | A research task used 75% (warning) or 90% (critical) of its token cap: one alert for each crossing, with no task or user named. |
-| `context_truncated` | set when the kind is added (C3.2) | auditor | Target, not yet built ([plan](../../plan-canaries.md)): the provider cut part of a reply's context, shown by fewer input tokens than were sent or by a canary that lost the start of the context. A canary that got no answer from the model never alerts. |
+| `context_truncated` | warning | auditor | The provider cut part of a reply's context, shown by fewer input tokens than were sent or by a canary that lost the start of the context. A canary that got no answer from the model (`absent`) never alerts. No field: the repeat limit makes it one an hour. |
 | `backup_failed` | critical | admin | A scheduled backup could not be made. |
 | `backup_missed` | critical | admin | No backup has finished for 26 hours. |
 | `restore_performed` | warning | admin | A backup was restored into this install. |

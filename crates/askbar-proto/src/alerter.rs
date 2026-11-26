@@ -52,6 +52,7 @@ pub enum Kind {
     AuditDiskCritical,
     ComponentSilent,
     CaddySilent,
+    ContextTruncated,
     // The auditor's for the admin (from its hellos), and the admin's for the services it polls.
     RestartLoop,
     // The admin's.
@@ -69,7 +70,7 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in a fixed order.
-    pub const ALL: [Kind; 18] = [
+    pub const ALL: [Kind; 19] = [
         Kind::Unsealed,
         Kind::UnsealTimeoutsChanged,
         Kind::RetentionChanged,
@@ -78,6 +79,7 @@ impl Kind {
         Kind::AuditDiskCritical,
         Kind::ComponentSilent,
         Kind::CaddySilent,
+        Kind::ContextTruncated,
         Kind::RestartLoop,
         Kind::ChainMismatch,
         Kind::RejectedToken,
@@ -101,6 +103,7 @@ impl Kind {
             Kind::AuditDiskCritical => "audit_disk_critical",
             Kind::ComponentSilent => "component_silent",
             Kind::CaddySilent => "caddy_silent",
+            Kind::ContextTruncated => "context_truncated",
             Kind::RestartLoop => "restart_loop",
             Kind::ChainMismatch => "chain_mismatch",
             Kind::RejectedToken => "rejected_token",
@@ -124,6 +127,7 @@ impl Kind {
             | Kind::BackupKeyChanged
             | Kind::AuditDiskLow
             | Kind::CaddySilent
+            | Kind::ContextTruncated
             | Kind::RestartLoop
             | Kind::RejectedToken
             | Kind::BudgetThreshold
@@ -146,7 +150,8 @@ impl Kind {
             | Kind::AuditDiskLow
             | Kind::AuditDiskCritical
             | Kind::ComponentSilent
-            | Kind::CaddySilent => &[Sender::Auditor],
+            | Kind::CaddySilent
+            | Kind::ContextTruncated => &[Sender::Auditor],
             Kind::RestartLoop => &[Sender::Auditor, Sender::Admin],
             Kind::ChainMismatch
             | Kind::RejectedToken
@@ -168,6 +173,7 @@ impl Kind {
             | Kind::ChainMismatch
             | Kind::BackupFailed
             | Kind::RestorePerformed
+            | Kind::ContextTruncated
             | Kind::Test => &[],
             Kind::RetentionChanged => &[Field::Count],
             Kind::AuditDiskLow | Kind::AuditDiskCritical => &[Field::FreeMb],
@@ -494,7 +500,7 @@ mod tests {
             assert_eq!(serde_json::to_value(k).unwrap(), serde_json::json!(k.name()));
             assert!(!k.senders().is_empty());
         }
-        assert_eq!(Kind::ALL.len(), 18);
+        assert_eq!(Kind::ALL.len(), 19);
         // Any kind a sender could add is in the list: the enum's own variants are exactly ALL.
         let all: std::collections::BTreeSet<Kind> = Kind::ALL.into_iter().collect();
         assert_eq!(all.len(), Kind::ALL.len());
