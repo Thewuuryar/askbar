@@ -1102,6 +1102,7 @@ pub(crate) fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
         E::KillSwitch => Failed::new("kill_switch", KILLED),
         E::UserPaused => Failed::new("user_paused", PAUSED),
         E::ModelNotApproved => Failed::new("model_not_approved", MODEL_NOT_APPROVED),
+        E::PiiBlocked => Failed::new("pii_blocked", PII_BLOCKED),
         E::BudgetExceeded(period) => Failed::new(
             "budget_exceeded",
             if period == "monthly" {
@@ -1311,6 +1312,7 @@ fn start_next(state: &Arc<AppState>, space: &Arc<Space>, conversation_id: &str) 
 }
 
 pub(crate) const KILLED: &str = "Generations were switched off by the administrator.";
+const PII_BLOCKED: &str = "Your message was not sent: it contains a private value (a card number or a secret). Remove it and send again.";
 const MODEL_NOT_APPROVED: &str = "That model is not approved. Pick another one.";
 pub(crate) const PAUSED: &str = "Replies are paused for you by the administrator. Your message is kept; send it again when they are back.";
 /// What a failed question says when the provider failed; its own words stay sealed in the audit.

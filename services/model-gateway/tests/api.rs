@@ -805,6 +805,87 @@ async fn enforce_sends_placeholders_and_detect_only_or_off_send_the_request_unch
 }
 
 #[tokio::test]
+async fn enforce_refuses_a_blocked_type_at_the_gate_and_names_the_type_only() {
+    const KEY: &str = "sk-ant-api03-ZzMARKERzZ9QqWwEeRrTtYy";
+    const CARD: &str = "4111 1111 1111 1111";
+    let logs = LogBuf::default();
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer({
+                let l = logs.clone();
+                move || l.clone()
+            })
+            .finish(),
+    );
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.pii.enabled = true;
+    cfg.pii.mode = serde_json::from_value(json!("enforce")).unwrap();
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+
+    let mut bodies = String::new();
+    let fenced = format!("```\nexport K={KEY}\n```");
+    let mut old = rig.request("p", "gen-old", "and now?");
+    old.messages.insert(0, ChatMessage { role: "assistant".into(), content: format!("your key {KEY}") });
+    let mut sys = rig.request("p", "gen-sys", "hello");
+    sys.system = format!("be brief {KEY}");
+    for (gen, req, ty) in [
+        ("gen-key", rig.request("p", "gen-key", &format!("my key is {KEY}")), "API_KEY"),
+        ("gen-card", rig.request("p", "gen-card", &format!("pay with {CARD}")), "CARD"),
+        ("gen-fence", rig.request("p", "gen-fence", &fenced), "API_KEY"),
+        ("gen-old", old, "API_KEY"),
+        ("gen-sys", sys, "API_KEY"),
+    ] {
+        let (status, body) = problem_of(rig.chat_raw(&req).await).await;
+        assert_eq!((status, body["error"].as_str(), &body["types"]), (400, Some("pii_blocked"), &json!([ty])), "{gen}: {body}");
+        bodies += &body.to_string();
+        let rows = rig.wait_rows(&format!("SELECT kind, name, status, error_code, attrs_json FROM spans WHERE trace_id = '{gen}'")).await;
+        assert_eq!(rows.len(), 1, "only the gate span: {rows:?}");
+        assert_eq!(rows[0][..4], [json!("gate"), json!("pii_block"), json!("blocked"), json!("pii_blocked")]);
+        let attrs: Value = serde_json::from_str(rows[0][4].as_str().unwrap()).unwrap();
+        assert_eq!((&attrs["types"], &attrs["counts"][ty]), (&json!([ty]), &json!(1)), "{attrs}");
+    }
+    assert_eq!(rig.provider_calls(), 0, "no provider was called");
+
+    // Detect only and off serve the same message.
+    for (i, (gen, enabled, mode)) in [("gen-detect", true, "detect_only"), ("gen-off", false, "enforce")].into_iter().enumerate() {
+        cfg.pii.enabled = enabled;
+        cfg.pii.mode = serde_json::from_value(json!(mode)).unwrap();
+        cfg.version = 2 + i as u64;
+        assert_eq!(rig.push(&cfg).await.status(), 200);
+        let events = rig.chat(&rig.request("p", gen, &format!("my key is {KEY}"))).await;
+        assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "{gen}: {events:?}");
+    }
+    assert_eq!(rig.provider_calls(), 2);
+
+    // An allowed type is served; an email is replaced, not refused.
+    cfg.pii.enabled = true;
+    cfg.pii.mode = serde_json::from_value(json!("enforce")).unwrap();
+    cfg.pii.entities.insert("CARD".into(), serde_json::from_value(json!("allow")).unwrap());
+    cfg.version = 4;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+    let events = rig.chat(&rig.request("p", "gen-allow", &format!("pay with {CARD} to ann.lee@example.org"))).await;
+    assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "{events:?}");
+    let body = sealed_body(&rig, "gen-allow").await;
+    assert!(body.contains(CARD) && body.contains("\u{27e6}EMAIL_1\u{27e7}") && !body.contains("ann.lee"), "{body}");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rig.gw.audit().queued() > 0 {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let status =
+        rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap().text().await.unwrap();
+    let spans = format!("{:?}", rig.rows("SELECT * FROM spans WHERE name = 'pii_block'"));
+    let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).to_string();
+    for (what, t) in [("body", &bodies), ("spans", &spans), ("status", &status)] {
+        assert!(!t.contains("MARKER") && !t.contains("sk-ant") && !t.contains("4111"), "{what}");
+    }
+    assert!(!log.contains("MARKER") && !log.contains("4111 1111"), "log");
+}
+
+#[tokio::test]
 async fn enforce_restores_the_reply_and_flushes_held_text_before_an_error() {
     const EMAIL: &str = "ann.lee@example.org";
     let logs = LogBuf::default();

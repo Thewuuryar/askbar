@@ -572,8 +572,8 @@ fn gate_blocked(gw: &Gateway, trace: &str, user: &str, client: Option<String>, n
 }
 
 impl Gateway {
-    /// The kill switch, the user's pause and the budget, in that order. `Err` is the refusal to answer with.
-    fn gates(&self, cfg: &Applied, req: &ChatRequest) -> Result<(), Failure> {
+    /// The kill switch, the user's pause, blocked PII and the budget, in that order. `Err` is the refusal to answer with.
+    fn gates(&self, cfg: &Applied, req: &ChatRequest, pii_blocked: &std::collections::BTreeMap<&'static str, u64>) -> Result<(), Failure> {
         if cfg.kill_switch {
             refuse_at_gate(self, req, "kill_switch", "kill_switch", serde_json::json!({ "kill_switch": true }));
             return Err(ApiError::new(ErrorCode::KillSwitch, "Replies have been switched off by the administrator for now."));
@@ -599,6 +599,15 @@ impl Gateway {
         if req.role.is_some_and(Role::is_task) && self.tasks.lock().unwrap_or_else(|e| e.into_inner()).at_cap(&req.generation_id, cap) {
             refuse_at_gate(self, req, "task_token_cap", "task_token_cap", serde_json::json!({ "token_cap": cap }));
             return Err(ApiError::new(ErrorCode::TaskTokenCap, "This task has used all the tokens it may."));
+        }
+        // After the stops (the right to call at all) and before the budget, so a refusal consumes nothing. Types and counts
+        // only: never a value or a position.
+        if !pii_blocked.is_empty() {
+            let types: Vec<&str> = pii_blocked.keys().copied().collect();
+            refuse_at_gate(self, req, "pii_block", "pii_blocked", serde_json::json!({ "types": types, "counts": pii_blocked }));
+            return Err(
+                ApiError::new(ErrorCode::PiiBlocked, askbar_proto::http::default_detail(ErrorCode::PiiBlocked)).with("types", types)
+            );
         }
         let (daily, monthly) = (cfg.budget.daily_tokens, cfg.budget.monthly_tokens);
         if (daily.is_none() && monthly.is_none()) || cfg.free.contains(&req.provider_id) {
@@ -712,7 +721,7 @@ async fn start_turn(gw: &Arc<Gateway>, mut req: ChatRequest, name: &str) -> Resu
     // Detection and placeholders, once, before the gates and every attempt; the gate refusals of PII-P2.3 read it.
     // Nothing is recorded here: only `run_attempts` writes the `redact` step.
     let redacted = pii::redact(&cfg.pii, &req.system, &messages);
-    gw.gates(&cfg, &req)?;
+    gw.gates(&cfg, &req, &redacted.blocked)?;
 
     // The turn span, on record before any provider is called (ADR 0010 rules 1 to 3).
     let turn_id = askbar_service::ids::new_id();
@@ -763,7 +772,7 @@ async fn run_attempts(
     let mut retry_index = 0u32;
     // What the provider gets, the sealed `provider_request` and the usage estimate all come from `redacted` (PII-P2.1).
     // A request with nothing found writes no `redact` step, to keep the trace small.
-    let pii::Redacted { system, messages, step: redact, reverse } = redacted;
+    let pii::Redacted { system, messages, step: redact, reverse, .. } = redacted;
     // Only a request that was pseudonymized has a filter: any other reply path is as it was.
     let mut filter = (!reverse.is_empty()).then(|| pii::ReplyFilter::new(&reverse));
     loop {

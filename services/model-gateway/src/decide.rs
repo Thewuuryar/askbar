@@ -95,7 +95,7 @@ pub async fn decide(State(gw): State<Arc<Gateway>>, Json(req): Json<DecideReques
     };
     // An unpinned judge is the gate's refusal (`role_not_pinned`, with its gate span); a pinned one names its model.
     let Ok(Some(pin)) = pinned_model(&cfg.role_pins, chat.role) else {
-        gw.gates(&cfg, &chat)?;
+        gw.gates(&cfg, &chat, &Default::default())?;
         return Err(ApiError::new(ErrorCode::RoleNotPinned, default_detail(ErrorCode::RoleNotPinned)));
     };
     let (provider_id, model) = pin.split_once('/').unwrap_or_default();

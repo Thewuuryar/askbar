@@ -23,6 +23,8 @@ pub enum ErrorCode {
     ModelNotApproved,
     /// The request names a role that has no model pinned (plan W4.1). 400.
     RoleNotPinned,
+    /// The message holds a value the PII settings block (a card number or a secret). 400; the problem's `types` names the types only.
+    PiiBlocked,
     /// Quick search approvals (plan W5.2): each refusal has its own code.
     QuickSearchTool,
     QuickSearchArguments,
@@ -80,13 +82,14 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 50] = [
+    pub const ALL: [ErrorCode; 51] = [
         ErrorCode::QueueFull,
         ErrorCode::BudgetExceeded,
         ErrorCode::KillSwitch,
         ErrorCode::UserPaused,
         ErrorCode::ModelNotApproved,
         ErrorCode::RoleNotPinned,
+        ErrorCode::PiiBlocked,
         ErrorCode::QuickSearchTool,
         ErrorCode::QuickSearchArguments,
         ErrorCode::QuickSearchQueryCount,
@@ -142,6 +145,7 @@ impl ErrorCode {
             ErrorCode::UserPaused => "user_paused",
             ErrorCode::ModelNotApproved => "model_not_approved",
             ErrorCode::RoleNotPinned => "role_not_pinned",
+            ErrorCode::PiiBlocked => "pii_blocked",
             ErrorCode::QuickSearchTool => "quick_search_tool",
             ErrorCode::QuickSearchArguments => "quick_search_arguments",
             ErrorCode::QuickSearchQueryCount => "quick_search_query_count",
@@ -218,6 +222,7 @@ impl ErrorCode {
             | ErrorCode::BadRequest
             | ErrorCode::ModelNotApproved
             | ErrorCode::RoleNotPinned
+            | ErrorCode::PiiBlocked
             | ErrorCode::DecisionUnsupported
             | ErrorCode::QuickSearchTool
             | ErrorCode::QuickSearchArguments => 400,
@@ -252,6 +257,7 @@ impl ErrorCode {
             ErrorCode::UserPaused => "Replies are paused for this user",
             ErrorCode::ModelNotApproved => "That model is not approved",
             ErrorCode::RoleNotPinned => "That role has no model pinned",
+            ErrorCode::PiiBlocked => "The message holds a private value that cannot be sent",
             ErrorCode::QuickSearchTool => "That tool is not part of quick search",
             ErrorCode::QuickSearchArguments => "The quick search arguments are not allowed",
             ErrorCode::QuickSearchQueryCount => "This reply has used all its searches",
@@ -430,6 +436,7 @@ mod tests {
                 | ErrorCode::UserPaused
                 | ErrorCode::ModelNotApproved
                 | ErrorCode::RoleNotPinned
+                | ErrorCode::PiiBlocked
                 | ErrorCode::QuickSearchTool
                 | ErrorCode::QuickSearchArguments
                 | ErrorCode::QuickSearchQueryCount
@@ -476,6 +483,6 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
-        assert_eq!(ErrorCode::ALL.len(), 50);
+        assert_eq!(ErrorCode::ALL.len(), 51);
     }
 }

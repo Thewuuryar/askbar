@@ -60,6 +60,9 @@ pub fn default_detail(code: ErrorCode) -> &'static str {
         ErrorCode::KillSwitch => "Replies have been switched off by the administrator.",
         ErrorCode::UserPaused => "Replies are paused for you by the administrator.",
         ErrorCode::ModelNotApproved => "That model is not approved. Pick another one.",
+        ErrorCode::PiiBlocked => {
+            "The message contains a private value that cannot be sent (a card number or a secret). Remove it and try again."
+        }
         ErrorCode::RoleNotPinned => "No model is pinned for that role. Pin one, or send without a role.",
         ErrorCode::QuickSearchTool => "Quick search can only search or fetch.",
         ErrorCode::QuickSearchArguments => "The search or fetch arguments are not allowed.",
