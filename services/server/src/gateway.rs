@@ -34,6 +34,10 @@ pub enum GatewayError {
     ModelNotApproved,
     /// The gateway has no such provider (a key was never given to it for one that exists here).
     NoSuchProvider,
+    /// The request's role has no model pinned at the gateway (`role_not_pinned`).
+    RoleNotPinned,
+    /// A task's model calls used all the tokens it may (402 `task_token_cap`).
+    TaskTokenCap,
     /// The gateway does not accept this server's token, or this server could not read it.
     Rejected,
     /// Nothing answered.
@@ -101,8 +105,17 @@ impl GatewayClient {
         &self,
         req: &askbar_proto::approval::QuickSearchApprovalRequest,
     ) -> Result<serde_json::Value, String> {
+        self.approve("quick-search", req).await
+    }
+
+    /// The same for one tool call of a research task (plan P5B.5): held to the task's tool-call limit.
+    pub async fn approve_research(&self, req: &askbar_proto::research::ResearchApprovalRequest) -> Result<serde_json::Value, String> {
+        self.approve("research", req).await
+    }
+
+    async fn approve(&self, route: &str, req: &impl serde::Serialize) -> Result<serde_json::Value, String> {
         let token = self.token().ok_or("gateway_rejected")?;
-        let url = format!("{}{}/approvals/quick-search", self.base, askbar_proto::paths::MODEL_GATEWAY_V1);
+        let url = format!("{}{}/approvals/{route}", self.base, askbar_proto::paths::MODEL_GATEWAY_V1);
         let resp =
             self.http.post(url).bearer_auth(token).timeout(Duration::from_secs(10)).json(req).send().await.map_err(|_| "unreachable")?;
         if resp.status().as_u16() == 200 {
@@ -136,6 +149,8 @@ impl GatewayClient {
                 (429, Some(askbar_proto::ErrorCode::BudgetExceeded)) => GatewayError::BudgetExceeded(period),
                 (503, Some(askbar_proto::ErrorCode::AuditBacklog)) => GatewayError::AuditBacklog,
                 (503, Some(askbar_proto::ErrorCode::NotConfigured)) => GatewayError::NotConfigured,
+                (_, Some(askbar_proto::ErrorCode::RoleNotPinned)) => GatewayError::RoleNotPinned,
+                (402, Some(askbar_proto::ErrorCode::TaskTokenCap)) => GatewayError::TaskTokenCap,
                 (404, _) => GatewayError::NoSuchProvider,
                 (401 | 403, _) => GatewayError::Rejected,
                 (other, _) => GatewayError::Other(other),

@@ -30,11 +30,11 @@ use std::time::Duration;
 pub const LINK: &str = askbar_proto::links::SERVER_MCP_GATEWAY;
 
 /// Characters of one page given to the model. The front already caps a fetch by bytes; this keeps the prompt small.
-const MAX_PAGE_CHARS: usize = 20_000;
+pub(crate) const MAX_PAGE_CHARS: usize = 20_000;
 /// The proposed queries are a short JSON array; a longer reply is cut and then fails to parse.
 const MAX_PROPOSAL_BYTES: usize = 16 * 1024;
 /// The marker pair the fetched text sits between. The text cannot contain the name, so it cannot close the block early.
-const MARKER: &str = "untrusted_web_content";
+pub(crate) const MARKER: &str = "untrusted_web_content";
 
 const NOTE_OFF: &str = "Web search is not turned on for you, so this answer is not from the web.\n\n";
 const NOTE_DISABLED: &str = "Search is turned off by your administrator, so this answer is not from the web.\n\n";
@@ -76,7 +76,7 @@ impl McpClient {
 
     /// Calls `tool` with `body` (the approval's answer plus the arguments). `Ok` is the result, which is untrusted data;
     /// `Err` is the problem's code, never its words.
-    async fn call(&self, tool: &str, body: &Value) -> Result<Value, String> {
+    pub(crate) async fn call(&self, tool: &str, body: &Value) -> Result<Value, String> {
         let url = format!("{}{}/tools/{tool}/call", self.base, askbar_proto::paths::MCP_GATEWAY_V1);
         let token = self.token().ok_or("gateway_rejected")?;
         let resp = self.http.post(url).bearer_auth(token).json(body).send().await.map_err(|_| "unreachable")?;
@@ -112,13 +112,13 @@ pub(crate) struct Prepared {
 }
 
 /// Every whitespace run replaced by the datamark; a datamark the text had is dropped first, so it cannot be forged.
-fn datamark(text: &str) -> String {
+pub(crate) fn datamark(text: &str) -> String {
     text.replace(DATAMARK, "").split_whitespace().collect::<Vec<_>>().join(&DATAMARK.to_string())
 }
 
 /// Queries from the model's reply, or none when it is not a JSON array of strings. Empty, over-long and repeated
 /// queries are dropped and the rest cut at the limit.
-fn parse_queries(reply: &str, l: &QuickSearchLimits) -> Vec<String> {
+pub(crate) fn parse_queries(reply: &str, l: &QuickSearchLimits) -> Vec<String> {
     let Ok(all) = serde_json::from_str::<Vec<String>>(reply.trim()) else { return vec![] };
     let mut out: Vec<String> = vec![];
     for q in all.iter().map(|q| q.trim()) {
@@ -144,13 +144,12 @@ fn writer_prompt(message: &str, pages: &[(&SearchSource, String)]) -> String {
     )
 }
 
-/// A `gate` span for a search that was not made, with a reason and no text.
-fn refuse(cx: &Ctx, reason: &str, code: &str) {
-    let span = cx.state.audit.start_span(
-        SpanStart::new(cx.generation_id, Kind::Gate, "quick_search_refused")
-            .who(cx.user_id, cx.client_id)
-            .attrs(&json!({ "reason": reason })),
-    );
+/// A `gate` span (named `name`) for a search that was not made, with a reason and no text.
+pub(crate) fn refuse(cx: &Ctx, name: &str, reason: &str, code: &str) {
+    let span = cx
+        .state
+        .audit
+        .start_span(SpanStart::new(cx.generation_id, Kind::Gate, name).who(cx.user_id, cx.client_id).attrs(&json!({ "reason": reason })));
     cx.state.audit.finish_span(SpanFinish::new(&span, "blocked").error_code(code));
 }
 
@@ -164,7 +163,7 @@ pub(crate) async fn prepare(cx: &Ctx<'_>, message: &str) -> Result<Prepared, Fai
         crate::snapshot::current(&db).ok().flatten().is_none_or(|s| s.quick_search_enabled)
     };
     if !on {
-        refuse(cx, "disabled", "quick_search_disabled");
+        refuse(cx, "quick_search_refused", "disabled", "quick_search_disabled");
         out.notice = NOTE_DISABLED.into();
         return Ok(out);
     }
@@ -173,12 +172,12 @@ pub(crate) async fn prepare(cx: &Ctx<'_>, message: &str) -> Result<Prepared, Fai
         None => None,
     };
     let Some(held) = held else {
-        refuse(cx, "unavailable", "tool_unavailable");
+        refuse(cx, "quick_search_refused", "unavailable", "tool_unavailable");
         out.notice = NOTE_DOWN.into();
         return Ok(out);
     };
     if !held.iter().any(|t| t == "search") {
-        refuse(cx, "not_permitted", "tool_not_permitted");
+        refuse(cx, "quick_search_refused", "not_permitted", "tool_not_permitted");
         out.notice = NOTE_OFF.into();
         return Ok(out);
     }
@@ -260,24 +259,30 @@ async fn approved_call(cx: &Ctx<'_>, mcp: &McpClient, tool: &str, arguments: Val
     mcp.call(tool, &body).await
 }
 
-/// The one model call before the search: it sees only `message` and proposes the queries (step 1). An ordinary turn of
-/// this reply, so it shares the generation id; its request and reply are sealed on its span like any turn's.
+/// The one model call before the search: it sees only `message` and proposes the queries (step 1).
 async fn propose(cx: &Ctx<'_>, message: &str, l: &QuickSearchLimits) -> Result<Vec<String>, Failed> {
     let system = format!(
         "You propose web search queries for one message. Reply with only a JSON array of at most {} strings, each at \
          most {} characters, and nothing else. Reply [] if the message needs no web search.",
         l.max_queries, l.max_query_chars
     );
+    Ok(parse_queries(&call_model(cx, Role::SearchQuery, &system, message).await?.0, l))
+}
+
+/// One model call through the gateway with `role`, answering `message` under `system`: the reply text and the tokens it
+/// used. An ordinary turn of this reply, so it shares the generation id; its request and reply are sealed on its span
+/// like any turn's, and nothing of them is logged.
+pub(crate) async fn call_model(cx: &Ctx<'_>, role: Role, system: &str, message: &str) -> Result<(String, u64), Failed> {
     let request = GatewayRequest {
         provider_id: cx.provider_id.into(),
         model: cx.model.into(),
-        role: Some(Role::SearchQuery),
+        role: Some(role),
         user_id: cx.user_id.into(),
         client_id: cx.client_id.map(str::to_string),
         space_id: Some(cx.space_id.into()),
         conversation_id: Some(cx.conversation_id.into()),
         generation_id: cx.generation_id.into(),
-        system: system.clone(),
+        system: system.into(),
         messages: vec![GatewayMessage { role: "user".into(), content: message.into() }],
     };
     let client =
@@ -319,7 +324,8 @@ async fn propose(cx: &Ctx<'_>, message: &str, l: &QuickSearchLimits) -> Result<V
         f.error_code = failed.clone();
         cx.state.audit.finish_span(f);
     }
-    crate::generation::record_usage(cx.state, cx.user_id, cx.client_id, cx.provider_id, cx.space_id, Some(Role::SearchQuery), usage);
+    let tokens = usage.input.unwrap_or(0) + usage.output.unwrap_or(0);
+    crate::generation::record_usage(cx.state, cx.user_id, cx.client_id, cx.provider_id, cx.space_id, Some(role), usage);
     if let Some(code) = failed {
         return Err(match code.as_str() {
             "kill_switch" => Failed::new("kill_switch", crate::generation::KILLED),
@@ -330,7 +336,7 @@ async fn propose(cx: &Ctx<'_>, message: &str, l: &QuickSearchLimits) -> Result<V
     if !finished {
         return Err(Failed::new("stream", "The model gateway stopped answering before the reply was complete."));
     }
-    Ok(parse_queries(&reply, l))
+    Ok((reply, tokens))
 }
 
 #[cfg(test)]

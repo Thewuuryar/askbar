@@ -1024,7 +1024,7 @@ mod tests {
         let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, 5);
         assert_eq!(db.list_conversations().unwrap().len(), 1);
-        db.create_task("research", "u1", "c1", 10).unwrap();
+        db.create_task("t1", "research", "u1", "c1", 10).unwrap();
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
