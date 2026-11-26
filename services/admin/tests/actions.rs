@@ -236,6 +236,7 @@ async fn when_the_auditor_is_away_a_change_is_refused_with_a_sentence_and_change
     assert_eq!(count("SELECT COUNT(*) FROM admin_api_keys"), 0);
     assert_eq!(count("SELECT COUNT(*) FROM role_pins"), 0);
     assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key LIKE 'limit.%'"), 0, "no limit was saved");
+    assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key = 'pii'"), 0, "no privacy setting was saved");
     assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key = 'system_prompt'"), 0, "the setting was not saved");
     assert_eq!(
         count("SELECT COUNT(*) FROM settings WHERE key IN ('quick_search_enabled', 'research_enabled')"),

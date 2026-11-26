@@ -50,6 +50,8 @@ pub struct McpConfig {
     pub approval_public_key: Option<String>,
     pub approval_key_version: u64,
     pub permissions: BTreeMap<String, UserTools>,
+    #[serde(skip_serializing_if = "askbar_proto::pii::PiiConfig::is_default")]
+    pub pii: askbar_proto::pii::PiiConfig,
 }
 
 impl McpConfig {
@@ -75,6 +77,7 @@ pub fn build_config(conn: &Connection) -> McpConfig {
         approval_public_key: key.as_ref().map(|(_, k)| k.iter().map(|b| format!("{b:02x}")).collect()),
         approval_key_version: key.map_or(0, |(v, _)| v),
         permissions: crate::mcp::permissions_config(conn).unwrap_or_default(),
+        pii: crate::privacy::read(conn),
     }
 }
 

@@ -33,6 +33,7 @@ pub mod mcp_link;
 pub mod network;
 pub mod notify;
 pub mod pages;
+pub mod privacy;
 pub mod reference;
 pub mod restore;
 pub mod roles;
@@ -254,6 +255,8 @@ pub fn routes(state: &Arc<AdminState>) -> Routes {
         .get(&v1("/mcp/permissions"), mcp::list)
         .put(&v1("/mcp/permissions/{user}"), mcp::put)
         .delete(&v1("/mcp/permissions/{user}"), mcp::delete)
+        .get(&v1("/privacy"), privacy::get)
+        .put(&v1("/privacy"), privacy::put)
         .get(&v1("/limits"), limits::list)
         .put(&v1("/limits"), limits::put)
         .get(&v1("/roles"), roles::list)
