@@ -1523,6 +1523,78 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.locator('#page-error *').count(), 0, 'the error is text');
     assert.equal((await lim('search_results')).value, def, 'a refused value changes nothing');
   });
+  await step('Privacy: the page loads with the defaults, a term with markup is text, settings are saved, reset and refused, and no record holds a term', async () => {
+    const MARK = 'zqmarker<img src=x onerror=window.__pwned=1>';
+    const put = (body) => adminJson('PUT', '/api/admin/v1/privacy', body);
+    const get = async () => (await adminJson('GET', '/api/admin/v1/privacy')).body;
+    const saved = () => page.waitForResponse((r) => r.url().endsWith('/api/admin/v1/privacy') && r.request().method() === 'PUT');
+    await openPage('privacy');
+    await page.waitForSelector('#privacy-types select');
+    assert.equal(await page.isChecked('#privacy-on'), false);
+    assert.equal(await page.inputValue('#privacy-mode'), 'detect_only');
+    assert.equal(await page.locator('#privacy-types select').count(), 10, 'one row for each type but CUSTOM');
+    assert.equal(await page.inputValue('#privacy-type-EMAIL'), 'pseudonymize');
+    assert.equal(await page.inputValue('#privacy-type-CARD'), 'block');
+    assert.equal(await page.inputValue('#privacy-type-IP'), 'allow');
+    assert.match(await page.innerText('#privacy-types tr[data-key="CARD"]'), /Block the message\s*$/, 'the default is shown next to the action');
+    assert.equal(await page.inputValue('#privacy-deny') + await page.inputValue('#privacy-allow'), '');
+    assert.equal(await page.locator('#privacy-limits-title').count(), 1);
+    assert.match(await page.innerText('#privacy-limits-title'), /What it does not do/);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal scroll');
+    // On, enforce, one action changed, two lists; the term lines are trimmed and deduplicated.
+    await page.check('#privacy-on');
+    await page.selectOption('#privacy-mode', 'enforce');
+    await page.selectOption('#privacy-type-IP', 'block');
+    await page.selectOption('#privacy-type-EMAIL', 'allow');
+    await page.fill('#privacy-deny', '  ' + MARK + '  \n\n' + MARK + '\nsecond term');
+    await page.fill('#privacy-allow', 'allowed one');
+    await page.waitForSelector('html.save-bar-on');
+    const ok = saved();
+    await page.click('#save-dock [data-save-submit]');
+    assert.equal((await ok).status(), 200);
+    await page.waitForFunction(() => document.querySelector('#privacy-deny').value.split('\n').length === 2 && !document.documentElement.classList.contains('save-bar-on'));
+    let now = await get();
+    assert.deepEqual([now.enabled, now.mode, now.entities, now.deny_terms, now.allow_terms], [true, 'enforce', { IP: 'block', EMAIL: 'allow' }, [MARK, 'second term'], ['allowed one']]);
+    // The term is text: no element was made, the textarea holds the raw string, and the term is shown nowhere else.
+    await page.reload();
+    await page.waitForSelector('#privacy-types select');
+    assert.equal(await page.locator('#main img').count(), 0, 'no element was made from a term');
+    assert.equal(await page.evaluate(() => window.__pwned), undefined);
+    assert.equal(await page.inputValue('#privacy-deny'), MARK + '\nsecond term');
+    assert.equal(await page.isChecked('#privacy-on'), true);
+    assert.equal(await page.inputValue('#privacy-mode'), 'enforce');
+    assert.equal(await page.inputValue('#privacy-type-IP'), 'block');
+    const text = await page.evaluate(() => document.querySelector('#app').innerHTML.replaceAll(/<textarea[\s\S]*?<\/textarea>/g, ''));
+    assert.ok(!text.includes('zqmarker') && !text.includes('second term') && !text.includes('allowed one'), 'a term is shown only in its textarea');
+    assert.equal(page.url().includes('zqmarker'), false);
+    // Back to the default removes the override.
+    await page.selectOption('#privacy-type-IP', 'allow');
+    const reset = saved();
+    await page.click('#save-dock [data-save-submit]');
+    assert.equal((await reset).status(), 200);
+    now = await get();
+    assert.deepEqual(now.entities, { EMAIL: 'allow' }, 'the default is not stored as an override');
+    // Refused: too many terms and a term that is too long; the error is text, and nothing changes.
+    for (const bad of [Array.from({ length: 501 }, (_, i) => 't' + i).join('\n'), 'x'.repeat(101)]) {
+      await page.fill('#privacy-allow', bad);
+      const no = saved();
+      await page.click('#save-dock [data-save-submit]');
+      assert.equal((await no).status(), 400);
+      await page.waitForFunction(() => { const e = document.querySelector('#privacy-error'); return !e.hidden && e.textContent.length > 0; });
+      assert.equal(await page.locator('#privacy-error *').count(), 0, 'the error is text');
+      assert.ok(!(await page.textContent('#privacy-error')).includes('xxxx'), 'the error names no term');
+      assert.deepEqual((await get()).allow_terms, ['allowed one'], 'a refused save changes nothing');
+    }
+    // No audit record holds a term: look in the auditor's own files.
+    const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+    const stored = files(path.join(data, 'audit'));
+    assert.ok(stored.length > 0);
+    for (const f of stored) {
+      const bytes = fs.readFileSync(f);
+      assert.ok(!bytes.includes('zqmarker') && !bytes.includes('second term') && !bytes.includes('allowed one'), 'the audit store holds no term: ' + path.basename(f));
+    }
+    await put({ enabled: false, mode: 'detect_only', entities: {}, allow_terms: [], deny_terms: [] });
+  });
   await step('people: #add-user and #pair-open in the address open their box and leave the address clean', async () => {
     for (const [hash, box] of [['#add-user', 'user-box'], ['#pair-open', 'pair-box']]) {
       await page.goto(base + 'people/' + hash);
@@ -4591,7 +4663,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('pages: each section has its own URL, the nav marks it, Back works and the frame is the same', async () => {
     // Plan step 1.16: a page and a URL for every admin section, from one template.
     const slugs = await page.$$eval('#nav a[data-tab]', (as) => as.map((a) => a.dataset.tab));
-    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'backup', 'notifications', 'reference']);
+    assert.deepEqual(slugs, ['home', 'alerts', 'audit/calls', 'audit/admin', 'audit/sealed', 'audit/routing', 'general', 'providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'privacy', 'backup', 'notifications', 'reference']);
     for (const slug of slugs) {
       await page.goto(`http://127.0.0.1:${adminPort}/admin/${slug}/`);
       await page.waitForSelector('#app:not([hidden])');
@@ -4740,7 +4812,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
       }
       assert.deepEqual(opens.map((o) => o.href), p.settings.map((s) => '/admin/' + s + '/'), p.id + ': one button for each admin page it documents');
       // A settings page reads "Open Network settings"; Home, Alerts and the Audit pages read "Open Home".
-      const settingsSlugs = ['general', 'providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'backup', 'notifications'];
+      const settingsSlugs = ['general', 'providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'privacy', 'backup', 'notifications'];
       for (const o of opens) assert.match(o.text, settingsSlugs.includes(o.href.split('/')[2]) ? /^Open .+ settings$/ : /^Open (?!.* settings$).+$/, p.id);
       // Each target is on the admin page: visit it and look for the element.
       const bySlug = {};
@@ -4929,7 +5001,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     };
     // Every settings page: its title has a ? and each topic of the page has one, named "Help: <title>", with the same tooltip,
     // a target big enough, and the topic's text on the page already (a <template>, so nothing has to be fetched).
-    for (const slug of ['providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'backup', 'notifications', 'general']) {
+    for (const slug of ['providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'privacy', 'backup', 'notifications', 'general']) {
       await page.goto(base + slug + '/');
       await page.waitForSelector('#app:not([hidden])');
       const info = await page.evaluate(() => ({
@@ -5137,7 +5209,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await heading.getAttribute('href'), '/admin/general/', 'the heading links to General');
     assert.equal(await heading.getAttribute('aria-current'), null, 'the heading is never current');
     const subs = await page.evaluate(() => [...document.querySelector('#nav a.sm-parent').nextElementSibling.querySelectorAll('a')].map((a) => a.dataset.tab));
-    assert.deepEqual(subs, ['general', 'providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'backup', 'notifications']);
+    assert.deepEqual(subs, ['general', 'providers', 'people', 'mcp', 'egress', 'search', 'services', 'network', 'security', 'privacy', 'backup', 'notifications']);
     await openMenu();
     await Promise.all([page.waitForURL('**/admin/general/'), page.locator('#nav a.sm-parent').click()]);
     await page.waitForSelector('#app:not([hidden])');
@@ -5774,7 +5846,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
   await step('one primary action per view: every page at rest and with its save bar showing, and the destructive buttons carry the danger style', async () => {
     const K = await page.evaluate(() => window.ui.ready);
     // The expected count of page-level primaries at rest, by page. A page with no natural primary action has none.
-    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, mcp: 0, egress: 0, search: 0, services: 0, network: 0, security: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
+    const EXPECT = { home: 1, alerts: 1, 'audit/calls': 0, 'audit/admin': 0, 'audit/sealed': 1, 'audit/routing': 0, general: 0, providers: 1, people: 1, mcp: 0, egress: 0, search: 0, services: 0, network: 0, security: 0, privacy: 0, backup: 1, notifications: 1, reference: 1, 'reference/settings/network': 1 };
     assert.deepEqual(Object.keys(EXPECT).filter((k) => k !== 'reference/settings/network').sort(), [...K.PAGE_SLUGS].sort(), 'the map covers every page');
     const measure = () => page.evaluate(() => {
       const probe = document.createElement('div');

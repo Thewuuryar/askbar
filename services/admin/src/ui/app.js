@@ -61,6 +61,7 @@
     { id: 'general', load: loadSettings },
     { id: 'network', load: loadNetwork },
     { id: 'security', load: loadSecurity },
+    { id: 'privacy', load: loadPrivacy },
     { id: 'backup', load: loadBackup },
     { id: 'notifications', load: loadAlerts },
   ];
@@ -1298,6 +1299,43 @@
       { key: (r) => r.day + '|' + r.role, force: true, empty: 'No model use in these days.' });
   }
   function loadSearch() { return Promise.all([liveSearch.start(), loadUsage()]); }
+  // ------------------------------------------------------------------ Privacy page
+  // The allow and deny terms are personal data: they are set with .value in the two textareas and written nowhere else, not into a
+  // toast, an error or the page's text. An error is the server's sentence, which names no term.
+  const PII_NAMES = {
+    EMAIL: 'Email address', PHONE: 'Phone number', CARD: 'Payment card number', IBAN: 'IBAN', NATIONAL_ID: 'National ID number', IP: 'IP address',
+    API_KEY: 'API key', GITHUB_TOKEN: 'GitHub token', JWT: 'JSON Web Token', PRIVATE_KEY: 'Private key',
+  };
+  const PII_ACTIONS = { pseudonymize: 'Replace with a placeholder', block: 'Block the message', allow: 'Allow' };
+  let privacyTrack = null;
+  const termsOf = (id) => [...new Set($(id).value.split('\n').map((t) => t.trim()).filter(Boolean))];
+  async function loadPrivacy() {
+    const p = await api('GET', '/api/admin/v1/privacy');
+    $('privacy-on').checked = p.enabled;
+    $('privacy-mode').value = p.mode;
+    ui.rows($('privacy-types'), p.types, (t) => {
+      const sel = ui.el('select', { id: 'privacy-type-' + t.name, 'data-type': t.name, 'data-default': t.default, 'aria-label': PII_NAMES[t.name] + ' action' },
+        ...Object.entries(PII_ACTIONS).map(([v, text]) => ui.el('option', { value: v, text })));
+      sel.value = p.entities[t.name] || t.default;
+      return ui.el('tr', null, ui.el('td', { text: PII_NAMES[t.name] || t.name }), ui.el('td', null, sel), ui.el('td', { text: PII_ACTIONS[t.default] }));
+    }, { key: (t) => t.name, force: true });
+    $('privacy-deny').value = p.deny_terms.join('\n');
+    $('privacy-allow').value = p.allow_terms.join('\n');
+    ui.inlineError($('privacy-error'), '');
+    if (privacyTrack) privacyTrack.saved(); else privacyTrack = ui.trackChanges($('privacy-form'));
+  }
+  on('privacy-form', 'submit', async (e) => {
+    e.preventDefault();
+    const entities = {};
+    for (const sel of document.querySelectorAll('#privacy-types select')) if (sel.value !== sel.dataset.default) entities[sel.dataset.type] = sel.value;
+    try {
+      await api('PUT', '/api/admin/v1/privacy', { enabled: $('privacy-on').checked, mode: $('privacy-mode').value, entities, allow_terms: termsOf('privacy-allow'), deny_terms: termsOf('privacy-deny') });
+      await loadPrivacy();
+      ui.toast('Privacy settings saved.');
+    } catch (ex) {
+      ui.inlineError($('privacy-error'), ex.message);
+    }
+  });
   // ------------------------------------------------------------------ Egress page
   // Hosts, notes and errors come from outside: text only.
   const DENIED_REASONS = {

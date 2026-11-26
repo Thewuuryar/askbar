@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{%- import "blocks.html" as b %}
+{%- import "components.html" as c %}
+{% block content %}
+    {% call b::error_line("privacy-error") %}{% endcall %}
+    <form id="privacy-form">
+      {% call c::settings_section("privacy-redaction-title", "Redaction", "settings/privacy#redaction", "Looks for personal data and secrets in the messages sent to a model provider and in the search queries and page addresses sent to the web.") %}
+        <div class="sec-fields">
+          <label class="check" for="privacy-on"><input type="checkbox" id="privacy-on" name="privacy-on"> Redaction is on</label>
+          {% call c::field("Mode", "privacy-mode", "", "slot", false) %}<select id="privacy-mode" name="privacy-mode" aria-describedby="privacy-mode-hint"><option value="detect_only">Detect only</option><option value="enforce">Enforce</option></select><p class="hint" id="privacy-mode-hint">Detect only counts what it finds and changes nothing. Enforce replaces values with placeholders and blocks the messages that hold what you chose to block.</p>{% endcall %}
+        </div>
+      {% endcall %}
+
+      {% call c::settings_section("privacy-types-title", "Types", "settings/privacy#types", "What happens to each kind of value in enforce mode. Pseudonymize replaces it with a placeholder and puts the value back in the reply; block refuses the message; allow lets it through.") %}
+        <div class="table-wrap">
+          <table class="table" id="privacy-types-table">
+            <caption class="visually-hidden">Action for each type</caption>
+            {% call c::table_head(["Type", "Action", "Default"]) %}{% endcall %}
+            <tbody id="privacy-types"></tbody>
+          </table>
+        </div>
+      {% endcall %}
+
+      {% call c::settings_section("privacy-terms-title", "Terms", "settings/privacy#terms", "One term per line, up to 500 terms of up to 100 characters. The terms are personal data: they are kept only in this admin's database and are never written to a record, log or error.") %}
+        <div class="sec-fields">
+          {% call c::field("Always redact", "privacy-deny", "Replaced by a placeholder, as CUSTOM.", "slot", false) %}<textarea id="privacy-deny" name="privacy-deny" rows="6" spellcheck="false" autocomplete="off" aria-describedby="privacy-deny-hint"></textarea>{% endcall %}
+          {% call c::field("Never redact", "privacy-allow", "Left alone even when a type matches, for example an address of your own.", "slot", false) %}<textarea id="privacy-allow" name="privacy-allow" rows="6" spellcheck="false" autocomplete="off" aria-describedby="privacy-allow-hint"></textarea>{% endcall %}
+        </div>
+      {% endcall %}
+
+      {% call c::settings_section("privacy-limits-title", "What it does not do", "settings/privacy#what-it-does-not-do", "Detection is a filter, not a guarantee.") %}
+        <div class="sec-fields">
+          <ul class="hint">
+            <li>It finds structured data: email addresses, phone numbers, card and ID numbers, IBANs, IP addresses, keys and tokens. It never finds names, addresses or indirect identifiers.</li>
+            <li>A placeholder can hurt a question about the value itself. Put such a value under Never redact, or set its type to allow.</li>
+            <li>It is applied to messages sent to providers by the model gateway (replaced or blocked) and to search queries and fetch addresses by the MCP front (keys are refused, other private data is left out). Nothing else is checked.</li>
+            <li>Only counts, never values, are recorded: they appear on the <code>redact</code> step in <a href="/admin/audit/calls/">Audit, Model calls</a>.</li>
+          </ul>
+        </div>
+      {% endcall %}
+      {% call c::save_bar("privacy-form", "Save privacy settings") %}{% endcall %}
+    </form>
+{% endblock %}

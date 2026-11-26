@@ -25,6 +25,7 @@ This is the reference for the admin site: one page for each page of the admin (H
 - [Services](settings/services.md)
 - [Network](settings/network.md)
 - [Security](settings/security.md)
+- [Privacy](settings/privacy.md)
 - [Backup & restore](settings/backup.md)
 - [Notifications](settings/notifications.md)
 - [General](settings/general.md)

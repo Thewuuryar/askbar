@@ -116,7 +116,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
 - [x] **PII-P3.1** `feat(admin): store and push PII settings` · sonnet
   Files: `services/admin/src/{gateway_link,admin_api}.rs`, `docs/openapi/admin.v1.yaml`.
   Do: one JSON settings row in `admin.db`, added to the config in `build_config`; no new tables.
-- [ ] **PII-P3.2** `feat(ui): Privacy page` · sonnet · after PII-P3.1
+- [x] **PII-P3.2** `feat(ui): Privacy page` · sonnet · after PII-P3.1
   Files: `services/admin/src/pages.rs`, a new template, `app.js`, admin browser test.
   Accept: on/off, mode, the entity table and both term lists work; text is written with `textContent` only. The page states the honest limits from the Summary.
 
