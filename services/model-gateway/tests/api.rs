@@ -1371,7 +1371,7 @@ async fn a_task_at_its_cap_is_refused_with_no_call_and_other_roles_and_tasks_are
     assert_eq!((status, body["error"].as_str()), (402, Some("task_token_cap")));
     assert_eq!(rig.provider_calls(), calls);
     let rows =
-        rig.wait_rows("SELECT kind, name, status, error_code FROM spans WHERE trace_id = 'task-a' AND name = 'task_token_cap'").await;
+        rig.wait_rows("SELECT kind, name, status, error_code FROM spans WHERE trace_id = 'task-a' AND name = 'task_token_cap' AND status != 'running'").await;
     assert_eq!(rows[0], vec![json!("gate"), json!("task_token_cap"), json!("blocked"), json!("task_token_cap")]);
     assert!(matches!(rig.chat(&task_req(&rig, "task-b", Role::ResearchResearcher)).await.last(), Some(ChatEvent::Done { .. })));
     // A non-task role on the same id is still served.
