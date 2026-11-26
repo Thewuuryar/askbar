@@ -736,6 +736,7 @@ impl Remote {
 
     /// Like `ask`, with the model this chat picked (`provider/model`). With none, the model the person chose for their
     /// chats is used, and if they chose none the server's default answers.
+    #[allow(clippy::too_many_arguments)]
     pub async fn ask_with(
         &self,
         model: Option<String>,
