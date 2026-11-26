@@ -294,3 +294,25 @@ async fn restarting_the_gateway_waits_for_a_new_process_and_gives_it_its_keys_ag
         db.conn().query_row("SELECT COUNT(*) FROM service_actions WHERE service = 'model-gateway' AND ok = 1", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1);
 }
+
+#[tokio::test]
+async fn the_context_canary_switch_is_on_by_default_pushed_on_change_and_audited() {
+    let (t, fake, link) = rig().await;
+    set_audit_key(&t).await;
+    let read = || async { t.call(M::GET, "/api/admin/v1/settings", json!(null)).await.1["canary_enabled"].clone() };
+    let pushed = || async { fake.pushes.lock().unwrap().last().unwrap()["canary_enabled"].clone() };
+    assert_eq!(read().await, json!(true), "on by default");
+    assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
+    assert_eq!(pushed().await, json!(true));
+    let body = json!({ "system_prompt": "p", "display": askbar_proto::DisplaySettings::default(), "canary_enabled": false });
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", body).await.0, 204);
+    assert_eq!(read().await, json!(false));
+    assert!(matches!(link.sync(&t.admin).await, Sync::Pushed(_)));
+    assert_eq!(pushed().await, json!(false));
+    // A save that leaves it out keeps it.
+    let keep = json!({ "system_prompt": "p2", "display": askbar_proto::DisplaySettings::default() });
+    assert_eq!(t.call(M::PUT, "/api/admin/v1/settings", keep).await.0, 204);
+    assert_eq!(read().await, json!(false));
+    let rows = t.rig.rows("SELECT detail_json FROM admin_actions WHERE category = 'settings' AND outcome = 'done'");
+    assert!(rows.iter().any(|r| r[0].as_str().is_some_and(|d| d.contains("\"canary_enabled\":false"))), "{rows:?}");
+}

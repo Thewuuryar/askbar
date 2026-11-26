@@ -2691,6 +2691,7 @@
     $('s-notice-text').value = s.privacy_notice_text || '';
     $('s-warning-on').checked = s.ai_warning_enabled !== false;
     $('s-warning-text').value = s.ai_warning_text || '';
+    $('s-canary-on').checked = s.canary_enabled !== false;
     $('s-theme').value = s.display.theme;
     $('s-width').value = s.display.width;
     $('s-max-height').value = s.display.max_height;
@@ -2808,6 +2809,7 @@
         privacy_notice_text: $('s-notice-text').value,
         ai_warning_enabled: $('s-warning-on').checked,
         ai_warning_text: $('s-warning-text').value,
+        canary_enabled: $('s-canary-on').checked,
         display: {
           theme: $('s-theme').value,
           width: parseInt($('s-width').value, 10),

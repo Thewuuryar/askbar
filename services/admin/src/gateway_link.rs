@@ -118,10 +118,17 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         task_limits: snap.task_limits,
         research_enabled: snap.research_enabled,
         pii: crate::privacy::read(conn),
-        canary_enabled: true,
+        canary_enabled: canary_on(conn),
     };
     config.version = version_of(&config);
     Ok(config)
+}
+
+/// The context canary switch (the General page): on unless switched off.
+fn canary_on(conn: &Connection) -> bool {
+    conn.query_row("SELECT value FROM settings WHERE key = 'canary_enabled'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .is_none_or(|v| v.trim() != "0")
 }
 
 /// The version of a configuration: the first 6 bytes of the SHA-256 of its content (version field zero), so it

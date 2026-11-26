@@ -1875,6 +1875,18 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await openSettings();
     await page.waitForFunction(() => /sealed copy of each goes to the audit record/.test(document.getElementById('s-notice-text').value));
   });
+  await step('general: the context canary checkbox is on, and a change is saved and kept', async () => {
+    await openSettings();
+    assert.equal(await page.isChecked('#s-canary-on'), true);
+    for (const on of [false, true]) {
+      await page.setChecked('#s-canary-on', on);
+      await page.click('#settings-form-save-bar [data-save-submit]');
+      await page.waitForSelector('#toasts .toast');
+      assert.equal((await adminJson('GET', '/api/admin/v1/settings')).body.canary_enabled, on);
+      await openSettings();
+      assert.equal(await page.isChecked('#s-canary-on'), on);
+    }
+  });
   await step('general: an invalid setting shows the server message', async () => {
     await page.fill('#s-top', '0.5');
     await page.fill('#s-width', '100');

@@ -83,7 +83,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 | 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | done |
 | 1 | Raw stop reason and input-count check, record only | done |
 | 2 | Provider context limit and server trimming | done |
-| 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | in progress |
+| 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | done |
 | Later | See below | not started |
 
 ### Phase 0: records
@@ -128,7 +128,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
   Files: `crates/askbar-proto/src/alerter.rs`, `services/auditor/src/{rules,lib}.rs`, tests.
   Do: add a new `Fed` path for span finish and step records, since `fed_of` maps only `AdminAction`, `Hello` and turn `Start`; raise `ContextTruncated` on `front_lost` or `context.truncated`. Check `services/alerter/src/limits.rs` first and reuse its limits if they fit.
   Accept: `front_lost` or `truncated` raises one alert within the limits; `absent` does not alert.
-- [ ] **C3.3** `feat(ui): context canary checkbox` · haiku · after C3.1
+- [x] **C3.3** `feat(ui): context canary checkbox` · haiku · after C3.1
   Files: admin settings template, `app.js`, `admin_api.rs`, `docs/openapi/admin.v1.yaml`, admin browser test.
   Accept: the checkbox saves, pushes and shows in the gateway's status.
 
