@@ -29,6 +29,7 @@ pub struct Provider {
     pub api_key: String,
     pub model: String,
     pub max_tokens: Option<u32>,
+    pub context_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub headers: BTreeMap<String, String>,
 }
@@ -392,6 +393,11 @@ pub fn estimate_tokens(chars: usize) -> u64 {
     chars.div_ceil(4) as u64
 }
 
+/// The characters of what a request sends: the system message and the messages as `normalize` leaves them.
+pub fn sent_chars(system: &str, messages: &[ChatMessage]) -> usize {
+    system.chars().count() + normalize(messages).iter().map(|m| m.content.chars().count()).sum::<usize>()
+}
+
 /// Stream one assistant reply, calling `on_delta` for each piece of text, and say how it went:
 /// timings, the HTTP status, `Retry-After`. On failure the error carries the report up to that point.
 ///
@@ -420,8 +426,7 @@ where
         estimated_in: 0,
     };
     // For the estimate if the provider reports no usage: what was sent, and what came back.
-    let sent_chars = system.chars().count() + normalize(messages).iter().map(|m| m.content.chars().count()).sum::<usize>();
-    report.estimated_in = estimate_tokens(sent_chars);
+    report.estimated_in = estimate_tokens(sent_chars(system, messages));
     let mut reply_chars = 0usize;
     let mut on_delta = on_delta;
     let result = run_request(
@@ -557,6 +562,7 @@ mod tests {
             api_key: String::new(),
             model: "m".into(),
             max_tokens: (kind == ProviderKind::Anthropic).then_some(4096),
+            context_tokens: None,
             temperature: None,
             headers: BTreeMap::new(),
         }

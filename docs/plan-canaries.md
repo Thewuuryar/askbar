@@ -83,7 +83,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 | 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | done |
 | 1 | Raw stop reason and input-count check, record only | done |
 | 2 | Provider context limit and server trimming | done |
-| 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | not started |
+| 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | in progress |
 | Later | See below | not started |
 
 ### Phase 0: records
@@ -120,7 +120,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 
 ### Phase 3: echo canary
 
-- [ ] **C3.1** `feat(model-gateway): plant and check the context canary` · sonnet · after C2.1 and PII-P2.2
+- [x] **C3.1** `feat(model-gateway): plant and check the context canary` · sonnet · after C2.1 and PII-P2.2
   Files: `crates/askbar-proto/src/gateway.rs`, `services/model-gateway/src/{lib,filter,canary}.rs`, tests.
   Do: add `canary_enabled` and `CANARY_TRIGGER_PCT`. When enabled, a limit is set and the estimate is at or above the trigger, plant A and B and the instruction. Extend the PII filter struct to hold back and strip marker text. Write `attrs.canary = {planted, outcome, instruction_version}` on a `canary` step span under the attempt (AV2.1).
   Accept: property tests split markers at every byte boundary and the client never receives a partial marker; mock-LLM tests for each outcome; no canary when no limit is set or below 70%; nonces appear in no log or attribute (a test greps for them).

@@ -12,6 +12,7 @@
 //!   public key and goes to the auditor as a payload; the gateway holds no private key.
 
 pub mod approval;
+pub mod canary;
 pub mod decide;
 pub mod llm;
 pub mod models;
@@ -94,6 +95,8 @@ struct Applied {
     /// The PII settings (plan PII-P1.1); detection reads them in plan PII-P1.2.
     #[allow(dead_code)]
     pii: askbar_proto::pii::PiiConfig,
+    /// Whether the echo canary runs (ADR 0054).
+    canary_enabled: bool,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -374,6 +377,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
             api_key: p.api_key.clone(),
             model: p.model.clone(),
             max_tokens: p.max_tokens,
+            context_tokens: p.context_tokens,
             temperature: p.temperature,
             headers: p.headers.clone(),
         };
@@ -452,6 +456,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         task_limits: c.task_limits,
         research_enabled: c.research_enabled,
         pii: c.pii.clone(),
+        canary_enabled: c.canary_enabled,
     })
 }
 
@@ -773,8 +778,6 @@ async fn run_attempts(
     // What the provider gets, the sealed `provider_request` and the usage estimate all come from `redacted` (PII-P2.1).
     // A request with nothing found writes no `redact` step, to keep the trace small.
     let pii::Redacted { system, messages, step: redact, reverse, .. } = redacted;
-    // Only a request that was pseudonymized has a filter: any other reply path is as it was.
-    let mut filter = (!reverse.is_empty()).then(|| pii::ReplyFilter::new(&reverse));
     loop {
         // A stop that came while the last try waited, or before the first: no more tries (and no provider is called).
         if let Some(reason) = *stop_rx.borrow() {
@@ -786,6 +789,19 @@ async fn run_attempts(
             });
             return;
         }
+        // Near the provider's limit, plant the canary (ADR 0054): after redaction, with new markers for each attempt.
+        let planted = canary::due(cfg.canary_enabled, llm::estimate_tokens(llm::sent_chars(&system, &messages)), provider.context_tokens)
+            .then(|| canary::plant(&system, &messages))
+            .flatten();
+        let (system, messages) = planted.as_ref().map_or((&system, &messages), |(s, m, _)| (s, m));
+        // Only a request that was pseudonymized or carries a canary has a filter: any other reply path is as it was.
+        let mut filter = (!reverse.is_empty() || planted.is_some()).then(|| {
+            let f = pii::ReplyFilter::new(&reverse);
+            match &planted {
+                Some((.., c)) => f.with_markers(&c.markers),
+                None => f,
+            }
+        });
         let attempt_id = askbar_service::ids::new_id();
         let mut start = start_of(&attempt_id, &req.generation_id, Some(&turn_id), SpanKind::Attempt, &provider.name);
         start.provider_id = Some(req.provider_id.clone());
@@ -793,7 +809,7 @@ async fn run_attempts(
         start.user_id = Some(req.user_id.clone());
         start.client_id = req.client_id.clone();
         // The body the provider is sent, as this gateway holds it. Sealed once the auditor has acknowledged the span.
-        let provider_request = llm::build_body(&provider, &system, &messages).to_string();
+        let provider_request = llm::build_body(&provider, system, messages).to_string();
         let mut attrs = serde_json::json!({ "retry_index": retry_index });
         if let Some(role) = req.role {
             attrs["role"] = serde_json::json!(role);
@@ -823,6 +839,17 @@ async fn run_attempts(
             step.user_id = Some(req.user_id.clone());
             step.client_id = req.client_id.clone();
             step.attrs = Some(attrs.clone());
+            gw.audit.start(step);
+            step_id
+        });
+
+        // Not a model call, so no acknowledgment. Finished after the stream with the outcome; the markers never leave here.
+        let canary_step = planted.as_ref().map(|_| {
+            let step_id = askbar_service::ids::new_id();
+            let mut step = start_of(&step_id, &req.generation_id, Some(&attempt_id), SpanKind::Step, "canary");
+            step.user_id = Some(req.user_id.clone());
+            step.client_id = req.client_id.clone();
+            step.attrs = Some(serde_json::json!({ "canary": { "planted": true, "instruction_version": canary::INSTRUCTION_VERSION } }));
             gw.audit.start(step);
             step_id
         });
@@ -858,7 +885,7 @@ async fn run_attempts(
         };
         let delta_tx = tx.clone();
         let mut text_this_try = false;
-        let result = llm::stream_chat_report(&gw.http, &provider, &system, &messages, cancel_rx, |d| {
+        let result = llm::stream_chat_report(&gw.http, &provider, system, messages, cancel_rx, |d| {
             text_this_try = true;
             let text = filter.as_mut().map_or_else(|| d.to_string(), |f| f.push(d));
             if !text.is_empty() {
@@ -873,6 +900,19 @@ async fn run_attempts(
             if !text.is_empty() {
                 let _ = tx.send(ChatEvent::Delta { text });
             }
+        }
+        if let (Some(id), Some(f)) = (canary_step, &filter) {
+            // A reply that stopped at the output limit, or a stream that failed or was cancelled, may not have reached the markers.
+            let cut = result.as_ref().map_or(true, |r| {
+                r.outcome != StreamOutcome::Completed || r.finish_reason.as_deref().is_some_and(|s| matches!(s, "length" | "max_tokens"))
+            });
+            let mut end = finish("done");
+            end.attrs = Some(serde_json::json!({ "canary": {
+                "planted": true,
+                "outcome": canary::outcome(f.echoed(), cut),
+                "instruction_version": canary::INSTRUCTION_VERSION,
+            } }));
+            gw.audit.finish(&id, end);
         }
         if let (Some(id), Some(attrs)) = (step_id, &redact) {
             let mut end = finish("done");

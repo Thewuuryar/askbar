@@ -19,7 +19,9 @@ the marker SUMMARY_MARK, the writer a draft that cites [1] and [2] with DRAFT_MA
 "MOCK-JUDGE refuse <reason>" (a refusal with that code) or "MOCK-JUDGE malformed" (the verdict with extra text). A line
 "MOCK-TOKENS <n>" makes the call report n completion tokens (the research cap tests).
 A last message with "MOCK-TRUNCATE" makes the call behave like Ollama over its context: only the newest message is kept
-and the reported prompt_tokens is for it alone (the smaller count). A message with a line "MOCK-REPLY <text>" gets exactly <text> as the reply (the judge tests choose its answer this way).
+and the reported prompt_tokens is for it alone (the smaller count). A message with a line "MOCK-CANARY" (or "MOCK-CANARY front_lost" or "MOCK-CANARY absent") on a request that carries the gateway's canary
+makes the reply end with the markers: both, only the one from the system message, or neither.
+A message with a line "MOCK-REPLY <text>" gets exactly <text> as the reply (the judge tests choose its answer this way).
 """
 import json
 import os
@@ -208,6 +210,15 @@ class Handler(BaseHTTPRequestHandler):
                     json.dumps({"verdict": "refuse", "reason": j.group(2)}))
         elif "<untrusted_web_content>" in last:
             text = f"From the sources [1] and [2]: sources seen {len(re.findall(r'^\[\d+\] ', last, re.M))}."
+        # The context canary: a request whose system message carries "Reference code: <8 hex>" and whose first message starts
+        # with "[<8 hex>] " is asked to echo both after the reply. "MOCK-CANARY front_lost" echoes only the first and
+        # "MOCK-CANARY absent" echoes nothing; any other MOCK-CANARY line echoes both.
+        a = re.search(r"Reference code: ([0-9a-f]{8})", system)
+        first = next((text_of(m.get("content")) for m in body.get("messages", []) if m.get("role") == "user"), "")
+        b = re.match(r"\[([0-9a-f]{8})\] ", first)
+        if a and b and (mode := re.search(r"^MOCK-CANARY(?: (\w+))?$", last, re.M)):
+            codes = {"front_lost": [a.group(1)], "absent": []}.get(mode.group(1), [a.group(1), b.group(1)])
+            text += "\n" + " ".join(codes)
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-cache")

@@ -117,6 +117,16 @@ class Modes(unittest.TestCase):
         usage = json.loads([l for l in r.read().decode().splitlines() if '"usage"' in l][-1][6:])["usage"]
         self.assertEqual(usage["prompt_tokens"], 4)
 
+    def test_mock_canary_echoes_both_one_or_no_markers_at_the_end(self):
+        system = {"role": "system", "content": "s\n\nReference code: 1a2b3c4d. A second ..."}
+        for word, tail in (("MOCK-CANARY", "1a2b3c4d 5e6f7a8b"), ("MOCK-CANARY front_lost", "1a2b3c4d"), ("MOCK-CANARY absent", None)):
+            _, r = self.srv.post("x", extra={"messages": [system, {"role": "user", "content": "[5e6f7a8b] hi\n" + word}]})
+            text = "".join(json.loads(l[6:])["choices"][0]["delta"].get("content", "")
+                           for l in r.read().decode().splitlines() if l.startswith("data: {") and '"choices": [{' in l)
+            self.assertEqual(text.endswith("\n" + tail) if tail else "1a2b3c4d" in text, bool(tail), word)
+        _, r = self.srv.post("MOCK-CANARY")  # nothing planted: the reply is the plain one
+        self.assertNotIn("1a2b3c4d", r.read().decode())
+
     def test_hang_sends_nothing_until_client_closes(self):
         c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=1)
         c.request("POST", "/v1/chat/completions", json.dumps(

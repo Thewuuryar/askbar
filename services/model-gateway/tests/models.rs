@@ -109,6 +109,7 @@ async fn gateway(up: &str) -> G {
         task_limits: Default::default(),
         research_enabled: true,
         pii: Default::default(),
+        canary_enabled: true,
         version: 1,
         providers: vec![mk("saved", "Saved", KEY, format!("{up}/v1")), mk("wrong", "Wrong key", "good-not", format!("{up}/v1"))],
         audit_public_key: Some(audit_key()),

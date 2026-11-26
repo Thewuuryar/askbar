@@ -118,6 +118,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
         task_limits: snap.task_limits,
         research_enabled: snap.research_enabled,
         pii: crate::privacy::read(conn),
+        canary_enabled: true,
     };
     config.version = version_of(&config);
     Ok(config)

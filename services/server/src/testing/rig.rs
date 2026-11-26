@@ -233,6 +233,7 @@ impl Rig {
             task_limits: snap.task_limits,
             research_enabled: snap.research_enabled,
             pii: Default::default(),
+            canary_enabled: true,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

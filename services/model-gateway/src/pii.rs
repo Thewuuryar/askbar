@@ -102,6 +102,9 @@ pub struct ReplyFilter {
     /// The last character already consumed, for the word boundary in front of a bare token.
     prev: char,
     restored: u64,
+    /// The canary markers to strip (`canary`), and whether each came back. Empty when no canary was planted.
+    markers: Vec<String>,
+    echoed: [bool; 2],
 }
 
 fn is_word(c: char) -> bool {
@@ -110,7 +113,18 @@ fn is_word(c: char) -> bool {
 
 impl ReplyFilter {
     pub fn new(reverse: &[(String, String)]) -> Self {
-        Self { map: reverse.to_vec(), held: String::new(), prev: ' ', restored: 0 }
+        Self { map: reverse.to_vec(), held: String::new(), prev: ' ', restored: 0, markers: Vec::new(), echoed: [false; 2] }
+    }
+
+    /// Also strips these two canary markers from the reply, holding back a tail that could still become one.
+    pub fn with_markers(mut self, markers: &[String; 2]) -> Self {
+        self.markers = markers.to_vec();
+        self
+    }
+
+    /// Whether marker A and marker B came back in the reply so far.
+    pub fn echoed(&self) -> [bool; 2] {
+        self.echoed
     }
 
     /// How many placeholders were put back so far.
@@ -137,6 +151,21 @@ impl ReplyFilter {
         'scan: while i < buf.len() {
             let rest = &buf[i..];
             let c = rest.chars().next().unwrap_or(' ');
+            for (k, m) in self.markers.iter().enumerate() {
+                if rest.starts_with(m.as_str()) {
+                    self.echoed[k] = true;
+                    (i, self.prev) = (i + m.len(), ' ');
+                    continue 'scan;
+                }
+                if !end && m.starts_with(rest) {
+                    break 'scan;
+                }
+                // A reply cut inside a marker: drop the part rather than deliver it. Short tails are ordinary text.
+                if end && rest.len() >= 4 && !is_word(self.prev) && m.starts_with(rest) {
+                    i = buf.len();
+                    break 'scan;
+                }
+            }
             if c == '\u{27e6}' {
                 if let Some((j, close)) = rest.char_indices().take(24).find(|(_, c)| *c == '\u{27e7}') {
                     let tok = &rest[..j + close.len_utf8()];
@@ -340,6 +369,40 @@ mod tests {
             }
             assert_eq!(run_filter(&parts), RESTORED, "{parts:?}");
         }
+    }
+
+    const MARKERS: [&str; 2] = ["1a2b3c4d", "5e6f7a8b"];
+
+    fn run_marked(parts: &[&str]) -> (String, [bool; 2]) {
+        let mut f = ReplyFilter::new(&fixture()).with_markers(&MARKERS.map(String::from));
+        let mut out: String = parts.iter().map(|p| f.push(p)).collect();
+        out.push_str(&f.finish());
+        (out, f.echoed())
+    }
+
+    #[test]
+    fn the_filter_strips_split_markers_and_still_restores_placeholders() {
+        let reply = "see EMAIL_1 and \u{27e6}PHONE_1\u{27e7} \u{e9} deadbeef\n\n1a2b3c4d 5e6f7a8b";
+        let want = "see ann@x.org and +44 20 \u{e9} deadbeef\n\n ";
+        for at in (0..=reply.len()).filter(|i| reply.is_char_boundary(*i)) {
+            let (out, echoed) = run_marked(&[&reply[..at], &reply[at..]]);
+            assert_eq!((out.as_str(), echoed), (want, [true, true]), "split at {at}");
+        }
+        // Every piece one character long: no marker, whole or partial, is ever delivered.
+        let pieces: Vec<String> = reply.chars().map(String::from).collect();
+        let mut f = ReplyFilter::new(&fixture()).with_markers(&MARKERS.map(String::from));
+        for p in &pieces {
+            assert!(!MARKERS.iter().any(|m| f.push(p).contains(&m[..4])));
+        }
+        assert_eq!(run_marked(&["only 5e6f7a8b"]), ("only ".into(), [false, true]));
+        assert_eq!(run_marked(&["none"]), ("none".into(), [false, false]));
+    }
+
+    #[test]
+    fn a_reply_cut_inside_a_marker_does_not_deliver_the_part() {
+        assert_eq!(run_marked(&["end 1a2b3c"]).0, "end ");
+        assert_eq!(run_marked(&["end 1a2"]).0, "end 1a2", "a short tail is ordinary text");
+        assert_eq!(run_marked(&["Banana"]).0, "Banana");
     }
 
     #[test]

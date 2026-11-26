@@ -388,6 +388,9 @@ pub const TRUNCATION_RATIO: f32 = 0.6;
 /// Below this many estimated input tokens the estimate is too rough to compare with.
 pub const MIN_TRUNCATION_CHECK_TOKENS: u64 = 200;
 
+/// The echo canary runs only when the request estimate is at or above this percent of the provider's `context_tokens`.
+pub const CANARY_TRIGGER_PCT: u8 = 70;
+
 /// Bounds of a provider's `context_tokens`: below the floor nothing useful fits, above the ceiling it is a typo.
 pub const MIN_CONTEXT_TOKENS: u32 = 1_000;
 pub const MAX_CONTEXT_TOKENS: u32 = 10_000_000;

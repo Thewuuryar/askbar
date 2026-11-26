@@ -188,6 +188,7 @@ pub async fn run(gw: &Gateway, req: ModelsRequest) -> ModelsResult {
         api_key: key.clone(),
         model: String::new(),
         max_tokens: None,
+        context_tokens: None,
         temperature: None,
         headers,
     };
@@ -232,6 +233,7 @@ mod tests {
             api_key: String::new(),
             model: String::new(),
             max_tokens: None,
+            context_tokens: None,
             temperature: None,
             headers: Default::default(),
         };
