@@ -440,6 +440,82 @@ for l in open(sys.argv[1], encoding="utf-8"):
   if [ -z "$LEAK" ]; then pass "no query, question or answer text is in any span attribute or in the server, gateway, front or auditor log"; else fail "quick search text in spans or logs" "found in:$LEAK"; fi
 fi
 
+# 10e3. Research end to end (local, P5B.7), on the quick search setup above. The native stack cannot fetch a page (see 10e2), so no researcher
+# gets text to summarise and the flow ends at "No sources could be gathered" before the writer and the judge: the report, the judge's three
+# answers and the writer-stage cap are covered by services/server/tests/research.rs (P5.13); the real proxy path only in the Docker stack.
+# Here: the split, query and search stages, the failed fetches, the plain note, the audit spans, the cap, research off, no permission.
+if [ $LOCAL = 1 ] && [ -n "${MCP_TOK:-}" ]; then
+  rs_chat() { # token text out: a chat with research on, as a client sends it
+    curl -sS -N --max-time 90 -X POST -H "authorization: Bearer $1" -H "x-askbar-client-version: $CLIENT_VERSION" -H 'content-type: application/json' \
+      -d "{\"model\":\"$MODEL\",\"text\":\"$2\",\"research\":true}" "$SP/chat" >"$3" 2>/dev/null
+  }
+  rs_read() { # sse file: "stages|event names|generation id|text" of the reply (the text last: it may hold a |)
+    py 'import json,sys
+ev=[]; n=None
+for l in open(sys.argv[1], encoding="utf-8"):
+    l=l.rstrip("\n")
+    if l.startswith("event:"): n=l[6:].strip()
+    elif l.startswith("data:") and n: ev.append((n,json.loads(l[5:].strip()))); n=None
+names=[x for x,_ in ev if x!="provider"]
+st=",".join(d["stage"] for x,d in ev if x=="progress")
+text="".join(d.get("text","") for x,d in ev if x=="delta")
+gen=next((d["generation_id"] for x,d in ev if x=="meta"),"")
+print(st+"|"+",".join(dict.fromkeys(names))+"|"+gen+"|"+text.replace("\n"," "))' "$1" 2>/dev/null
+  }
+  RS_HITS() { curl -fsS "http://127.0.0.1:$SEARX_PORT/_hits"; }
+  for r in research.researcher research.writer judge.review; do admin PUT "/api/admin/v1/roles/$r" "{\"provider_id\":\"$PROVIDER_ID\",\"model\":\"mock-model\"}" >/dev/null 2>&1; done
+  RS_Q="smoke p5b question about stripes"
+  H0=$(RS_HITS); rs_chat "$TOKEN" "$RS_Q" "$WORK/rs.sse"
+  IFS='|' read -r RS_STAGES RS_NAMES RS_GEN RS_TEXT < <(rs_read "$WORK/rs.sse")
+  if [ "${RS_NAMES:-}" = "meta,progress,delta,done" ] && echo "$RS_STAGES" | grep -q '^splitting' && ! echo "$RS_STAGES" | grep -q -e writing -e reviewing \
+     && echo "$RS_TEXT" | grep -q 'No sources could be gathered'; then
+    pass "research: progress (splitting first), then the plain note that no sources could be gathered, no report"
+  else fail "research reply: stages, events, note" "$RS_STAGES | $RS_NAMES | $RS_TEXT"; fi
+  if [ "$(( $(RS_HITS) - H0 ))" = "4" ]; then pass "research: two researchers made 4 searches through the front (2 queries each)"; else fail "research: 4 searches" "$(( $(RS_HITS) - H0 ))"; fi
+  sleep 1; qs_trace "${RS_GEN:-x}" >"$WORK/rs-trace.json"
+  RS_SPANS=$(json "$WORK/rs-trace.json" "sorted((s['kind'],s['name'],(s.get('attrs') or {}).get('role')) for s in d if s['kind']!='generation')")
+  if [ "$(json "$WORK/rs-trace.json" "[(s['kind'],s['name'],s['status']) for s in d].count(('tool','search','ok'))")" = "4" ] \
+     && [ "$(json "$WORK/rs-trace.json" "sum(1 for s in d if s['kind']=='tool' and s['name']=='fetch')")" -ge 2 ] 2>/dev/null \
+     && [ "$(json "$WORK/rs-trace.json" "sorted((s.get('attrs') or {}).get('role') for s in d if s['kind']=='turn')")" = "['research.researcher', 'research.researcher', 'research.writer']" ] \
+     && [ "$(json "$WORK/rs-trace.json" "sum(1 for s in d if s['kind']=='gate' and s['name']=='research_approval')")" -ge 4 ] 2>/dev/null; then
+    pass "research trace: 4 search and 2 or more failed fetch tool spans, turns for the split (research.writer) and both researchers, the gateway's research_approval spans"
+  else fail "the research trace" "$RS_SPANS"; fi
+  # The cap at its minimum, and the mock reporting 30000 tokens for the split call: the next model call of the task is refused (402),
+  # no researcher searches and the reply is the plain note (the cap note needs a draft in hand: tests/research.rs).
+  admin PUT /api/admin/v1/limits '{"token_cap":20000}' >/dev/null 2>&1; sleep 2
+  H0=$(RS_HITS); rs_chat "$TOKEN" "smoke p5b cap question\nMOCK-TOKENS 30000" "$WORK/rs-cap.sse"
+  IFS='|' read -r _ RS_NAMES RS_CGEN RS_TEXT < <(rs_read "$WORK/rs-cap.sse")
+  sleep 1; qs_trace "${RS_CGEN:-x}" >"$WORK/rs-cap-trace.json"
+  if [ "${RS_NAMES:-}" = "meta,progress,delta,done" ] && echo "$RS_TEXT" | grep -q 'No sources could be gathered' && [ "$(RS_HITS)" = "$H0" ] \
+     && [ "$(json "$WORK/rs-cap-trace.json" "sorted((s.get('attrs') or {}).get('role') for s in d if s['kind']=='turn')")" = "['research.writer']" ]; then
+    pass "research cap: at the minimum token cap the second model call is refused, no search is made and the reply is the plain note"
+  else fail "research cap path" "$RS_NAMES | $RS_TEXT | $(json "$WORK/rs-cap-trace.json" "[(s['kind'],s['name'],s['status']) for s in d]")"; fi
+  admin PUT /api/admin/v1/limits '{"token_cap":null}' >/dev/null 2>&1
+  # Research off for everyone: a plain reply with the note, and no research call to the gateway.
+  rs_enable() { admin GET /api/admin/v1/settings | py 'import json,sys; d=json.load(sys.stdin); d["research_enabled"]=sys.argv[1]=="true"; print(json.dumps(d))' "$1" >"$WORK/settings-rs.json" \
+    && admin PUT /api/admin/v1/settings "$(cat "$WORK/settings-rs.json")" >/dev/null 2>&1; }
+  rs_enable false; sleep 2
+  H0=$(RS_HITS); rs_chat "$TOKEN" "smoke p5b off question" "$WORK/rs-off.sse"
+  IFS='|' read -r _ RS_NAMES RS_OGEN RS_TEXT < <(rs_read "$WORK/rs-off.sse")
+  sleep 1; qs_trace "${RS_OGEN:-x}" >"$WORK/rs-off-trace.json"
+  if ! echo "$RS_NAMES" | grep -q progress && echo "$RS_TEXT" | grep -q 'Research is turned off by your administrator' && [ "$(RS_HITS)" = "$H0" ] \
+     && [ "$(json "$WORK/rs-off-trace.json" "[s for s in d if (s.get('attrs') or {}).get('role') in ('research.writer','research.researcher','judge.review')]")" = "[]" ]; then
+    pass "research off: a plain reply with the note, no progress, no search and no research model call"
+  else fail "research off path" "$RS_NAMES | $RS_TEXT"; fi
+  rs_enable true
+  # A user without the permissions: the plain note.
+  if [ -n "${TOKEN3:-}" ]; then
+    SP_SAVE="$SP"; SP="$SP3"; rs_chat "$TOKEN3" "smoke p5b no permission question" "$WORK/rs-np.sse"; SP="$SP_SAVE"
+    IFS='|' read -r _ RS_NAMES _ RS_TEXT < <(rs_read "$WORK/rs-np.sse")
+    if ! echo "$RS_NAMES" | grep -q progress && echo "$RS_TEXT" | grep -q 'Research is not turned on for you'; then pass "a user without the permissions gets a plain reply with the note"
+    else fail "research without permission" "$RS_NAMES | $RS_TEXT"; fi
+  fi
+  LEAK=""
+  grep -q -e 'smoke-p5b' -e 'smoke p5b' "$WORK"/rs-*trace.json 2>/dev/null && LEAK="$LEAK spans"
+  for f in server gateway mcp-gateway auditor; do grep -q -e 'smoke-p5b' -e 'smoke p5b' "$WORK/$f.log" 2>/dev/null && LEAK="$LEAK $f.log"; done
+  if [ -z "$LEAK" ]; then pass "no question, sub-question or summary text is in any research span attribute or in the server, gateway, front or auditor log"; else fail "research text in spans or logs" "found in:$LEAK"; fi
+fi
+
 # 10f. MCP search (local, P5A.23): a call with no signature is refused, a signed one returns untrusted results, its tool span is in the
 # audit store, and no query or result is in the front's log. The smoke has no private approval key (only model-gateway holds it, in
 # memory), so it makes its own and writes the PUBLIC half over the throwaway admin.db's, which the admin then pushes to the front.
