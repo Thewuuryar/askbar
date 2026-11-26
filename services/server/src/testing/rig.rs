@@ -231,6 +231,7 @@ impl Rig {
             quick_search_enabled: snap.quick_search_enabled,
             task_limits: snap.task_limits,
             research_enabled: snap.research_enabled,
+            pii: Default::default(),
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

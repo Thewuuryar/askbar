@@ -17,6 +17,7 @@ pub mod gateway;
 pub mod links;
 pub mod mcp;
 pub mod paths;
+pub mod pii;
 pub mod problem;
 pub mod quick_search;
 pub mod research;

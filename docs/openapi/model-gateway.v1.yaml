@@ -813,6 +813,21 @@ components:
         research_enabled:
           type: boolean
           description: Whether research is on for everyone. On when absent.
+        pii:
+          type: object
+          description: >-
+            The PII settings (plan PII-P1.1, askbar-proto `pii`). Detection is off when absent, in `detect_only` mode, with the
+            default action for each type. Left out of the configuration while it is the default. A value outside its bounds is refused (400).
+          properties:
+            enabled: {type: boolean, description: Whether detection runs. Default false.}
+            mode: {type: string, enum: [detect_only, enforce], description: Count only, or act on what is found. Default detect_only.}
+            entities:
+              type: object
+              description: Action per entity type. A type left out takes its default action.
+              propertyNames: {enum: [EMAIL, PHONE, CARD, IBAN, NATIONAL_ID, IP, API_KEY, GITHUB_TOKEN, JWT, PRIVATE_KEY, CUSTOM]}
+              additionalProperties: {type: string, enum: [pseudonymize, block, allow]}
+            allow_terms: {type: array, maxItems: 500, description: Values never to redact. Each 1 to 100 characters, not blank, no control characters., items: {type: string, minLength: 1, maxLength: 100}}
+            deny_terms: {type: array, maxItems: 500, description: Values always pseudonymized as CUSTOM. Each 1 to 100 characters, not blank, no control characters., items: {type: string, minLength: 1, maxLength: 100}}
         paused_users:
           type: array
           description: Users whose replies are refused (`403 user_paused`) and whose running replies are stopped (error code `user_paused`).
