@@ -91,7 +91,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
 
 ### Phase 2: pseudonymize and restore
 
-- [ ] **PII-P2.1** `feat(model-gateway): replace PII with placeholders` · sonnet
+- [x] **PII-P2.1** `feat(model-gateway): replace PII with placeholders` · sonnet
   Files: `services/model-gateway/src/{lib,pii}.rs`.
   Do: in `run_attempts`, once before the retry loop, redact `messages` and `req.system` in `enforce` mode, numbering by first occurrence as in Decisions. After redaction, append one short line saying placeholders stand for private values and should be reused as written.
   Accept: the same value gives the same placeholder on two turns with the same history; two requests with the same text give the same result; `detect_only` changes nothing.
