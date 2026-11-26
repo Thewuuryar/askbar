@@ -369,6 +369,18 @@ components:
           pattern: '^[0-9a-fA-F]{64}$'
           description: The approval public key, 64 hex characters. Absent until the admin pushes one; every call is refused then.
         approval_key_version: {type: integer, minimum: 0, default: 0}
+        pii:
+          type: object
+          description: The PII settings the front will apply (plan PII-P2.6); the same object as `pii` in the model-gateway configuration. Off when absent. A value outside its bounds is refused (400).
+          properties:
+            enabled: {type: boolean, description: Whether detection runs. Default false.}
+            mode: {type: string, enum: [detect_only, enforce], description: Count only, or act on what is found. Default detect_only.}
+            entities:
+              type: object
+              propertyNames: {enum: [EMAIL, PHONE, CARD, IBAN, NATIONAL_ID, IP, API_KEY, GITHUB_TOKEN, JWT, PRIVATE_KEY]}
+              additionalProperties: {type: string, enum: [pseudonymize, block, allow]}
+            allow_terms: {type: array, maxItems: 500, items: {type: string, minLength: 1, maxLength: 100}}
+            deny_terms: {type: array, maxItems: 500, items: {type: string, minLength: 1, maxLength: 100}}
         permissions:
           type: object
           maxProperties: 1000

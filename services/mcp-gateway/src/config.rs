@@ -28,6 +28,9 @@ pub struct Config {
     /// Per user, the tools held. A user with no entry holds none (ADR 0019).
     #[serde(default)]
     pub permissions: Permissions,
+    /// The PII settings the front will apply (plan PII-P2.6); left out of the hash while default. Absent in an older push: off.
+    #[serde(default, skip_serializing_if = "askbar_proto::pii::PiiConfig::is_default")]
+    pub pii: askbar_proto::pii::PiiConfig,
 }
 
 fn default_result_bytes() -> u64 {
@@ -48,6 +51,7 @@ impl Default for Config {
             approval_public_key: None,
             approval_key_version: 0,
             permissions: Default::default(),
+            pii: Default::default(),
         }
     }
 }
@@ -63,6 +67,7 @@ impl Config {
             && (MIN_SEARCH_RESULTS..=MAX_SEARCH_RESULTS).contains(&self.search_results)
             && (MIN_REMEMBERED_URLS..=MAX_REMEMBERED_URLS).contains(&self.remembered_urls)
             && (MIN_TOOL_RESULT_MAX_BYTES..=MAX_TOOL_RESULT_MAX_BYTES).contains(&self.tool_result_max_bytes);
+        let ok = ok && self.pii.validate().is_ok();
         let ok = ok && permissions::valid(&self.permissions);
         let ok = ok && self.approval_public_key.as_ref().is_none_or(|k| k.len() == 64 && self.public_key_bytes().is_some());
         if ok {
@@ -104,5 +109,18 @@ mod tests {
         for bad in ["ab", &"zz".repeat(32), &"é".repeat(32)] {
             assert!(Config { approval_public_key: Some(bad.to_string()), ..a.clone() }.validate().is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn pii_settings_are_optional_validated_and_part_of_the_version() {
+        let a = Config::default();
+        let old: Config = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert!(old.pii.is_default() && serde_json::to_value(&a).unwrap().get("pii").is_none(), "an old push parses and hashes as before");
+        let on = Config { pii: askbar_proto::pii::PiiConfig { enabled: true, ..Default::default() }, ..a.clone() };
+        assert!(on.validate().is_ok());
+        assert_ne!(a.version(), on.version());
+        let mut bad = on.clone();
+        bad.pii.deny_terms = vec![" ".into()];
+        assert!(bad.validate().is_err());
     }
 }

@@ -57,7 +57,7 @@ pub const MIN_TERM_CHARS: usize = 1;
 pub const MAX_TERM_CHARS: usize = 100;
 
 /// The PII settings. The default is off: no detection, `detect_only`, the default action for each type, no terms.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PiiConfig {
     pub enabled: bool,
