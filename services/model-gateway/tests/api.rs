@@ -458,6 +458,21 @@ async fn a_reply_is_on_record_before_the_provider_is_called_and_the_stream_start
     let reason =
         rig.rows("SELECT json_extract(attrs_json, '$.finish_reason') FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-happy'");
     assert_eq!(reason, vec![vec![json!("stop")]]);
+    // A short prompt skips the context check: not truncated, no reported count.
+    let ctx = rig.rows("SELECT json_extract(attrs_json, '$.context.truncated'), json_extract(attrs_json, '$.context.reported_in') FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-happy'");
+    assert_eq!(ctx, vec![vec![json!(0), Value::Null]]);
+}
+
+#[tokio::test]
+async fn the_attempt_span_says_when_the_provider_reported_far_fewer_input_tokens_than_were_sent() {
+    let rig = rig().await;
+    rig.push(&config(&rig, 1, &[("p", "m")])).await;
+    let mut req = rig.request("p", "gen-trunc", "MOCK-TRUNCATE");
+    let old = |role: &str, content: &str| ChatMessage { role: role.into(), content: content.into() };
+    req.messages = vec![old("user", &"old ".repeat(500)), old("assistant", "ok"), old("user", "MOCK-TRUNCATE")];
+    rig.chat(&req).await;
+    let ctx = rig.wait_rows("SELECT json_extract(attrs_json, '$.context.truncated'), json_extract(attrs_json, '$.context.reported_in'), json_extract(attrs_json, '$.context.stop') FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-trunc' AND status = 'done'").await;
+    assert_eq!(ctx, vec![vec![json!(1), json!(4), json!("stop")]]);
 }
 
 #[tokio::test]

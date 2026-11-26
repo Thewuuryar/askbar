@@ -380,6 +380,11 @@ pub const DEFAULT_PRIVACY_NOTICE: &str =
     "Askbar saves your questions and the replies in your history on this server, where you can delete \
 them. A sealed copy of each goes to the audit record. Only the administrator can open it, with a passphrase that the server does not hold.";
 
+/// A provider that reports fewer input tokens than this share of what we sent has dropped context.
+pub const TRUNCATION_RATIO: f32 = 0.6;
+/// Below this many estimated input tokens the estimate is too rough to compare with.
+pub const MIN_TRUNCATION_CHECK_TOKENS: u64 = 200;
+
 /// Audit records are kept this long unless the administrator says otherwise (ADR 0013, ADR 0051).
 pub const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 30;
 

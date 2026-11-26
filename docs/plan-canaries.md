@@ -26,7 +26,7 @@ Everything else is under [Later](#later).
 | --- | --- |
 | Where | `model-gateway` plants, checks and strips canaries. The server, clients and history never see them |
 | Stop reason | `finish_reason` stays the provider's raw string (`Option<String>`), recorded on the attempt span. No enum. Values that matter: `length`, `max_tokens`, `model_context_window_exceeded` |
-| Truncation check | Reported input tokens below `TRUNCATION_RATIO` (0.6) × the estimate from `sent_chars` means `context.truncated`. The constant lives in askbar-proto with its bounds; it is not a setting. Skipped when usage is estimated |
+| Truncation check | Reported input tokens below `TRUNCATION_RATIO` (0.6) × the estimate from `sent_chars` means `context.truncated`. The constant lives in askbar-proto with its bounds; it is not a setting. Skipped when usage is estimated or the estimate is under `MIN_TRUNCATION_CHECK_TOKENS` (200) |
 | Context limit | One nullable `context_tokens` per provider row ("Context limit" in the UI), next to `max_tokens` and with the same plumbing. Not per catalog model: `CatalogEntry` is only `{provider_id, model}` and a provider already carries one `model` |
 | Trimming | The server drops the oldest turns after `last_turns` until the estimate fits `context_tokens − max_tokens`; no limit set means today's behaviour |
 | Canary setting | One `canary_enabled: bool` (default true) in `GatewayConfig` |
@@ -51,6 +51,7 @@ In `crates/askbar-proto/src/lib.rs`, named constants with their bounds:
 
 ```rust
 pub const TRUNCATION_RATIO: f32 = 0.6;
+pub const MIN_TRUNCATION_CHECK_TOKENS: u64 = 200; // below this estimate the check is skipped
 pub const CANARY_TRIGGER_PCT: u8 = 70;
 ```
 
@@ -78,7 +79,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 | Phase | Content | Status |
 | --- | --- | --- |
 | 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | done |
-| 1 | Raw stop reason and input-count check, record only | not started |
+| 1 | Raw stop reason and input-count check, record only | done |
 | 2 | Provider context limit and server trimming | not started |
 | 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | not started |
 | Later | See below | not started |
@@ -99,7 +100,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
   Files: `services/model-gateway/src/llm.rs`, its tests.
   Do: set `finish_reason` in `decode_event` from OpenAI `choices[].finish_reason` and Anthropic `message_delta.delta.stop_reason`, as the raw string. No enum.
   Accept: unit tests for `stop`, `length`, `end_turn`, `max_tokens`, `model_context_window_exceeded` and a missing reason; the attempt span's `finish_reason` is no longer null in `tests/streaming.rs`.
-- [ ] **C1.2** `feat(model-gateway): compare reported input tokens with the estimate` · sonnet · after C1.1
+- [x] **C1.2** `feat(model-gateway): compare reported input tokens with the estimate` · sonnet · after C1.1
   Files: `services/model-gateway/src/{lib,llm}.rs`, `crates/askbar-proto/src/lib.rs`, `tests/e2e/mock_llm.py`, `tests/e2e/mock_llm_test.py`, tests.
   Do: estimate input tokens from `sent_chars` (already computed in `stream_chat_report`); after the reply set, on the attempt span, `attrs.context = {estimated_in, reported_in, truncated, stop}`. `truncated` uses `TRUNCATION_RATIO`. Skip when usage is itself estimated. Add a mock-LLM mode that drops the oldest messages to a size and reports the smaller input count, like Ollama ([ADR 0043](adr/0043-mock-llm.md)).
   Accept: a mock-LLM test in truncation mode gives `truncated: true`; a normal reply gives `false`; nothing changes in routing or the reply.

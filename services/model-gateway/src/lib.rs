@@ -978,11 +978,13 @@ async fn run_attempts(
 }
 
 fn attempt_attrs(r: &llm::StreamReport, retry_index: u32) -> serde_json::Value {
+    let (reported_in, truncated) = r.context_check();
     serde_json::json!({
         "retry_index": retry_index,
         "latency_ms": r.total.as_millis() as u64,
         "http_status": r.http_status,
         "usage_estimated": r.usage.map(|u| u.estimated),
         "finish_reason": r.finish_reason,
+        "context": { "estimated_in": r.estimated_in, "reported_in": reported_in, "truncated": truncated, "stop": r.finish_reason },
     })
 }

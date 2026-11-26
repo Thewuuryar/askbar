@@ -123,6 +123,22 @@ pub struct StreamReport {
     pub retry_after: Option<Duration>,
     /// Why the provider says it stopped (`stop`, `end_turn`, ...), if it said.
     pub finish_reason: Option<String>,
+    /// Our estimate of the input tokens sent, from the characters of the system prompt and messages.
+    pub estimated_in: u64,
+}
+
+impl StreamReport {
+    /// `(reported input tokens, truncated)`. Skipped (`None`, false) when the usage is missing or our
+    /// own estimate, or the estimate is too small to compare with.
+    pub fn context_check(&self) -> (Option<u64>, bool) {
+        let reported = self.usage.filter(|u| !u.estimated).and_then(|u| u.input);
+        match reported {
+            Some(r) if self.estimated_in >= askbar_proto::MIN_TRUNCATION_CHECK_TOKENS => {
+                (Some(r), (r as f32) < askbar_proto::TRUNCATION_RATIO * self.estimated_in as f32)
+            }
+            _ => (None, false),
+        }
+    }
 }
 
 /// A failed request, with what is known about it up to the failure.
@@ -401,9 +417,11 @@ where
         http_status: None,
         retry_after: None,
         finish_reason: None,
+        estimated_in: 0,
     };
     // For the estimate if the provider reports no usage: what was sent, and what came back.
     let sent_chars = system.chars().count() + normalize(messages).iter().map(|m| m.content.chars().count()).sum::<usize>();
+    report.estimated_in = estimate_tokens(sent_chars);
     let mut reply_chars = 0usize;
     let mut on_delta = on_delta;
     let result = run_request(
@@ -428,7 +446,7 @@ where
             // one. Counts the provider did give are never replaced.
             if outcome == StreamOutcome::Completed && report.usage.is_none() {
                 report.usage = Some(Usage {
-                    input: Some(estimate_tokens(sent_chars)),
+                    input: Some(report.estimated_in),
                     output: Some(estimate_tokens(reply_chars)),
                     cache_read: None,
                     cache_write: None,
@@ -626,6 +644,26 @@ mod tests {
         // Providers that put `"usage": null` on every chunk, and ordinary text chunks, are untouched.
         assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"content":"hi"}}],"usage":null}"#)).unwrap(), Step::Delta("hi".into()));
         assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"role":"assistant"}}],"usage":null}"#)).unwrap(), Step::Skip);
+    }
+
+    #[test]
+    fn truncation_compares_reported_input_with_the_estimate() {
+        let report = |est: u64, input: Option<u64>, estimated: bool| StreamReport {
+            outcome: StreamOutcome::Completed,
+            usage: input.map(|i| Usage { input: Some(i), estimated, ..Default::default() }),
+            time_to_first_token: None,
+            total: Duration::ZERO,
+            http_status: None,
+            retry_after: None,
+            finish_reason: None,
+            estimated_in: est,
+        };
+        assert_eq!(report(1000, Some(500), false).context_check(), (Some(500), true));
+        assert_eq!(report(1000, Some(600), false).context_check(), (Some(600), false), "at the ratio is not truncated");
+        assert_eq!(report(1000, Some(990), false).context_check(), (Some(990), false));
+        assert_eq!(report(1000, None, false).context_check(), (None, false), "no usage");
+        assert_eq!(report(1000, Some(10), true).context_check(), (None, false), "our own estimate");
+        assert_eq!(report(10, Some(1), false).context_check(), (None, false), "tiny estimate");
     }
 
     #[test]

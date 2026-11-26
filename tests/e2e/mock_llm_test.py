@@ -110,6 +110,13 @@ class Modes(unittest.TestCase):
         self.assertEqual(self.reply("plain", "s")[1]["total_tokens"], 150)
         self.assertEqual(self.reply("a\nMOCK-TOKENS 30000\nb", "s")[1]["completion_tokens"], 30000)
 
+    def test_mock_truncate_reports_only_the_newest_message(self):
+        _, r = self.srv.post("x", extra={"messages": [{"role": "user", "content": "old " * 500}, {"role": "assistant", "content": "ok"},
+                                                    {"role": "user", "content": "MOCK-TRUNCATE"}],
+                                         "stream_options": {"include_usage": True}})
+        usage = json.loads([l for l in r.read().decode().splitlines() if '"usage"' in l][-1][6:])["usage"]
+        self.assertEqual(usage["prompt_tokens"], 4)
+
     def test_hang_sends_nothing_until_client_closes(self):
         c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=1)
         c.request("POST", "/v1/chat/completions", json.dumps(
