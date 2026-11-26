@@ -21,10 +21,10 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 11 | 0 | 0 | 11 |
-| [Context checks and canaries](plan-canaries.md) | 1 | 0 | 8 | 9 |
-| **Total** | **152** | **0** | **159** | **311** |
+| [Context checks and canaries](plan-canaries.md) | 2 | 0 | 7 | 9 |
+| **Total** | **153** | **0** | **158** | **311** |
 
-## Completed (151)
+## Completed (152)
 
 ### Refactor (track 0)
 
@@ -207,12 +207,13 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 ### Context checks and canaries (track 3)
 
 - [x] **[C0.1](plan-canaries.md)** amend 0054 and 0014: context checks and canaries
+- [x] **[C0.2](plan-canaries.md)** amend 0051 and 0055: canary attributes and ContextTruncated
 
 ## In progress (0)
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (164)
+## Not started (163)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -407,7 +408,6 @@ Nothing: no step has an open branch or pull request.
 
 ### Context checks and canaries (track 3)
 
-- [ ] **[C0.2](plan-canaries.md)** amend 0051 and 0055: canary attributes and ContextTruncated
 - [ ] **[C1.1](plan-canaries.md)** record the provider's finish reason
 - [ ] **[C1.2](plan-canaries.md)** compare reported input tokens with the estimate
 - [ ] **[C2.1](plan-canaries.md)** add a context limit to providers

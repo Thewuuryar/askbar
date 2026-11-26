@@ -77,7 +77,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 
 | Phase | Content | Status |
 | --- | --- | --- |
-| 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | not started |
+| 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | done |
 | 1 | Raw stop reason and input-count check, record only | not started |
 | 2 | Provider context limit and server trimming | not started |
 | 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | not started |
@@ -89,7 +89,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
   Files: `docs/adr/0054-model-gateway.md`, `docs/adr/0014-model-gateway-and-providers.md`.
   Do: add the Decisions table above as rules; list what a canary is not (proof of context use, an injection defence).
   Accept: `scripts/check-docs.sh` passes; each ADR's Amendments section names this plan.
-- [ ] **C0.2** `docs(adr): amend 0051 and 0055: canary attributes and ContextTruncated` · haiku · after C0.1
+- [x] **C0.2** `docs(adr): amend 0051 and 0055: canary attributes and ContextTruncated` · haiku · after C0.1
   Files: `docs/adr/0051-auditor.md`, `docs/adr/0055-alerter.md`, `docs/reference/audit/model-calls.md`, `docs/reference/audit/alert-kinds.md`.
   Accept: the reference pages list each new attribute and the alert kind; `scripts/check-reference.sh` passes.
 
