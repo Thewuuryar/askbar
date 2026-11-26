@@ -12,7 +12,7 @@ This file decides **order** and the few things the order changes. Each track's o
 | --- | --- | --- | --- | --- |
 | 0 | Refactor | [plan-refactor.md](plan-refactor.md) | Less duplicated code, before track 1 adds three services, new links and new checks on top of it. No behaviour change | done |
 | 1 | Web search | this file, then the [tiered routing](plan-tiered-routing.md) and [audit viewer](plan-audit-viewer.md) steps it names | Step records, search and fetch through the MCP gateway, quick search in chat, then research reports and the judge | in progress |
-| 2 | PII detection and redaction | [plan-pii-redaction.md](plan-pii-redaction.md) | Placeholders out, real values back, blocked secrets, PII checks on search queries | not started |
+| 2 | PII detection and redaction | [plan-pii-redaction.md](plan-pii-redaction.md) | Placeholders out, real values back, blocked secrets, PII checks on search queries | PR open |
 | 3 | Context checks and canaries | [plan-canaries.md](plan-canaries.md) | Stop reasons, context limits, the echo canary, leak tripwire, injection markers on fetched pages | not started |
 | 4 | Tiered routing | [plan-tiered-routing.md](plan-tiered-routing.md) | Tiers, the decider, Auto, dollar budgets, then agents with MCP tools at the end | not started |
 | 5 | Audit viewing | [plan-audit-viewer.md](plan-audit-viewer.md) | Conversation view of sealed records | not started |
@@ -52,7 +52,7 @@ Every plan in reading order. Each carries a `Previous / Next / Tracker` line at 
 | 14 | [Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | deferrable | not started |
 | 15 | [Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | deferrable | not started |
 | 16 | [Risks and open questions](plan-tiered-routing/risks.md) | owner reading, no steps | not started |
-| 17 | [plan-pii-redaction.md](plan-pii-redaction.md) | track 2 | not started |
+| 17 | [plan-pii-redaction.md](plan-pii-redaction.md) | track 2 | PR open |
 | 18 | [plan-canaries.md](plan-canaries.md) | track 3 | not started |
 | 19 | [plan-post-v1.md](plan-post-v1.md) | V2 sketch, no steps | not started |
 | 20 | [plan-container-hardening.md](plan-container-hardening.md) | proposals, no steps | not started |
