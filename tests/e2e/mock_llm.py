@@ -18,6 +18,9 @@ Research, by the system prompt: the split gets a JSON array of two sub-questions
 the marker SUMMARY_MARK, the writer a draft that cites [1] and [2] with DRAFT_MARK, and the judge approves unless the question holds
 "MOCK-JUDGE refuse <reason>" (a refusal with that code) or "MOCK-JUDGE malformed" (the verdict with extra text). A line
 "MOCK-TOKENS <n>" makes the call report n completion tokens (the research cap tests).
+A last message with "MOCK-TRUNCATE" makes the call behave like Ollama over its context: only the newest message is kept
+and the reported prompt_tokens is for it alone (the smaller count). A message with a line "MOCK-CANARY" (or "MOCK-CANARY front_lost" or "MOCK-CANARY absent") on a request that carries the gateway's canary
+makes the reply end with the markers: both, only the one from the system message, or neither.
 A message with a line "MOCK-REPLY <text>" gets exactly <text> as the reply (the judge tests choose its answer this way).
 """
 import json
@@ -207,6 +210,15 @@ class Handler(BaseHTTPRequestHandler):
                     json.dumps({"verdict": "refuse", "reason": j.group(2)}))
         elif "<untrusted_web_content>" in last:
             text = f"From the sources [1] and [2]: sources seen {len(re.findall(r'^\[\d+\] ', last, re.M))}."
+        # The context canary: a request whose system message carries "Reference code: <8 hex>" and whose first message starts
+        # with "[<8 hex>] " is asked to echo both after the reply. "MOCK-CANARY front_lost" echoes only the first and
+        # "MOCK-CANARY absent" echoes nothing; any other MOCK-CANARY line echoes both.
+        a = re.search(r"Reference code: ([0-9a-f]{8})", system)
+        first = next((text_of(m.get("content")) for m in body.get("messages", []) if m.get("role") == "user"), "")
+        b = re.match(r"\[([0-9a-f]{8})\] ", first)
+        if a and b and (mode := re.search(r"^MOCK-CANARY(?: (\w+))?$", last, re.M)):
+            codes = {"front_lost": [a.group(1)], "absent": []}.get(mode.group(1), [a.group(1), b.group(1)])
+            text += "\n" + " ".join(codes)
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-cache")
@@ -224,10 +236,13 @@ class Handler(BaseHTTPRequestHandler):
                                            "usage": {"output_tokens": 50}})
                 self.sse("message_stop", {"type": "message_stop"})
             else:
+                # The last text chunk carries the stop reason, as OpenAI-style streams do.
+                self.wfile.write(f"data: {json.dumps({'choices': [{'delta': {'content': ''}, 'finish_reason': 'stop'}]})}\n\n".encode())
                 if (body.get("stream_options") or {}).get("include_usage"):
                     big = re.search(r"^MOCK-TOKENS (\d+)$", last, re.M)
                     out = int(big.group(1)) if big else 50
-                    usage = {"prompt_tokens": 100, "completion_tokens": out, "total_tokens": 100 + out,
+                    kept = -(-len(last) // 4) if "MOCK-TRUNCATE" in last else 100
+                    usage = {"prompt_tokens": kept, "completion_tokens": out, "total_tokens": kept + out,
                              "prompt_tokens_details": {"cached_tokens": 64 if "cached" in last.lower() else 0}}
                     self.wfile.write(f"data: {json.dumps({'choices': [], 'usage': usage})}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n")

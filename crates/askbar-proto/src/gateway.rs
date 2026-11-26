@@ -21,6 +21,8 @@ pub struct GatewayProvider {
     pub model: String,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
@@ -155,6 +157,9 @@ pub struct GatewayConfig {
     /// The PII settings (plan PII-P1.1). Off until the admin turns detection on; left out of the JSON while off.
     #[serde(default, skip_serializing_if = "crate::pii::PiiConfig::is_default")]
     pub pii: crate::pii::PiiConfig,
+    /// Whether the gateway plants and checks the context canary (ADR 0054). A configuration that leaves it out keeps it on.
+    #[serde(default = "yes")]
+    pub canary_enabled: bool,
 }
 
 fn default_approval_ttl() -> u32 {
@@ -341,6 +346,7 @@ mod tests {
             base_url: String::new(),
             model: "m".into(),
             max_tokens: None,
+            context_tokens: None,
             temperature: None,
             headers: Default::default(),
             api_key: "sk-marker-secret".into(),
@@ -365,6 +371,7 @@ mod tests {
             task_limits: Default::default(),
             research_enabled: true,
             pii: Default::default(),
+            canary_enabled: true,
         };
         for shown in [format!("{p:?}"), format!("{p:#?}"), format!("{cfg:?}")] {
             assert!(!shown.contains("sk-marker-secret"), "{shown}");
@@ -385,6 +392,7 @@ mod tests {
         );
         assert!(cfg.quick_search_enabled, "a configuration that leaves it out keeps quick search on");
         assert!(cfg.research_enabled, "a configuration that leaves it out keeps research on");
+        assert!(cfg.canary_enabled, "a configuration that leaves it out keeps the canary on");
         assert_eq!(cfg.task_limits, crate::research::TaskLimits::DEFAULT);
         assert_eq!((cfg.catalog, cfg.default_model), (vec![], None), "no catalog approves no model");
         let p: GatewayProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();

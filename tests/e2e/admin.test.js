@@ -881,6 +881,9 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.fill('#p-price-in', '2.5');
     await page.fill('#p-price-out', '10');
     await page.fill('#p-price-cached', '0.25');
+    await page.fill('#p-context-tokens', '32000');
+    assert.match(await page.innerText('#provider-form'), /Context limit/);
+    assert.match(await page.innerText('#p-context-tokens-hint'), /usually much lower/);
     await page.click('#provider-form button[type=submit]');
     await panelClosed();
     // It is kept: edit again, the values are back.
@@ -890,6 +893,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     assert.equal(await page.inputValue('#p-price-in'), '2.5');
     assert.equal(await page.inputValue('#p-price-out'), '10');
     assert.equal(await page.inputValue('#p-price-cached'), '0.25');
+    assert.equal(await page.inputValue('#p-context-tokens'), '32000', 'the context limit is kept');
     // A negative price is refused with the server's rule, and nothing changes.
     await page.evaluate(() => document.getElementById('provider-form').noValidate = true);
     await page.fill('#p-price-in', '-1');
@@ -897,10 +901,15 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#provider-error:not([hidden])');
     assert.match(await page.innerText('#provider-error'), /zero or more/);
     assert.equal(await page.isVisible('#provider-panel'), true, 'the panel stays open with what was typed');
+    await page.fill('#p-price-in', '');
+    await page.fill('#p-context-tokens', '5');
+    await page.click('#provider-form button[type=submit]');
+    await page.waitForFunction(() => /Context limit must be between/.test(document.getElementById('provider-error').textContent));
     // Put it back to an ordinary metered provider for the rest of the run.
     await page.fill('#p-price-in', '');
     await page.fill('#p-price-out', '');
     await page.fill('#p-price-cached', '');
+    await page.fill('#p-context-tokens', '');
     await page.selectOption('#p-billing', 'metered');
     await page.click('#provider-form button[type=submit]');
     await panelClosed();
@@ -908,6 +917,7 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#provider-panel:not([hidden])');
     assert.equal(await page.inputValue('#p-billing'), 'metered');
     assert.equal(await page.inputValue('#p-price-in'), '');
+    assert.equal(await page.inputValue('#p-context-tokens'), '', 'clearing the context limit is kept');
     await page.click('#provider-cancel');
     await panelClosed();
   });
@@ -1864,6 +1874,18 @@ const BACKUP_PASS_2 = 'e2e backup passphrase, its own 2';
     await page.waitForSelector('#toasts .toast');
     await openSettings();
     await page.waitForFunction(() => /sealed copy of each goes to the audit record/.test(document.getElementById('s-notice-text').value));
+  });
+  await step('general: the context canary checkbox is on, and a change is saved and kept', async () => {
+    await openSettings();
+    assert.equal(await page.isChecked('#s-canary-on'), true);
+    for (const on of [false, true]) {
+      await page.setChecked('#s-canary-on', on);
+      await page.click('#settings-form-save-bar [data-save-submit]');
+      await page.waitForSelector('#toasts .toast');
+      assert.equal((await adminJson('GET', '/api/admin/v1/settings')).body.canary_enabled, on);
+      await openSettings();
+      assert.equal(await page.isChecked('#s-canary-on'), on);
+    }
   });
   await step('general: an invalid setting shows the server message', async () => {
     await page.fill('#s-top', '0.5');

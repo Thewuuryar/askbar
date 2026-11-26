@@ -2775,6 +2775,9 @@ components:
           type: string
         max_tokens:
           type: [integer, 'null']
+        context_tokens:
+          type: [integer, 'null']
+          description: Input plus output token limit for a request. Null means no limit.
         temperature:
           type: [number, 'null']
         has_key:
@@ -2861,6 +2864,11 @@ components:
           description: Write-only. Missing or empty on update keeps the current key.
         max_tokens:
           type: integer
+        context_tokens:
+          type: integer
+          minimum: 1000
+          maximum: 10000000
+          description: Optional. The effective limit is usually lower than the advertised one. Missing or null clears it.
         temperature:
           type: number
         billing:
@@ -3183,6 +3191,11 @@ components:
           description: >-
             Whether research reports are on for everyone, apart from the kill switch and quick search. On by default. While off, the
             gateway refuses research approvals and decisions (`503 research_disabled`) and the server answers without research.
+            A save that leaves it out keeps it; the change is audited.
+        canary_enabled:
+          type: boolean
+          description: >-
+            Whether the gateway plants the context canary in long conversations, near a provider's context limit. On by default.
             A save that leaves it out keeps it; the change is audited.
     NetworkInput:
       type: object

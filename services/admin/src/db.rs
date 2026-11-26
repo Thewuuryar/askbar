@@ -254,6 +254,8 @@ const MIGRATIONS: &[&str] = &[
          provider_id TEXT NOT NULL,
          model       TEXT NOT NULL
      );",
+    // A provider's context limit in tokens (plan-canaries C2.1). Null means no limit.
+    "ALTER TABLE providers ADD COLUMN context_tokens INTEGER;",
 ];
 
 /// The schema steps, in order (for the upgrade tests).

@@ -53,6 +53,11 @@ pub fn render(e: &Event) -> Rendered {
             "Caddy has gone quiet",
             format!("Replies were recorded, but Caddy has sent no access line for {} minutes.", f.minutes.unwrap_or(0)),
         ),
+        Kind::ContextTruncated => (
+            "A reply's context was cut",
+            "The provider dropped part of the context of a reply, so the answer may ignore earlier messages or the system prompt."
+                .to_string(),
+        ),
         Kind::RestartLoop => (
             "A service keeps restarting",
             format!("{} restarted {} times in {} minutes.", name(&f.service), f.count.unwrap_or(0), f.minutes.unwrap_or(0)),

@@ -23,7 +23,7 @@ use std::sync::Arc;
 pub(crate) type St = State<Arc<AdminState>>;
 
 const MAX_PROMPT_CHARS: usize = 20_000;
-use crate::constants::PAIR_CODE_TTL_SECS;
+use crate::constants::{MAX_CONTEXT_TOKENS, MIN_CONTEXT_TOKENS, PAIR_CODE_TTL_SECS};
 
 mod sealed;
 mod settings;
@@ -166,6 +166,7 @@ pub struct ProviderRow {
     base_url: String,
     model: String,
     max_tokens: Option<u32>,
+    context_tokens: Option<u32>,
     temperature: Option<f32>,
     /// Whether the server holds a key. The key itself is never shown.
     has_key: bool,
@@ -196,6 +197,8 @@ pub struct ProviderInput {
     #[serde(default)]
     max_tokens: Option<u32>,
     #[serde(default)]
+    context_tokens: Option<u32>,
+    #[serde(default)]
     temperature: Option<f32>,
     /// "metered" (the default) or "subscription".
     #[serde(default)]
@@ -225,6 +228,9 @@ fn validate(i: &ProviderInput) -> Result<(), Failure> {
     if !matches!(i.billing.as_deref().unwrap_or("metered"), "metered" | "subscription") {
         return Err(bad("Billing must be metered or subscription."));
     }
+    if i.context_tokens.is_some_and(|n| !(MIN_CONTEXT_TOKENS..=MAX_CONTEXT_TOKENS).contains(&n)) {
+        return Err(bad(&format!("Context limit must be between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens.")));
+    }
     // The same rule the server applies to the snapshot.
     for (label, price) in [("Input price", i.price_in), ("Output price", i.price_out), ("Cached input price", i.price_cached_in)] {
         if price.is_some_and(|v| !v.is_finite() || v < 0.0) {
@@ -250,7 +256,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
     let db = state.db.lock().await;
     let mut stmt = db
         .conn()
-        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, EXISTS (SELECT 1 FROM provider_keys k WHERE k.provider_id = providers.id), billing, price_in, price_out, price_cached_in, managed, has_key FROM providers ORDER BY name")
+        .prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, EXISTS (SELECT 1 FROM provider_keys k WHERE k.provider_id = providers.id), billing, price_in, price_out, price_cached_in, managed, has_key, context_tokens FROM providers ORDER BY name")
         .map_err(internal)?;
     let rows = stmt
         .query_map([], |r| {
@@ -271,6 +277,7 @@ pub async fn list_providers(State(state): St) -> Result<Json<Vec<ProviderRow>>, 
                 // A key the server held before the gateway existed (the old column says so) that the admin cannot read:
                 // it is entered again (ADR 0054).
                 key_missing: r.get::<_, i64>(7)? == 0 && r.get::<_, i64>(13)? != 0,
+                context_tokens: r.get(14)?,
             })
         })
         .map_err(internal)?
@@ -293,11 +300,11 @@ pub async fn create_provider(
     let new_id = id.clone();
     mutate(&state, keys, move |c| {
         c.execute(
-            "INSERT INTO providers (id, name, type, base_url, model, max_tokens, temperature, created_at, billing, price_in, price_out, price_cached_in)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            "INSERT INTO providers (id, name, type, base_url, model, max_tokens, temperature, created_at, billing, price_in, price_out, price_cached_in, context_tokens)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![
                 new_id, i.name.trim(), i.kind, i.base_url.trim(), i.model.trim(), i.max_tokens, i.temperature, crate::auth::now(),
-                i.billing.as_deref().unwrap_or("metered"), i.price_in, i.price_out, i.price_cached_in
+                i.billing.as_deref().unwrap_or("metered"), i.price_in, i.price_out, i.price_cached_in, i.context_tokens
             ],
         )
         .map(|_| ())
@@ -331,7 +338,7 @@ pub async fn update_provider(
         let n = c
             .execute(
                 "UPDATE providers SET name = ?2, type = ?3, base_url = ?4, model = ?5, max_tokens = ?6, temperature = ?7,
-                        billing = ?8, price_in = ?9, price_out = ?10, price_cached_in = ?11 WHERE id = ?1",
+                        billing = ?8, price_in = ?9, price_out = ?10, price_cached_in = ?11, context_tokens = ?12 WHERE id = ?1",
                 params![
                     id,
                     i.name.trim(),
@@ -343,7 +350,8 @@ pub async fn update_provider(
                     i.billing.as_deref().unwrap_or("metered"),
                     i.price_in,
                     i.price_out,
-                    i.price_cached_in
+                    i.price_cached_in,
+                    i.context_tokens
                 ],
             )
             .map_err(clash_or_internal)?;

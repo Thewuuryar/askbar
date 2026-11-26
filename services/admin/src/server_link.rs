@@ -108,7 +108,7 @@ fn setting(conn: &rusqlite::Connection, key: &str) -> rusqlite::Result<Option<St
 pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot> {
     let mut providers = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, price_in, price_out, price_cached_in FROM providers ORDER BY name")?;
+        let mut stmt = conn.prepare("SELECT id, name, type, base_url, model, max_tokens, temperature, headers, billing, price_in, price_out, price_cached_in, context_tokens FROM providers ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(SnapshotProvider {
                 id: r.get(0)?,
@@ -117,6 +117,7 @@ pub fn build_snapshot(conn: &rusqlite::Connection) -> rusqlite::Result<Snapshot>
                 base_url: r.get(3)?,
                 model: r.get(4)?,
                 max_tokens: r.get(5)?,
+                context_tokens: r.get(12)?,
                 temperature: r.get(6)?,
                 headers: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
                 billing: if r.get::<_, String>(8)? == "subscription" {

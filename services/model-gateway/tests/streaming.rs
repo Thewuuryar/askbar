@@ -84,6 +84,7 @@ fn provider(kind: ProviderKind, base: &str, key: &str) -> Provider {
         api_key: key.to_string(),
         model: "m".into(),
         max_tokens: (kind == ProviderKind::Anthropic).then_some(4096),
+        context_tokens: None,
         temperature: None,
         headers: BTreeMap::new(),
     }

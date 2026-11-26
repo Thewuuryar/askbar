@@ -29,6 +29,7 @@ pub struct Provider {
     pub api_key: String,
     pub model: String,
     pub max_tokens: Option<u32>,
+    pub context_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub headers: BTreeMap<String, String>,
 }
@@ -123,6 +124,22 @@ pub struct StreamReport {
     pub retry_after: Option<Duration>,
     /// Why the provider says it stopped (`stop`, `end_turn`, ...), if it said.
     pub finish_reason: Option<String>,
+    /// Our estimate of the input tokens sent, from the characters of the system prompt and messages.
+    pub estimated_in: u64,
+}
+
+impl StreamReport {
+    /// `(reported input tokens, truncated)`. Skipped (`None`, false) when the usage is missing or our
+    /// own estimate, or the estimate is too small to compare with.
+    pub fn context_check(&self) -> (Option<u64>, bool) {
+        let reported = self.usage.filter(|u| !u.estimated).and_then(|u| u.input);
+        match reported {
+            Some(r) if self.estimated_in >= askbar_proto::MIN_TRUNCATION_CHECK_TOKENS => {
+                (Some(r), (r as f32) < askbar_proto::TRUNCATION_RATIO * self.estimated_in as f32)
+            }
+            _ => (None, false),
+        }
+    }
 }
 
 /// A failed request, with what is known about it up to the failure.
@@ -328,6 +345,25 @@ pub fn decode_event(kind: ProviderKind, ev: &SseEvent) -> Result<Step, ChatError
     }
 }
 
+/// The provider's raw stop reason in this event, if it carries one. Kept as the provider sent it, but
+/// only a short token of letters, digits, `_`, `.` and `-`; anything else is dropped, so a provider
+/// string cannot carry arbitrary text into an attribute.
+pub fn stop_reason(kind: ProviderKind, ev: &SseEvent) -> Option<String> {
+    let v = serde_json::from_str::<Value>(ev.data.trim()).ok()?;
+    let raw = match kind {
+        // The last non-null reason in the event wins.
+        ProviderKind::OpenAi => v["choices"].as_array()?.iter().filter_map(|c| c["finish_reason"].as_str()).next_back(),
+        ProviderKind::Anthropic => {
+            if v["type"].as_str().or(ev.event.as_deref()) != Some("message_delta") {
+                return None;
+            }
+            v["delta"]["stop_reason"].as_str()
+        }
+    }?;
+    let plain = !raw.is_empty() && raw.len() <= 64 && raw.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
+    plain.then(|| raw.to_string())
+}
+
 /// Pull a readable message out of an error response body.
 pub fn extract_api_error(body: &str) -> String {
     if let Ok(v) = serde_json::from_str::<Value>(body) {
@@ -357,6 +393,11 @@ pub fn estimate_tokens(chars: usize) -> u64 {
     chars.div_ceil(4) as u64
 }
 
+/// The characters of what a request sends: the system message and the messages as `normalize` leaves them.
+pub fn sent_chars(system: &str, messages: &[ChatMessage]) -> usize {
+    system.chars().count() + normalize(messages).iter().map(|m| m.content.chars().count()).sum::<usize>()
+}
+
 /// Stream one assistant reply, calling `on_delta` for each piece of text, and say how it went:
 /// timings, the HTTP status, `Retry-After`. On failure the error carries the report up to that point.
 ///
@@ -382,9 +423,10 @@ where
         http_status: None,
         retry_after: None,
         finish_reason: None,
+        estimated_in: 0,
     };
     // For the estimate if the provider reports no usage: what was sent, and what came back.
-    let sent_chars = system.chars().count() + normalize(messages).iter().map(|m| m.content.chars().count()).sum::<usize>();
+    report.estimated_in = estimate_tokens(sent_chars(system, messages));
     let mut reply_chars = 0usize;
     let mut on_delta = on_delta;
     let result = run_request(
@@ -409,7 +451,7 @@ where
             // one. Counts the provider did give are never replaced.
             if outcome == StreamOutcome::Completed && report.usage.is_none() {
                 report.usage = Some(Usage {
-                    input: Some(estimate_tokens(sent_chars)),
+                    input: Some(report.estimated_in),
                     output: Some(estimate_tokens(reply_chars)),
                     cache_read: None,
                     cache_write: None,
@@ -472,6 +514,9 @@ where
     // True once the provider signals the end of the stream.
     let mut handle = |events: Vec<SseEvent>, report: &mut StreamReport| -> Result<bool, ChatError> {
         for ev in events {
+            if let Some(reason) = stop_reason(provider.kind, &ev) {
+                report.finish_reason = Some(reason);
+            }
             match decode_event(provider.kind, &ev)? {
                 Step::Delta(s) => deliver(&s, report),
                 Step::Usage(u) => note_usage(u, report),
@@ -517,6 +562,7 @@ mod tests {
             api_key: String::new(),
             model: "m".into(),
             max_tokens: (kind == ProviderKind::Anthropic).then_some(4096),
+            context_tokens: None,
             temperature: None,
             headers: BTreeMap::new(),
         }
@@ -604,6 +650,26 @@ mod tests {
         // Providers that put `"usage": null` on every chunk, and ordinary text chunks, are untouched.
         assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"content":"hi"}}],"usage":null}"#)).unwrap(), Step::Delta("hi".into()));
         assert_eq!(decode_event(kind, &ev(r#"{"choices":[{"delta":{"role":"assistant"}}],"usage":null}"#)).unwrap(), Step::Skip);
+    }
+
+    #[test]
+    fn truncation_compares_reported_input_with_the_estimate() {
+        let report = |est: u64, input: Option<u64>, estimated: bool| StreamReport {
+            outcome: StreamOutcome::Completed,
+            usage: input.map(|i| Usage { input: Some(i), estimated, ..Default::default() }),
+            time_to_first_token: None,
+            total: Duration::ZERO,
+            http_status: None,
+            retry_after: None,
+            finish_reason: None,
+            estimated_in: est,
+        };
+        assert_eq!(report(1000, Some(500), false).context_check(), (Some(500), true));
+        assert_eq!(report(1000, Some(600), false).context_check(), (Some(600), false), "at the ratio is not truncated");
+        assert_eq!(report(1000, Some(990), false).context_check(), (Some(990), false));
+        assert_eq!(report(1000, None, false).context_check(), (None, false), "no usage");
+        assert_eq!(report(1000, Some(10), true).context_check(), (None, false), "our own estimate");
+        assert_eq!(report(10, Some(1), false).context_check(), (None, false), "tiny estimate");
     }
 
     #[test]
@@ -698,6 +764,38 @@ mod tests {
         );
         let err = decode_event(k, &ev(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#)).unwrap_err();
         assert!(err.to_string().contains("Overloaded"));
+    }
+
+    #[test]
+    fn stop_reasons_are_kept_raw_for_both_provider_kinds() {
+        let oa = |r: &str| ev(&format!(r#"{{"choices":[{{"delta":{{}},"finish_reason":"{r}"}}]}}"#));
+        let an = |r: &str| ev(&format!(r#"{{"type":"message_delta","delta":{{"stop_reason":"{r}"}}}}"#));
+        for r in ["stop", "length", "end_turn", "max_tokens", "model_context_window_exceeded"] {
+            assert_eq!(stop_reason(ProviderKind::OpenAi, &oa(r)).as_deref(), Some(r));
+            assert_eq!(stop_reason(ProviderKind::Anthropic, &an(r)).as_deref(), Some(r));
+        }
+        // The last non-null reason in a chunk wins; a null after it does not clear it.
+        let two = ev(r#"{"choices":[{"finish_reason":"length"},{"finish_reason":"stop"},{"finish_reason":null}]}"#);
+        assert_eq!(stop_reason(ProviderKind::OpenAi, &two).as_deref(), Some("stop"));
+        // A missing reason is None, in every shape a stream sends.
+        for (kind, data) in [
+            (ProviderKind::OpenAi, r#"{"choices":[{"delta":{"content":"hi"}}]}"#),
+            (ProviderKind::OpenAi, r#"{"choices":[{"delta":{},"finish_reason":null}]}"#),
+            (ProviderKind::OpenAi, r#"{"choices":[],"usage":{"prompt_tokens":1}}"#),
+            (ProviderKind::OpenAi, "[DONE]"),
+            (ProviderKind::Anthropic, r#"{"type":"message_start","message":{"stop_reason":null}}"#),
+            (ProviderKind::Anthropic, r#"{"type":"message_delta","delta":{}}"#),
+            (ProviderKind::Anthropic, r#"{"type":"message_stop"}"#),
+        ] {
+            assert_eq!(stop_reason(kind, &ev(data)), None, "{data}");
+        }
+        // Malformed or overlong reasons are dropped, not truncated or sanitised.
+        let long = "a".repeat(65);
+        for bad in ["", "stop please", "<b>stop</b>", "stop\"", "ünïcode", long.as_str()] {
+            assert_eq!(stop_reason(ProviderKind::OpenAi, &oa(bad)), None, "{bad}");
+            assert_eq!(stop_reason(ProviderKind::Anthropic, &an(bad)), None, "{bad}");
+        }
+        assert_eq!(stop_reason(ProviderKind::OpenAi, &oa(&"a".repeat(64))), Some("a".repeat(64)));
     }
 
     #[test]

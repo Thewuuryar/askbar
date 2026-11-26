@@ -49,6 +49,7 @@ pub fn provider(mock: &Mock, kind: ProviderKind) -> Provider {
         api_key: "sk-test".into(),
         model: "m".into(),
         max_tokens: None,
+        context_tokens: None,
         temperature: None,
         headers: Default::default(),
     }
@@ -241,6 +242,7 @@ async fn canned_provider(body: &'static str) -> Provider {
         api_key: "k".into(),
         model: "m".into(),
         max_tokens: None,
+        context_tokens: None,
         temperature: None,
         headers: Default::default(),
     }

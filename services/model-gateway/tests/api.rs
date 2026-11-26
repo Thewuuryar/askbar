@@ -204,6 +204,7 @@ fn provider(rig: &Rig, id: &str, model: &str) -> GatewayProvider {
         base_url: format!("http://127.0.0.1:{}/v1", rig.mock.port),
         model: model.into(),
         max_tokens: None,
+        context_tokens: None,
         temperature: None,
         headers: Default::default(),
         api_key: MARKER_KEY.into(),
@@ -219,6 +220,7 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
         task_limits: Default::default(),
         research_enabled: true,
         pii: Default::default(),
+        canary_enabled: true,
         version,
         providers: models.iter().map(|(id, m)| provider(rig, id, m)).collect(),
         audit_public_key: Some(audit_key()),
@@ -454,6 +456,25 @@ async fn a_reply_is_on_record_before_the_provider_is_called_and_the_stream_start
     let attempt = rig.wait_rows("SELECT status, tokens_in, tokens_out, parent_id FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-happy' AND status = 'done'").await;
     assert_eq!(attempt[0][3], json!(span_id));
     assert!(attempt[0][1].as_i64().unwrap() > 0 && attempt[0][2].as_i64().unwrap() > 0, "{attempt:?}");
+    // The provider's stop reason is recorded on that attempt, not left null.
+    let reason =
+        rig.rows("SELECT json_extract(attrs_json, '$.finish_reason') FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-happy'");
+    assert_eq!(reason, vec![vec![json!("stop")]]);
+    // A short prompt skips the context check: not truncated, no reported count.
+    let ctx = rig.rows("SELECT json_extract(attrs_json, '$.context.truncated'), json_extract(attrs_json, '$.context.reported_in') FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-happy'");
+    assert_eq!(ctx, vec![vec![json!(0), Value::Null]]);
+}
+
+#[tokio::test]
+async fn the_attempt_span_says_when_the_provider_reported_far_fewer_input_tokens_than_were_sent() {
+    let rig = rig().await;
+    rig.push(&config(&rig, 1, &[("p", "m")])).await;
+    let mut req = rig.request("p", "gen-trunc", "MOCK-TRUNCATE");
+    let old = |role: &str, content: &str| ChatMessage { role: role.into(), content: content.into() };
+    req.messages = vec![old("user", &"old ".repeat(500)), old("assistant", "ok"), old("user", "MOCK-TRUNCATE")];
+    rig.chat(&req).await;
+    let ctx = rig.wait_rows("SELECT json_extract(attrs_json, '$.context.truncated'), json_extract(attrs_json, '$.context.reported_in'), json_extract(attrs_json, '$.context.stop') FROM spans WHERE kind = 'attempt' AND trace_id = 'gen-trunc' AND status = 'done'").await;
+    assert_eq!(ctx, vec![vec![json!(1), json!(4), json!("stop")]]);
 }
 
 #[tokio::test]
@@ -1959,4 +1980,57 @@ async fn the_judges_text_is_only_in_the_sealed_payloads() {
     assert!(!all.contains(JUDGE_MARKER) && !all.contains("summary one"), "{all}");
     let status = rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap();
     assert!(!status.text().await.unwrap().contains(JUDGE_MARKER));
+}
+
+/// One reply through a provider with a 1000-token limit. `text` is the message; 3000 characters is about 750 tokens, over 70%.
+/// Returns what the client got and the markers the mock saw (marker A from its log: it prints the start of the system message).
+async fn canary_reply(gen: &str, text: &str, limit: Option<u32>, enabled: bool) -> (Rig, String, Option<String>) {
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.providers[0].context_tokens = limit;
+    cfg.canary_enabled = enabled;
+    rig.push(&cfg).await;
+    let events = rig.chat(&rig.request("p", gen, text)).await;
+    assert!(matches!(events.last(), Some(ChatEvent::Done { .. })), "{events:?}");
+    let a = rig.mock.log.lock().unwrap().iter().find_map(|l| l.split("Reference code: ").nth(1).map(|s| s[..8].to_string()));
+    let reply = text_of(&events);
+    (rig, reply, a)
+}
+
+fn canary_attrs(rig: &Rig, gen: &str) -> Vec<Vec<Value>> {
+    rig.rows(&format!("SELECT attrs_json, parent_id FROM spans WHERE kind = 'step' AND name = 'canary' AND trace_id = '{gen}'"))
+}
+
+#[tokio::test]
+async fn a_canary_near_the_limit_is_checked_and_its_markers_never_reach_the_client_or_the_record() {
+    let pad = "x".repeat(3000);
+    for (word, outcome) in [("MOCK-CANARY", "ok"), ("MOCK-CANARY front_lost", "front_lost"), ("MOCK-CANARY absent", "absent")] {
+        let gen = format!("gen-canary-{outcome}");
+        let (rig, reply, a) = canary_reply(&gen, &format!("{pad}\n{word}"), Some(1000), true).await;
+        let a = a.expect("the system message carried marker A");
+        assert!(!reply.contains(&a), "marker A reached the client: {reply}");
+        assert!(reply.contains("Anything else?"), "{reply}");
+        let step = rig.wait_rows(&format!("SELECT attrs_json, parent_id, status FROM spans WHERE kind = 'step' AND name = 'canary' AND trace_id = '{gen}' AND status = 'done'")).await;
+        let attrs: Value = serde_json::from_str(step[0][0].as_str().unwrap()).unwrap();
+        assert_eq!(attrs["canary"], json!({ "planted": true, "outcome": outcome, "instruction_version": 1 }));
+        let attempt = rig.rows(&format!("SELECT id FROM spans WHERE kind = 'attempt' AND trace_id = '{gen}'"));
+        assert_eq!(step[0][1], attempt[0][0], "the step is a child of the attempt");
+        // The only attributes on any span of the trace are numbers, names and flags: no marker text.
+        let all = rig.rows(&format!("SELECT attrs_json FROM spans WHERE trace_id = '{gen}'"));
+        assert!(!format!("{all:?}").contains(&a), "marker A in a span attribute");
+    }
+}
+
+#[tokio::test]
+async fn no_canary_is_planted_below_70_percent_without_a_limit_or_with_the_flag_off() {
+    let big = format!("{}\nMOCK-CANARY", "x".repeat(3000));
+    for (gen, text, limit, enabled) in [
+        ("gen-nc-low", "short MOCK-CANARY".to_string(), Some(1000), true),
+        ("gen-nc-nolimit", big.clone(), None, true),
+        ("gen-nc-off", big, Some(1000), false),
+    ] {
+        let (rig, _, a) = canary_reply(gen, &text, limit, enabled).await;
+        assert_eq!(a, None, "{gen}: nothing was planted");
+        assert!(canary_attrs(&rig, gen).is_empty(), "{gen}: no canary span");
+    }
 }

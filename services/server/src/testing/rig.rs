@@ -192,6 +192,7 @@ impl Rig {
                 base_url: p.base_url.clone(),
                 model: p.model.clone(),
                 max_tokens: p.max_tokens,
+                context_tokens: p.context_tokens,
                 temperature: p.temperature,
                 headers: p.headers.clone(),
                 api_key: keys.get(&p.id).cloned().unwrap_or_default(),
@@ -232,6 +233,7 @@ impl Rig {
             task_limits: snap.task_limits,
             research_enabled: snap.research_enabled,
             pii: Default::default(),
+            canary_enabled: true,
         };
         self.gateway.apply_config(&config).expect("the snapshot makes a usable gateway configuration");
     }

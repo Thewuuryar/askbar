@@ -54,6 +54,10 @@ pub struct AdminSettings {
     /// Research reports for everyone: on unless switched off, apart from the kill switch and quick search. Same rules.
     #[serde(default)]
     research_enabled: Option<bool>,
+    /// The context canary the gateway plants in long conversations (C3.1): on unless switched off. Always present when read; a save
+    /// that leaves it out keeps it.
+    #[serde(default)]
+    canary_enabled: Option<bool>,
 }
 
 /// The most characters the wording of the notice and of the warning may have.
@@ -124,6 +128,7 @@ pub async fn get_settings(State(state): St) -> Json<AdminSettings> {
         ai_warning_text: Some(wording_or_default(setting(c, "ai_warning_text"), askbar_proto::DEFAULT_AI_WARNING)),
         quick_search_enabled: Some(setting(c, "quick_search_enabled").is_none_or(|v| v.trim() != "0")),
         research_enabled: Some(setting(c, "research_enabled").is_none_or(|v| v.trim() != "0")),
+        canary_enabled: Some(setting(c, "canary_enabled").is_none_or(|v| v.trim() != "0")),
     })
 }
 
@@ -161,6 +166,9 @@ pub async fn put_settings(
         if let Some(on) = s.research_enabled {
             n.add("research_enabled", serde_json::json!(on));
         }
+        if let Some(on) = s.canary_enabled {
+            n.add("canary_enabled", serde_json::json!(on));
+        }
     }
     if s.privacy_notice_text.as_deref().is_some_and(|t| t.chars().count() > MAX_NOTICE_CHARS) {
         return Err(bad(&format!("The privacy notice is at most {MAX_NOTICE_CHARS} characters.")));
@@ -174,6 +182,7 @@ pub async fn put_settings(
     let (notice_on, warning_on) = (s.privacy_notice_enabled.map(on_off), s.ai_warning_enabled.map(on_off));
     let search_on = s.quick_search_enabled.map(on_off);
     let research_on = s.research_enabled.map(on_off);
+    let canary_on = s.canary_enabled.map(on_off);
     if s.system_prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(bad("The system prompt is too long."));
     }
@@ -241,6 +250,7 @@ pub async fn put_settings(
             ("ai_warning_text", warning_text.as_deref()),
             ("quick_search_enabled", search_on),
             ("research_enabled", research_on),
+            ("canary_enabled", canary_on),
         ] {
             if let Some(v) = value {
                 pairs.push((key, v));

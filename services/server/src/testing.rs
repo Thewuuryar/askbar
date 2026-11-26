@@ -54,6 +54,7 @@ pub fn provider(id: &str, name: &str, base_url: &str, model: &str) -> SnapshotPr
         base_url: base_url.into(),
         model: model.into(),
         max_tokens: None,
+        context_tokens: None,
         temperature: None,
         headers: Default::default(),
         billing: Default::default(),

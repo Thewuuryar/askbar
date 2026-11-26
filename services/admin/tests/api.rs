@@ -370,6 +370,24 @@ async fn provider_billing_and_prices_round_trip_reach_the_server_and_are_validat
     );
     assert!(!t.snapshot().unwrap().providers.iter().any(|p| serde_json::to_string(p).unwrap().contains("fallback")));
 
+    // The context limit: unset by default, stored, listed, pushed, bounded, and cleared by leaving it out.
+    assert_eq!(list[0]["context_tokens"], json!(null));
+    assert_eq!(t.snapshot().unwrap().providers.iter().find(|p| p.id == id).unwrap().context_tokens, None);
+    let mut lim = full.clone();
+    lim["context_tokens"] = json!(32000);
+    assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/providers/{id}"), Some(lim.clone())).await.0, 204);
+    let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
+    assert_eq!(list[0]["context_tokens"], json!(32000));
+    assert_eq!(t.snapshot().unwrap().providers.iter().find(|p| p.id == id).unwrap().context_tokens, Some(32000));
+    for n in [0, 999, 10_000_001] {
+        lim["context_tokens"] = json!(n);
+        let (st, body) = t.call(M::PUT, &format!("/api/admin/v1/providers/{id}"), Some(lim.clone())).await;
+        assert_eq!(st, 400, "{n}: {body}");
+    }
+    assert_eq!(t.call(M::PUT, &format!("/api/admin/v1/providers/{id}"), Some(full.clone())).await.0, 204);
+    let (_, list) = t.call(M::GET, "/api/admin/v1/providers", None).await;
+    assert_eq!(list[0]["context_tokens"], json!(null), "leaving it out clears it");
+
     // Validation matches the server's: billing words, and prices of zero or more.
     for (field, value) in
         [("billing", json!("free")), ("price_in", json!(-1.0)), ("price_out", json!(-0.5)), ("price_cached_in", json!(-3))]

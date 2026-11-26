@@ -379,6 +379,7 @@
     audit_disk_critical: { fix: 'Services', href: '/admin/services/' },
     component_silent: { fix: 'Services', href: '/admin/services/' },
     caddy_silent: { fix: 'Services', href: '/admin/services/' },
+    context_truncated: { fix: 'Audit', href: '/admin/audit/calls/' },
     restart_loop: { fix: 'Services', href: '/admin/services/' },
     backup_failed: { fix: 'Backup', href: '/admin/backup/' },
     backup_missed: { fix: 'Backup', href: '/admin/backup/' },
@@ -1914,6 +1915,7 @@
     $('p-key').value = ''; // never prefilled
     $('p-key-hint').textContent = p && p.has_key ? 'Write-only. Empty keeps the current key.' : 'Write-only.';
     $('p-max-tokens').value = v.max_tokens || '';
+    $('p-context-tokens').value = v.context_tokens || '';
     $('p-temperature').value = v.temperature == null ? '' : v.temperature;
     $('p-advanced').open = !!(v.max_tokens || v.temperature != null);
     $('p-billing').value = v.billing || 'metered';
@@ -1965,6 +1967,7 @@
       model: $('p-model').value.trim(),
       api_key: $('p-key').value,
       max_tokens: num('p-max-tokens', (x) => parseInt(x, 10)),
+      context_tokens: num('p-context-tokens', (x) => parseInt(x, 10)),
       temperature: num('p-temperature', parseFloat),
       billing: $('p-billing').value,
       price_in: num('p-price-in', parseFloat),
@@ -2688,6 +2691,7 @@
     $('s-notice-text').value = s.privacy_notice_text || '';
     $('s-warning-on').checked = s.ai_warning_enabled !== false;
     $('s-warning-text').value = s.ai_warning_text || '';
+    $('s-canary-on').checked = s.canary_enabled !== false;
     $('s-theme').value = s.display.theme;
     $('s-width').value = s.display.width;
     $('s-max-height').value = s.display.max_height;
@@ -2805,6 +2809,7 @@
         privacy_notice_text: $('s-notice-text').value,
         ai_warning_enabled: $('s-warning-on').checked,
         ai_warning_text: $('s-warning-text').value,
+        canary_enabled: $('s-canary-on').checked,
         display: {
           theme: $('s-theme').value,
           width: parseInt($('s-width').value, 10),

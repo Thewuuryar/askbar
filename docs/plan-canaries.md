@@ -26,7 +26,7 @@ Everything else is under [Later](#later).
 | --- | --- |
 | Where | `model-gateway` plants, checks and strips canaries. The server, clients and history never see them |
 | Stop reason | `finish_reason` stays the provider's raw string (`Option<String>`), recorded on the attempt span. No enum. Values that matter: `length`, `max_tokens`, `model_context_window_exceeded` |
-| Truncation check | Reported input tokens below `TRUNCATION_RATIO` (0.6) × the estimate from `sent_chars` means `context.truncated`. The constant lives in askbar-proto with its bounds; it is not a setting. Skipped when usage is estimated |
+| Truncation check | Reported input tokens below `TRUNCATION_RATIO` (0.6) × the estimate from `sent_chars` means `context.truncated`. The constant lives in askbar-proto with its bounds; it is not a setting. Skipped when usage is estimated or the estimate is under `MIN_TRUNCATION_CHECK_TOKENS` (200) |
 | Context limit | One nullable `context_tokens` per provider row ("Context limit" in the UI), next to `max_tokens` and with the same plumbing. Not per catalog model: `CatalogEntry` is only `{provider_id, model}` and a provider already carries one `model` |
 | Trimming | The server drops the oldest turns after `last_turns` until the estimate fits `context_tokens − max_tokens`; no limit set means today's behaviour |
 | Canary setting | One `canary_enabled: bool` (default true) in `GatewayConfig` |
@@ -51,7 +51,10 @@ In `crates/askbar-proto/src/lib.rs`, named constants with their bounds:
 
 ```rust
 pub const TRUNCATION_RATIO: f32 = 0.6;
+pub const MIN_TRUNCATION_CHECK_TOKENS: u64 = 200; // below this estimate the check is skipped
 pub const CANARY_TRIGGER_PCT: u8 = 70;
+pub const MIN_CONTEXT_TOKENS: u32 = 1_000; // bounds of a provider's context_tokens
+pub const MAX_CONTEXT_TOKENS: u32 = 10_000_000;
 ```
 
 `context_tokens: Option<u32>` is added to `SnapshotProvider` and the gateway's provider config, the same way as `max_tokens`. The server gets it in its snapshot so it can trim.
@@ -77,55 +80,55 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 
 | Phase | Content | Status |
 | --- | --- | --- |
-| 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | not started |
-| 1 | Raw stop reason and input-count check, record only | not started |
-| 2 | Provider context limit and server trimming | not started |
-| 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | not started |
+| 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | done |
+| 1 | Raw stop reason and input-count check, record only | done |
+| 2 | Provider context limit and server trimming | done |
+| 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | done |
 | Later | See below | not started |
 
 ### Phase 0: records
 
-- [ ] **C0.1** `docs(adr): amend 0054 and 0014: context checks and canaries` · sonnet
+- [x] **C0.1** `docs(adr): amend 0054 and 0014: context checks and canaries` · sonnet
   Files: `docs/adr/0054-model-gateway.md`, `docs/adr/0014-model-gateway-and-providers.md`.
   Do: add the Decisions table above as rules; list what a canary is not (proof of context use, an injection defence).
   Accept: `scripts/check-docs.sh` passes; each ADR's Amendments section names this plan.
-- [ ] **C0.2** `docs(adr): amend 0051 and 0055: canary attributes and ContextTruncated` · haiku · after C0.1
+- [x] **C0.2** `docs(adr): amend 0051 and 0055: canary attributes and ContextTruncated` · haiku · after C0.1
   Files: `docs/adr/0051-auditor.md`, `docs/adr/0055-alerter.md`, `docs/reference/audit/model-calls.md`, `docs/reference/audit/alert-kinds.md`.
   Accept: the reference pages list each new attribute and the alert kind; `scripts/check-reference.sh` passes.
 
 ### Phase 1: stop reason and input count (record only)
 
-- [ ] **C1.1** `fix(model-gateway): record the provider's finish reason` · haiku
+- [x] **C1.1** `fix(model-gateway): record the provider's finish reason` · haiku
   Files: `services/model-gateway/src/llm.rs`, its tests.
   Do: set `finish_reason` in `decode_event` from OpenAI `choices[].finish_reason` and Anthropic `message_delta.delta.stop_reason`, as the raw string. No enum.
   Accept: unit tests for `stop`, `length`, `end_turn`, `max_tokens`, `model_context_window_exceeded` and a missing reason; the attempt span's `finish_reason` is no longer null in `tests/streaming.rs`.
-- [ ] **C1.2** `feat(model-gateway): compare reported input tokens with the estimate` · sonnet · after C1.1
+- [x] **C1.2** `feat(model-gateway): compare reported input tokens with the estimate` · sonnet · after C1.1
   Files: `services/model-gateway/src/{lib,llm}.rs`, `crates/askbar-proto/src/lib.rs`, `tests/e2e/mock_llm.py`, `tests/e2e/mock_llm_test.py`, tests.
   Do: estimate input tokens from `sent_chars` (already computed in `stream_chat_report`); after the reply set, on the attempt span, `attrs.context = {estimated_in, reported_in, truncated, stop}`. `truncated` uses `TRUNCATION_RATIO`. Skip when usage is itself estimated. Add a mock-LLM mode that drops the oldest messages to a size and reports the smaller input count, like Ollama ([ADR 0043](adr/0043-mock-llm.md)).
   Accept: a mock-LLM test in truncation mode gives `truncated: true`; a normal reply gives `false`; nothing changes in routing or the reply.
 
 ### Phase 2: provider context limit and trimming
 
-- [ ] **C2.1** `feat(admin): add a context limit to providers` · sonnet · after C1.1
+- [x] **C2.1** `feat(admin): add a context limit to providers` · sonnet · after C1.1
   Files: `crates/askbar-proto/src/lib.rs`, `services/admin/src/{db,admin_api,gateway_link,server_link}.rs`, `services/admin/src/ui/templates/providers.html`, `services/admin/src/ui/app.js`, `docs/openapi/admin.v1.yaml`, admin browser test.
   Do: `context_tokens: Option<u32>` on `SnapshotProvider`, the gateway provider config and the provider row, with the same plumbing as `max_tokens`: an admin db migration adding a nullable column, the snapshot and the gateway config. A "Context limit" field in the providers form, with the help text that the effective limit is usually lower than advertised. Bounds next to the field.
   Accept: old config JSON parses unchanged; the OpenAPI test passes; a push carries the value; the field saves and reloads in the browser test.
-- [ ] **C2.2** `feat(server): trim history to the provider's context limit` · sonnet · after C2.1
+- [x] **C2.2** `feat(server): trim history to the provider's context limit` · sonnet · after C2.1
   Files: `services/server/src/{llm,generation}.rs`, tests.
   Do: after `last_turns` in `generation.rs`, drop the oldest turns until the estimate fits `context_tokens − max_tokens`; always keep the system prompt and the newest message; record `trimmed_turns` on the turn span.
   Accept: a test with a small limit sends fewer turns and records the count; no limit set means today's behaviour.
 
 ### Phase 3: echo canary
 
-- [ ] **C3.1** `feat(model-gateway): plant and check the context canary` · sonnet · after C2.1 and PII-P2.2
+- [x] **C3.1** `feat(model-gateway): plant and check the context canary` · sonnet · after C2.1 and PII-P2.2
   Files: `crates/askbar-proto/src/gateway.rs`, `services/model-gateway/src/{lib,filter,canary}.rs`, tests.
   Do: add `canary_enabled` and `CANARY_TRIGGER_PCT`. When enabled, a limit is set and the estimate is at or above the trigger, plant A and B and the instruction. Extend the PII filter struct to hold back and strip marker text. Write `attrs.canary = {planted, outcome, instruction_version}` on a `canary` step span under the attempt (AV2.1).
   Accept: property tests split markers at every byte boundary and the client never receives a partial marker; mock-LLM tests for each outcome; no canary when no limit is set or below 70%; nonces appear in no log or attribute (a test greps for them).
-- [ ] **C3.2** `feat(auditor): alert on truncated context` · sonnet · after C3.1 and AV2.1
+- [x] **C3.2** `feat(auditor): alert on truncated context` · sonnet · after C3.1 and AV2.1
   Files: `crates/askbar-proto/src/alerter.rs`, `services/auditor/src/{rules,lib}.rs`, tests.
   Do: add a new `Fed` path for span finish and step records, since `fed_of` maps only `AdminAction`, `Hello` and turn `Start`; raise `ContextTruncated` on `front_lost` or `context.truncated`. Check `services/alerter/src/limits.rs` first and reuse its limits if they fit.
   Accept: `front_lost` or `truncated` raises one alert within the limits; `absent` does not alert.
-- [ ] **C3.3** `feat(ui): context canary checkbox` · haiku · after C3.1
+- [x] **C3.3** `feat(ui): context canary checkbox` · haiku · after C3.1
   Files: admin settings template, `app.js`, `admin_api.rs`, `docs/openapi/admin.v1.yaml`, admin browser test.
   Accept: the checkbox saves, pushes and shows in the gateway's status.
 

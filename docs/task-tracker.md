@@ -17,14 +17,14 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | 41 | 0 | 1 | 42 |
 | [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 14 | 0 | 4 | 18 |
 | [Tiered routing Phase 6: agents](plan-tiered-routing/phase-6-agents.md) | 0 | 0 | 31 | 31 |
-| [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 7 | 0 | 3 | 10 |
+| [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 7 | 0 | 10 | 17 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 11 | 0 | 0 | 11 |
-| [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **151** | **0** | **160** | **311** |
+| [Context checks and canaries](plan-canaries.md) | 9 | 0 | 0 | 9 |
+| **Total** | **160** | **0** | **158** | **318** |
 
-## Completed (150)
+## Completed (160)
 
 ### Refactor (track 0)
 
@@ -204,11 +204,23 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[PII-P2.6](plan-pii-redaction.md)** check search queries and fetch URLs for PII
 - [x] **[PII-P3.2](plan-pii-redaction.md)** Privacy page
 
+### Context checks and canaries (track 3)
+
+- [x] **[C0.1](plan-canaries.md)** amend 0054 and 0014: context checks and canaries
+- [x] **[C0.2](plan-canaries.md)** amend 0051 and 0055: canary attributes and ContextTruncated
+- [x] **[C1.1](plan-canaries.md)** record the provider's finish reason
+- [x] **[C1.2](plan-canaries.md)** compare reported input tokens with the estimate
+- [x] **[C2.1](plan-canaries.md)** add a context limit to providers
+- [x] **[C2.2](plan-canaries.md)** trim history to the provider's context limit
+- [x] **[C3.1](plan-canaries.md)** plant and check the context canary
+- [x] **[C3.2](plan-canaries.md)** alert on truncated context
+- [x] **[C3.3](plan-canaries.md)** context canary checkbox
+
 ## In progress (0)
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (165)
+## Not started (158)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -400,15 +412,3 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P10.8](plan-tiered-routing/phase-10-script-library.md)** track success, demote and retire scripts
 - [ ] **[P10.9](plan-tiered-routing/phase-10-script-library.md)** unpromoted or changed scripts do not run
 - [ ] **[P10.10](plan-tiered-routing/phase-10-script-library.md)** amend 0016, 0054, 0039, 0040 for the library
-
-### Context checks and canaries (track 3)
-
-- [ ] **[C0.1](plan-canaries.md)** amend 0054 and 0014: context checks and canaries
-- [ ] **[C0.2](plan-canaries.md)** amend 0051 and 0055: canary attributes and ContextTruncated
-- [ ] **[C1.1](plan-canaries.md)** record the provider's finish reason
-- [ ] **[C1.2](plan-canaries.md)** compare reported input tokens with the estimate
-- [ ] **[C2.1](plan-canaries.md)** add a context limit to providers
-- [ ] **[C2.2](plan-canaries.md)** trim history to the provider's context limit
-- [ ] **[C3.1](plan-canaries.md)** plant and check the context canary
-- [ ] **[C3.2](plan-canaries.md)** alert on truncated context
-- [ ] **[C3.3](plan-canaries.md)** context canary checkbox

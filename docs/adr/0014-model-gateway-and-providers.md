@@ -42,3 +42,4 @@ A compromised server can still misuse model access through `model-gateway`, with
 
 ## Amendments
 - 2026-11-26 (accepted by the owner): the gateway is the last hop before a provider, so it also detects personal data in a request and replaces it with placeholders, restored in the reply; the rules are in [0054](0054-model-gateway.md), not repeated here.
+- 2026-11-26 (proposed, not yet accepted by the owner): the gateway also records the provider's stop reason and checks the context a provider received (a limit on the provider, trimming, and an echo canary); the rules are in [0054](0054-model-gateway.md), not repeated here ([plan-canaries.md](../plan-canaries.md)).

@@ -106,6 +106,8 @@
           {% call c::field("Cached input", "p-price-cached", "", "number", false) %}{% endcall %}
         </div>
         <p class="hint">Per million tokens. Leave empty if unknown: cost then shows as unknown, not as zero.</p>
+        {% call c::field("Context limit", "p-context-tokens", "", "slot", true) %}<input id="p-context-tokens" name="p-context-tokens" type="number" inputmode="numeric" min="{{ crate::constants::MIN_CONTEXT_TOKENS }}" max="{{ crate::constants::MAX_CONTEXT_TOKENS }}" step="1" aria-describedby="p-context-tokens-hint p-context-tokens-error">{% endcall %}
+        <p class="hint" id="p-context-tokens-hint">Tokens, from {{ crate::constants::MIN_CONTEXT_TOKENS }} to {{ crate::constants::MAX_CONTEXT_TOKENS }}. The effective limit is usually much lower than the one the provider advertises, so set it below that. Leave empty for no limit.</p>
         <details id="p-advanced" class="advanced">
           <summary>Advanced: max tokens, temperature</summary>
           {% call c::field("Max tokens", "p-max-tokens", "", "number", true) %}{% endcall %}
