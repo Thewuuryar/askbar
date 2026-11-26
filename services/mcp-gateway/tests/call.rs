@@ -534,3 +534,144 @@ async fn search_without_searxng_is_not_available() {
     let rig = start_full(true, Auditor::Up, Registry::builtin(None), 30).await;
     assert_eq!(code(&search(&rig, "t", "q", "n1").await), (501, "tool_not_available"));
 }
+
+// ---- PII in a query and a URL (PII-P2.6) ----
+
+const KEY: &str = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv";
+
+/// Pushes the same config again with the PII settings `mode` (`detect_only` or `enforce`) switched on.
+async fn pii_on(rig: &Rig, mode: &str) {
+    let cfg = json!({"fetch_max_bytes": 1048576, "fetch_timeout_secs": 20, "fetch_redirects": 3, "tool_call_timeout_secs": 30,
+        "one_time_id_window_secs": 120, "search_results": 8, "remembered_urls": 50,
+        "approval_public_key": hex(&rig.pk), "approval_key_version": 1,
+        "permissions": {"alice": {"allowed": ["fetch", "search"]}},
+        "pii": {"enabled": true, "mode": mode}});
+    let r = reqwest::Client::new().put(format!("{}/config", rig.admin_url)).bearer_auth(ADMIN).json(&cfg).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+}
+
+async fn search_rig(mode: Option<&str>) -> (Rig, Sent) {
+    let (addr, sent) = fake_searxng().await;
+    let rig = start_full(true, Auditor::Up, Registry::builtin(Some(addr)), 30).await;
+    if let Some(m) = mode {
+        pii_on(&rig, m).await;
+    }
+    (rig, sent)
+}
+
+fn spans_text(rig: &Rig) -> String {
+    format!("{:?}{}", rig.seen.lock().unwrap(), serde_json::to_string(&rig.g.status()).unwrap())
+}
+
+#[tokio::test]
+async fn an_email_in_a_query_is_cut_out_before_the_engine_and_the_result_says_so() {
+    let (rig, sent) = search_rig(Some("enforce")).await;
+    let r = search(&rig, "t", "best pizza ann@example.org near me", "p1").await;
+    assert_eq!(r.0, 200);
+    assert_eq!(r.1["result"]["left_out"], 1);
+    let sent = sent.lock().unwrap().clone();
+    assert!(sent.len() == 1 && sent[0].2.contains("q=best+pizza+near+me&") && !sent[0].2.contains("example"), "{sent:?}");
+    let spans = settled(&rig).await;
+    let attrs = &spans[0].1["attrs"];
+    assert_eq!((&attrs["pii"], &attrs["left_out"]), (&json!({"EMAIL": 1}), &json!(1)));
+    assert!(attrs["action_hash"].is_string());
+    let text = spans_text(&rig);
+    assert!(!text.contains("ann@") && !text.contains("example.org") && !text.contains("pizza"), "a value reached a span or the status");
+}
+
+#[tokio::test]
+async fn a_query_with_a_provider_key_is_refused_before_the_engine_and_any_span() {
+    let (rig, sent) = search_rig(Some("enforce")).await;
+    let r = search(&rig, "t", &format!("why does {KEY} fail"), "p2").await;
+    assert_eq!(code(&r), (400, "pii_blocked"), "{r:?}");
+    assert_eq!(r.1["types"], json!(["API_KEY"]));
+    assert!(sent.lock().unwrap().is_empty(), "the engine was not called");
+    assert!(rig.seen.lock().unwrap().iter().all(|(p, _, _)| !p.contains("/spans")), "no tool span");
+    assert_eq!(rig.g.tool_runs.load(Ordering::SeqCst), 0);
+    assert_eq!(rig.g.status().calls.get("refused_pii"), Some(&1));
+    assert!(!format!("{r:?}{}", spans_text(&rig)).contains("AbCdEf"), "the key leaked");
+}
+
+#[tokio::test]
+async fn a_query_that_is_only_private_data_is_refused_for_having_nothing_left() {
+    let (rig, sent) = search_rig(Some("enforce")).await;
+    let r = search(&rig, "t", "ann@example.org", "p3").await;
+    assert_eq!(code(&r).1, "pii_blocked");
+    assert_eq!(r.1["types"], json!(["EMAIL"]));
+    assert!(sent.lock().unwrap().is_empty() && !r.1.to_string().contains("example.org"));
+    assert_eq!(rig.g.status().calls.get("refused_pii"), Some(&1));
+}
+
+#[tokio::test]
+async fn detect_only_and_off_send_the_query_unchanged_and_detect_only_counts() {
+    let q = "best pizza ann@example.org near me";
+    let (rig, sent) = search_rig(Some("detect_only")).await;
+    let r = search(&rig, "t", q, "p4").await;
+    assert!(r.0 == 200 && r.1["result"].get("left_out").is_none());
+    assert!(sent.lock().unwrap()[0].2.contains("ann%40example.org"));
+    let spans = settled(&rig).await;
+    assert_eq!(spans[0].1["attrs"]["pii"], json!({"EMAIL": 1}));
+    // A key is only counted in detect_only.
+    assert_eq!(search(&rig, "t", &format!("x {KEY}"), "p5").await.0, 200);
+    let (rig, sent) = search_rig(None).await;
+    assert_eq!(search(&rig, "t", q, "p6").await.0, 200);
+    assert!(sent.lock().unwrap()[0].2.contains("ann%40example.org"));
+    assert!(settled(&rig).await[0].1["attrs"].get("pii").is_none());
+}
+
+#[tokio::test]
+async fn the_approval_is_checked_against_the_original_query_before_pii_runs() {
+    let (rig, sent) = search_rig(Some("enforce")).await;
+    let act = |q: &str| ToolAction {
+        tool: "search".into(),
+        arguments: json!({"query": q}),
+        destination: "searxng".into(),
+        provenance: Provenance::User,
+        query_data: false,
+    };
+    // Signed for the cleaned text, sent with the email: the hash covers the original, so this is a swap.
+    let a = sign(&act("best pizza near me"), "t", "alice", "p7", now() + 60, &rig.sk).unwrap();
+    let b = json!({"arguments": {"query": "best pizza ann@example.org near me"}, "destination": "searxng", "provenance": "user", "approval": a});
+    let r = reqwest::Client::new().post(format!("{}/tools/search/call", rig.url)).bearer_auth(SERVER).json(&b).send().await.unwrap();
+    assert_eq!(r.json::<Value>().await.unwrap()["error"], "approval_action_swapped");
+    assert!(sent.lock().unwrap().is_empty());
+    assert_eq!(rig.g.status().calls.get("refused_pii"), None);
+}
+
+/// A registry whose `fetch` echoes the URL it was given.
+async fn fetch_rig(mode: &str) -> Rig {
+    let rig = start_full(true, Auditor::Up, fetch_only(handler(|a| async move { Ok(json!({"url": a.arguments["url"]})) })), 30).await;
+    pii_on(&rig, mode).await;
+    rig
+}
+
+#[tokio::test]
+async fn a_secret_in_a_fetch_url_refuses_with_the_type_and_other_pii_is_only_counted() {
+    let rig = fetch_rig("enforce").await;
+    let tok = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let u = format!("https://example.com/p?t={tok}");
+    let r = post(&rig, SERVER, &body(&rig.sk, &u, &u, "f1", now() + 60)).await;
+    assert_eq!(code(&r).1, "pii_blocked");
+    assert_eq!(r.1["types"], json!(["GITHUB_TOKEN"]));
+    assert!(!spans_text(&rig).contains("abcdefghij") && !r.1.to_string().contains("abcdefghij"));
+    assert!(rig.seen.lock().unwrap().iter().all(|(p, _, _)| !p.contains("/spans")), "no tool span");
+    assert_eq!(rig.g.status().calls.get("refused_pii"), Some(&1));
+
+    let u = "https://example.com/p?mail=ann@example.org";
+    let a = sign(&ToolAction { query_data: true, ..action(u) }, "task1", "alice", "f2", now() + 60, &rig.sk).unwrap();
+    let b = json!({"arguments": {"url": u}, "destination": "example.com", "provenance": "user", "query_data": true, "approval": a});
+    let r = post(&rig, SERVER, &b).await;
+    assert_eq!(r.1["result"]["url"], u, "the address is fetched as it is");
+    let attrs = settled(&rig).await[0].1["attrs"].clone();
+    assert_eq!((&attrs["pii"], &attrs["left_out"]), (&json!({"EMAIL": 1}), &json!(0)));
+    assert!(!attrs.to_string().contains("ann@"));
+}
+
+#[tokio::test]
+async fn detect_only_does_not_refuse_a_fetch_url_with_a_secret() {
+    let rig = fetch_rig("detect_only").await;
+    let u = "https://example.com/p?t=ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let r = post(&rig, SERVER, &body(&rig.sk, u, u, "f3", now() + 60)).await;
+    assert_eq!(r.0, 200, "{r:?}");
+    assert_eq!(settled(&rig).await[0].1["attrs"]["pii"], json!({"GITHUB_TOKEN": 1}));
+}

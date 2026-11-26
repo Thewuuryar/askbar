@@ -13,6 +13,9 @@ backup = ["dep:age"]
 # Approvals (plan 5a, P5.5): Ed25519 keys, sign and verify for one tool action. ring is already in the lock file (rustls).
 # Off unless a service asks for it, so the others do not link a ring of their own choosing.
 approval = ["dep:ring"]
+# PII detection (plan PII-P2.6): the patterns and checksums the model gateway and the MCP gateway front share. regex is already in the lock file.
+# Off unless a service asks for it, so the others do not link a regex engine they never use.
+pii = ["dep:regex"]
 
 [dependencies]
 # 0.11, not 0.12: 0.12 pulls crypto-bigint 0.5.5 (RUSTSEC-2026-0387, through P-256 support we never call), which cargo deny refuses.
@@ -23,6 +26,7 @@ axum = "0.8"
 base64 = "0.22"
 futures-util = "0.3"
 ring = { version = "0.17", default-features = false, optional = true }
+regex = { version = "1", default-features = false, features = ["std"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

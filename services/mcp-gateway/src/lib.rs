@@ -14,6 +14,7 @@ mod constants;
 pub mod fetch;
 pub mod fetch_rules;
 pub mod permissions;
+mod pii;
 pub mod registry;
 pub mod search;
 pub mod status;
