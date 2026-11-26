@@ -145,7 +145,7 @@ pub const MAX_BACKUP_KEEP_DAYS: u32 = 3650;
 
 // Pages.
 /// Every admin page's slug (`/admin/<slug>/`), in menu order. `pages::PAGES` lists the same, which a test checks.
-pub const PAGE_SLUGS: [&str; 18] = [
+pub const PAGE_SLUGS: [&str; 19] = [
     "home",
     "alerts",
     "audit/calls",
@@ -161,6 +161,7 @@ pub const PAGE_SLUGS: [&str; 18] = [
     "services",
     "network",
     "security",
+    "privacy",
     "backup",
     "notifications",
     "reference",
@@ -179,6 +180,7 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/services",
     "settings/network",
     "settings/security",
+    "settings/privacy",
     "settings/backup",
     "settings/notifications",
     "settings/general",
@@ -213,6 +215,10 @@ pub const HELP_TOPICS: &[&str] = &[
     "settings/security#rotate-the-audit-key",
     "settings/security#backup-key",
     "settings/security#danger-zone",
+    "settings/privacy#redaction",
+    "settings/privacy#types",
+    "settings/privacy#terms",
+    "settings/privacy#what-it-does-not-do",
     "settings/backup#back-up-now",
     "settings/backup#scheduled-backups",
     "settings/backup#how-long-backups-are-kept",
@@ -347,7 +353,7 @@ struct Constants {
     home_stats_window_days: u32,
     home_stats_window_secs: i64,
     home_stats_range_days: [u32; 3],
-    page_slugs: [&'static str; 18],
+    page_slugs: [&'static str; 19],
     searxng_engines: [(&'static str, &'static str); 4],
     landing_page: &'static str,
     help_topics: &'static [&'static str],
