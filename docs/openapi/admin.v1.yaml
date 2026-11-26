@@ -2775,6 +2775,9 @@ components:
           type: string
         max_tokens:
           type: [integer, 'null']
+        context_tokens:
+          type: [integer, 'null']
+          description: Input plus output token limit for a request. Null means no limit.
         temperature:
           type: [number, 'null']
         has_key:
@@ -2861,6 +2864,11 @@ components:
           description: Write-only. Missing or empty on update keeps the current key.
         max_tokens:
           type: integer
+        context_tokens:
+          type: integer
+          minimum: 1000
+          maximum: 10000000
+          description: Optional. The effective limit is usually lower than the advertised one. Missing or null clears it.
         temperature:
           type: number
         billing:

@@ -140,6 +140,9 @@ pub struct SnapshotProvider {
     pub model: String,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// The most input plus output tokens the administrator lets a request use. Missing means no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
@@ -384,6 +387,10 @@ them. A sealed copy of each goes to the audit record. Only the administrator can
 pub const TRUNCATION_RATIO: f32 = 0.6;
 /// Below this many estimated input tokens the estimate is too rough to compare with.
 pub const MIN_TRUNCATION_CHECK_TOKENS: u64 = 200;
+
+/// Bounds of a provider's `context_tokens`: below the floor nothing useful fits, above the ceiling it is a typo.
+pub const MIN_CONTEXT_TOKENS: u32 = 1_000;
+pub const MAX_CONTEXT_TOKENS: u32 = 10_000_000;
 
 /// Audit records are kept this long unless the administrator says otherwise (ADR 0013, ADR 0051).
 pub const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 30;
@@ -844,6 +851,8 @@ mod tests {
         let p: SnapshotProvider = serde_json::from_str(r#"{"id":"p","name":"n","type":"openai","model":"m"}"#).unwrap();
         assert_eq!(p.billing, Billing::Metered);
         assert_eq!((p.price_in, p.price_out, p.price_cached_in), (None, None, None));
+        assert_eq!(p.context_tokens, None, "an old provider has no context limit");
+        assert!(!serde_json::to_string(&p).unwrap().contains("context_tokens"));
         let p: SnapshotProvider = serde_json::from_str(
             r#"{"id":"p","name":"n","type":"openai","model":"m","billing":"subscription","allow_as_fallback":true,"price_in":2.5,"price_out":10,"price_cached_in":0.25}"#,
         )
@@ -881,6 +890,7 @@ mod tests {
             base_url: String::new(),
             model: "m".into(),
             max_tokens: Some(1),
+            context_tokens: None,
             temperature: Some(0.5),
             headers: Default::default(),
             billing: Billing::Subscription,

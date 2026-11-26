@@ -86,6 +86,9 @@ pub fn validate(s: &Snapshot) -> Result<(), String> {
                 return Err(format!("provider {}: {label} must be zero or more", p.id));
             }
         }
+        if p.context_tokens.is_some_and(|n| !(askbar_proto::MIN_CONTEXT_TOKENS..=askbar_proto::MAX_CONTEXT_TOKENS).contains(&n)) {
+            return Err(format!("provider {}: context_tokens is out of range", p.id));
+        }
     }
     if let Some(id) = &s.default_provider_id {
         if !ids.contains(id.as_str()) {
@@ -202,6 +205,22 @@ mod tests {
             set(&mut bad.providers[0]);
             let e = validate(&bad).unwrap_err();
             assert!(e.contains("zero or more") && e.contains("p1"), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_provider_context_limit_is_unset_or_within_bounds() {
+        let mut s = crate::testing::empty_snapshot();
+        s.providers.push(crate::testing::provider("p1", "one", "http://x/v1", "m"));
+        for (n, ok) in [
+            (Some(askbar_proto::MIN_CONTEXT_TOKENS), true),
+            (Some(askbar_proto::MAX_CONTEXT_TOKENS), true),
+            (None, true),
+            (Some(999), false),
+            (Some(askbar_proto::MAX_CONTEXT_TOKENS + 1), false),
+        ] {
+            s.providers[0].context_tokens = n;
+            assert_eq!(validate(&s).is_ok(), ok, "{n:?}");
         }
     }
 

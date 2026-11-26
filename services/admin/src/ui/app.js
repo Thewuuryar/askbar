@@ -1914,6 +1914,7 @@
     $('p-key').value = ''; // never prefilled
     $('p-key-hint').textContent = p && p.has_key ? 'Write-only. Empty keeps the current key.' : 'Write-only.';
     $('p-max-tokens').value = v.max_tokens || '';
+    $('p-context-tokens').value = v.context_tokens || '';
     $('p-temperature').value = v.temperature == null ? '' : v.temperature;
     $('p-advanced').open = !!(v.max_tokens || v.temperature != null);
     $('p-billing').value = v.billing || 'metered';
@@ -1965,6 +1966,7 @@
       model: $('p-model').value.trim(),
       api_key: $('p-key').value,
       max_tokens: num('p-max-tokens', (x) => parseInt(x, 10)),
+      context_tokens: num('p-context-tokens', (x) => parseInt(x, 10)),
       temperature: num('p-temperature', parseFloat),
       billing: $('p-billing').value,
       price_in: num('p-price-in', parseFloat),

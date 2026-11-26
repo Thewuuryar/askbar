@@ -204,6 +204,7 @@ fn provider(rig: &Rig, id: &str, model: &str) -> GatewayProvider {
         base_url: format!("http://127.0.0.1:{}/v1", rig.mock.port),
         model: model.into(),
         max_tokens: None,
+        context_tokens: None,
         temperature: None,
         headers: Default::default(),
         api_key: MARKER_KEY.into(),

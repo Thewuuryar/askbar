@@ -96,6 +96,7 @@ async fn gateway(up: &str) -> G {
         base_url: base,
         model: "m".into(),
         max_tokens: None,
+        context_tokens: None,
         temperature: None,
         headers: Default::default(),
         api_key: key.into(),

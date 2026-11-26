@@ -90,6 +90,7 @@ pub fn build_config(conn: &Connection, secrets: &AdminSecrets, managed: Option<&
                 base_url: p.base_url,
                 model: p.model,
                 max_tokens: p.max_tokens,
+                context_tokens: p.context_tokens,
                 temperature: p.temperature,
                 headers: p.headers,
                 api_key,

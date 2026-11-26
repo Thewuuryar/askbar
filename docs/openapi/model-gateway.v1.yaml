@@ -727,6 +727,8 @@ components:
           type: string
         max_tokens:
           type: [integer, 'null']
+        context_tokens:
+          type: [integer, 'null']
         temperature:
           type: [number, 'null']
         headers:

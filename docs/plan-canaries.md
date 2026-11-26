@@ -53,6 +53,8 @@ In `crates/askbar-proto/src/lib.rs`, named constants with their bounds:
 pub const TRUNCATION_RATIO: f32 = 0.6;
 pub const MIN_TRUNCATION_CHECK_TOKENS: u64 = 200; // below this estimate the check is skipped
 pub const CANARY_TRIGGER_PCT: u8 = 70;
+pub const MIN_CONTEXT_TOKENS: u32 = 1_000; // bounds of a provider's context_tokens
+pub const MAX_CONTEXT_TOKENS: u32 = 10_000_000;
 ```
 
 `context_tokens: Option<u32>` is added to `SnapshotProvider` and the gateway's provider config, the same way as `max_tokens`. The server gets it in its snapshot so it can trim.
@@ -80,7 +82,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 | --- | --- | --- |
 | 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | done |
 | 1 | Raw stop reason and input-count check, record only | done |
-| 2 | Provider context limit and server trimming | not started |
+| 2 | Provider context limit and server trimming | in progress |
 | 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | not started |
 | Later | See below | not started |
 
@@ -107,7 +109,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 
 ### Phase 2: provider context limit and trimming
 
-- [ ] **C2.1** `feat(admin): add a context limit to providers` · sonnet · after C1.1
+- [x] **C2.1** `feat(admin): add a context limit to providers` · sonnet · after C1.1
   Files: `crates/askbar-proto/src/lib.rs`, `services/admin/src/{db,admin_api,gateway_link,server_link}.rs`, `services/admin/src/ui/templates/providers.html`, `services/admin/src/ui/app.js`, `docs/openapi/admin.v1.yaml`, admin browser test.
   Do: `context_tokens: Option<u32>` on `SnapshotProvider`, the gateway provider config and the provider row, with the same plumbing as `max_tokens`: an admin db migration adding a nullable column, the snapshot and the gateway config. A "Context limit" field in the providers form, with the help text that the effective limit is usually lower than advertised. Bounds next to the field.
   Accept: old config JSON parses unchanged; the OpenAPI test passes; a push carries the value; the field saves and reloads in the browser test.

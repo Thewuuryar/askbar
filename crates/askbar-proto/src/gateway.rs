@@ -21,6 +21,8 @@ pub struct GatewayProvider {
     pub model: String,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
@@ -341,6 +343,7 @@ mod tests {
             base_url: String::new(),
             model: "m".into(),
             max_tokens: None,
+            context_tokens: None,
             temperature: None,
             headers: Default::default(),
             api_key: "sk-marker-secret".into(),
