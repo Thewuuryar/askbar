@@ -21,7 +21,10 @@
 //! Inside a fenced code block (``` or ~~~) only secrets (and `CUSTOM` terms, which the admin chose) are kept: hashes,
 //! UUIDs and identifiers are the false positives there. `allow_terms` drop a span whose text equals one.
 
-use askbar_proto::pii::{PiiConfig, API_KEY, CARD, CUSTOM, EMAIL, GITHUB_TOKEN, IBAN, IP, JWT, NATIONAL_ID, PHONE, PRIVATE_KEY};
+use askbar_proto::gateway::ChatMessage;
+use askbar_proto::pii::{
+    PiiAction, PiiConfig, PiiMode, API_KEY, CARD, CUSTOM, EMAIL, GITHUB_TOKEN, IBAN, IP, JWT, NATIONAL_ID, PHONE, PRIVATE_KEY,
+};
 use regex::Regex;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
@@ -257,10 +260,11 @@ fn fences(t: &str) -> Vec<(usize, usize)> {
 /// ASCII-case-insensitive substring search on char boundaries.
 fn find_term(t: &str, term: &str, out: &mut Vec<Span>) {
     let (h, n) = (t.as_bytes(), term.as_bytes());
-    for i in 0..=h.len().saturating_sub(n.len()) {
-        if !n.is_empty()
-            && h[i].eq_ignore_ascii_case(&n[0])
-            && h[i..].len() >= n.len()
+    if n.is_empty() || h.len() < n.len() {
+        return;
+    }
+    for i in 0..=h.len() - n.len() {
+        if h[i].eq_ignore_ascii_case(&n[0])
             && h[i..i + n.len()].eq_ignore_ascii_case(n)
             && t.is_char_boundary(i)
             && t.is_char_boundary(i + n.len())
@@ -308,20 +312,83 @@ pub fn detect(text: &str, cfg: &PiiConfig) -> Vec<Span> {
     out
 }
 
-/// The `redact` step's attributes: counts by type, what the configuration would do with each type, and the mode.
-/// `None` when nothing was found, so a clean request adds nothing to the trace. No value, snippet or offset.
-pub fn step_attrs<'a>(cfg: &PiiConfig, texts: impl IntoIterator<Item = &'a str>) -> Option<serde_json::Value> {
+/// Said once to the model when a placeholder went in. It names no value.
+pub const PLACEHOLDER_NOTE: &str = "Some private values in this conversation are replaced by placeholders like \u{27e6}EMAIL_1\u{27e7}. They stand for the real values: reuse them exactly as written.";
+
+/// A request as the provider gets it, with what the reply filter needs. Built once per request, kept in memory only:
+/// `reverse` holds real values and must never be logged, recorded or returned (plan Decisions).
+pub struct Redacted {
+    pub system: String,
+    pub messages: Vec<ChatMessage>,
+    /// (placeholder, first original text), in numbering order. For the reply filter (PII-P2.2).
+    pub reverse: Vec<(String, String)>,
+    /// The `redact` step's attributes: counts by type, what the configuration does with each type, the mode, and in
+    /// `enforce` the number of values replaced. `None` when nothing was found, so a clean request adds nothing to the
+    /// trace. No value, snippet or offset.
+    pub step: Option<serde_json::Value>,
+}
+
+/// What makes two values the same value: email and custom terms ignore case, a phone is its digits (and a leading `+`),
+/// a card or IBAN its letters and digits in capitals. Secrets and the rest are exact.
+fn normalise(ty: &str, v: &str) -> String {
+    match ty {
+        EMAIL | CUSTOM => v.to_lowercase(),
+        PHONE => v.chars().filter(|c| c.is_ascii_digit() || (*c == '+' && v.starts_with('+'))).collect(),
+        CARD | IBAN => v.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).collect(),
+        _ => v.to_string(),
+    }
+}
+
+/// Detects over the system text, then the messages in order. In `enforce` each value whose action is `Pseudonymize`
+/// becomes `⟦TYPE_n⟧`, `n` counting the distinct values of that type by first occurrence. `Block` and `Allow` values stay
+/// (a blocked value is refused at the gate, PII-P2.3). Any other mode changes nothing. Deterministic: no state outside
+/// the arguments.
+pub fn redact(cfg: &PiiConfig, system: &str, messages: &[ChatMessage]) -> Redacted {
+    let enforce = cfg.enabled && cfg.mode == PiiMode::Enforce;
     let mut counts = std::collections::BTreeMap::<&str, u64>::new();
-    for t in texts {
-        for s in detect(t, cfg) {
+    let mut seen: Vec<(&str, String)> = Vec::new(); // (type, normalised value); the index in `reverse` is the order
+    let mut reverse: Vec<(String, String)> = Vec::new();
+    let mut replaced = 0u64;
+    let mut one = |text: &str| -> String {
+        let spans = detect(text, cfg);
+        let (mut out, mut at) = (String::new(), 0);
+        for s in &spans {
             *counts.entry(s.ty).or_default() += 1;
+            if !enforce || cfg.action_for(s.ty) != PiiAction::Pseudonymize {
+                continue;
+            }
+            let (orig, norm) = (&text[s.start..s.end], normalise(s.ty, &text[s.start..s.end]));
+            let n = match seen.iter().filter(|(t, _)| *t == s.ty).position(|(_, v)| *v == norm) {
+                Some(i) => i + 1,
+                None => {
+                    seen.push((s.ty, norm));
+                    let n = seen.iter().filter(|(t, _)| *t == s.ty).count();
+                    reverse.push((format!("\u{27e6}{}_{n}\u{27e7}", s.ty), orig.to_string()));
+                    n
+                }
+            };
+            out.push_str(&text[at..s.start]);
+            out.push_str(&format!("\u{27e6}{}_{n}\u{27e7}", s.ty));
+            at = s.end;
+            replaced += 1;
         }
+        out.push_str(&text[at..]);
+        out
+    };
+    let mut system = one(system);
+    let messages: Vec<ChatMessage> = messages.iter().map(|m| ChatMessage { role: m.role.clone(), content: one(&m.content) }).collect();
+    if replaced > 0 {
+        system = if system.is_empty() { PLACEHOLDER_NOTE.into() } else { format!("{system}\n\n{PLACEHOLDER_NOTE}") };
     }
-    if counts.is_empty() {
-        return None;
-    }
-    let actions: std::collections::BTreeMap<&str, _> = counts.keys().map(|ty| (*ty, cfg.action_for(ty))).collect();
-    Some(serde_json::json!({ "pii": { "counts": counts, "actions": actions, "mode": cfg.mode } }))
+    let step = (!counts.is_empty()).then(|| {
+        let actions: std::collections::BTreeMap<&str, _> = counts.keys().map(|ty| (*ty, cfg.action_for(ty))).collect();
+        let mut pii = serde_json::json!({ "counts": counts, "actions": actions, "mode": cfg.mode });
+        if enforce {
+            pii["replaced"] = replaced.into();
+        }
+        serde_json::json!({ "pii": pii })
+    });
+    Redacted { system, messages, reverse, step }
 }
 
 #[cfg(test)]
@@ -335,6 +402,11 @@ mod tests {
     /// (type, text) of each span.
     fn found(t: &str) -> Vec<(&'static str, String)> {
         detect(t, &on()).into_iter().map(|s| (s.ty, t[s.start..s.end].to_string())).collect()
+    }
+
+    fn step_attrs<'a>(cfg: &PiiConfig, texts: impl IntoIterator<Item = &'a str>) -> Option<serde_json::Value> {
+        let msgs: Vec<ChatMessage> = texts.into_iter().map(|t| ChatMessage::new("user", t)).collect();
+        redact(cfg, "", &msgs).step
     }
 
     fn only(t: &str, ty: &'static str) -> bool {
@@ -521,5 +593,80 @@ mod tests {
         let ms = t.elapsed().as_millis();
         assert!(spans.is_empty() && big.len() >= 100_000);
         assert!(ms < 100, "{ms} ms for {} bytes", big.len());
+    }
+
+    fn enforce() -> PiiConfig {
+        PiiConfig { enabled: true, mode: PiiMode::Enforce, ..Default::default() }
+    }
+
+    fn run(cfg: &PiiConfig, system: &str, msgs: &[&str]) -> Redacted {
+        let m: Vec<ChatMessage> = msgs.iter().map(|t| ChatMessage::new("user", t)).collect();
+        redact(cfg, system, &m)
+    }
+
+    #[test]
+    fn same_value_same_placeholder_and_types_number_apart() {
+        let r =
+            run(&enforce(), "ask a@b.co", &["a@b.co, A@B.CO, c@d.co and +1 555 123 4567 / +1-555-123-4567", "c@d.co again, 555-123-4567"]);
+        assert!(r.system.starts_with("ask \u{27e6}EMAIL_1\u{27e7}\n\n"), "{}", r.system);
+        assert!(r.system.ends_with(PLACEHOLDER_NOTE));
+        assert_eq!(
+            r.messages[0].content,
+            "\u{27e6}EMAIL_1\u{27e7}, \u{27e6}EMAIL_1\u{27e7}, \u{27e6}EMAIL_2\u{27e7} and \u{27e6}PHONE_1\u{27e7} / \u{27e6}PHONE_1\u{27e7}"
+        );
+        // A phone without its +1 is another digit string: it gets its own number.
+        assert_eq!(r.messages[1].content, "\u{27e6}EMAIL_2\u{27e7} again, \u{27e6}PHONE_2\u{27e7}");
+        assert_eq!(r.step.unwrap()["pii"]["replaced"], 8);
+    }
+
+    #[test]
+    fn numbering_is_stable_across_turns_and_requests() {
+        let a = run(&enforce(), "", &["x@y.co and z@y.co"]);
+        let b = run(&enforce(), "", &["x@y.co and z@y.co"]);
+        assert_eq!((&a.messages, &a.reverse, &a.system), (&b.messages, &b.reverse, &b.system));
+        let c = run(&enforce(), "", &["x@y.co and z@y.co", "w@y.co then x@y.co"]);
+        assert_eq!(c.messages[0], a.messages[0]);
+        assert_eq!(c.messages[1].content, "\u{27e6}EMAIL_3\u{27e7} then \u{27e6}EMAIL_1\u{27e7}");
+    }
+
+    #[test]
+    fn allow_block_and_off_leave_the_text() {
+        let key = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv";
+        let t = format!("ip 10.1.2.3 key {key}\n```\nk={key} a@b.co\n```");
+        let r = run(&enforce(), "", &[&t]);
+        // The key is Block (left for the gate) and the email is inside a fence: nothing is replaced.
+        assert_eq!((r.messages[0].content.as_str(), r.system.as_str(), r.reverse.len()), (t.as_str(), "", 0));
+        let mut allow = enforce();
+        allow.allow_terms = vec!["a@b.co".into()];
+        assert_eq!(run(&allow, "s", &[&t]).messages[0].content, t);
+        let mut pseudo = enforce();
+        pseudo.entities.insert(API_KEY.into(), PiiAction::Pseudonymize);
+        let r = run(&pseudo, "", &[&t]);
+        assert!(!r.messages[0].content.contains("AbCdEf") && r.messages[0].content.contains("\u{27e6}API_KEY_1\u{27e7}"));
+        for cfg in [PiiConfig { enabled: true, ..Default::default() }, PiiConfig { mode: PiiMode::Enforce, ..Default::default() }] {
+            let r = run(&cfg, "s", &[&t, "a@b.co"]);
+            assert_eq!((r.system.as_str(), r.messages[0].content.as_str(), r.messages[1].content.as_str()), ("s", t.as_str(), "a@b.co"));
+            assert!(r.reverse.is_empty());
+        }
+    }
+
+    #[test]
+    fn deny_terms_become_custom_placeholders() {
+        let mut cfg = enforce();
+        cfg.deny_terms = vec!["Project Falcon".into()];
+        let r = run(&cfg, "", &["about project falcon and PROJECT FALCON"]);
+        assert_eq!(r.messages[0].content, "about \u{27e6}CUSTOM_1\u{27e7} and \u{27e6}CUSTOM_1\u{27e7}");
+    }
+
+    #[test]
+    fn the_reverse_map_restores_exactly() {
+        let t = "see https://x.example/u?e=a@b.co&f=a@b.co, call 555-123-4567, mail c@d.co";
+        let r = run(&enforce(), "", &[t]);
+        assert!(!r.messages[0].content.contains("@") && !r.messages[0].content.contains("555-123"));
+        let mut back = r.messages[0].content.clone();
+        for (ph, orig) in &r.reverse {
+            back = back.replace(ph, orig);
+        }
+        assert_eq!(back, t);
     }
 }

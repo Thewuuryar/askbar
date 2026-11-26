@@ -709,6 +709,9 @@ async fn start_turn(gw: &Arc<Gateway>, mut req: ChatRequest, name: &str) -> Resu
     }
     // The stops and the budget, from this gateway's own copy: the authoritative one (ADR 0014). Each refusal is a gate span
     // in the generation's trace, and nothing of a call is on record before it.
+    // Detection and placeholders, once, before the gates and every attempt; the gate refusals of PII-P2.3 read it.
+    // Nothing is recorded here: only `run_attempts` writes the `redact` step.
+    let redacted = pii::redact(&cfg.pii, &req.system, &messages);
     gw.gates(&cfg, &req)?;
 
     // The turn span, on record before any provider is called (ADR 0010 rules 1 to 3).
@@ -738,7 +741,7 @@ async fn start_turn(gw: &Arc<Gateway>, mut req: ChatRequest, name: &str) -> Resu
     let (tx, rx) = mpsc::unbounded_channel::<ChatEvent>();
     let _ = tx.send(ChatEvent::Span { span_id: turn_id.clone(), trace_id: req.generation_id.clone() });
     let (registered, stop_rx) = gw.register(&req.user_id, &turn_id);
-    tokio::spawn(run_attempts(gw.clone(), cfg, provider, req, turn_id, messages, tx, stop_rx, registered));
+    tokio::spawn(run_attempts(gw.clone(), cfg, provider, req, turn_id, redacted, tx, stop_rx, registered));
     Ok(rx)
 }
 
@@ -751,17 +754,16 @@ async fn run_attempts(
     provider: Provider,
     req: ChatRequest,
     turn_id: String,
-    messages: Vec<ChatMessage>,
+    redacted: pii::Redacted,
     tx: mpsc::UnboundedSender<ChatEvent>,
     stop_rx: watch::Receiver<Option<&'static str>>,
     _registered: Registered,
 ) {
     let mut sent_text = false;
     let mut retry_index = 0u32;
-    let system = req.system.clone();
-    // Detect once: every attempt records the same `redact` step, and the request is sent as it is (detect_only, plan
-    // PII-P1.2). A request with nothing found writes no step, to keep the trace small.
-    let redact = pii::step_attrs(&cfg.pii, std::iter::once(req.system.as_str()).chain(req.messages.iter().map(|m| m.content.as_str())));
+    // What the provider gets, the sealed `provider_request` and the usage estimate all come from `redacted` (PII-P2.1).
+    // A request with nothing found writes no `redact` step, to keep the trace small.
+    let pii::Redacted { system, messages, step: redact, .. } = redacted;
     loop {
         // A stop that came while the last try waited, or before the first: no more tries (and no provider is called).
         if let Some(reason) = *stop_rx.borrow() {
