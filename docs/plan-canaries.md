@@ -85,7 +85,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 
 ### Phase 0: records
 
-- [ ] **C0.1** `docs(adr): amend 0054 and 0014: context checks and canaries` · sonnet
+- [x] **C0.1** `docs(adr): amend 0054 and 0014: context checks and canaries` · sonnet
   Files: `docs/adr/0054-model-gateway.md`, `docs/adr/0014-model-gateway-and-providers.md`.
   Do: add the Decisions table above as rules; list what a canary is not (proof of context use, an injection defence).
   Accept: `scripts/check-docs.sh` passes; each ADR's Amendments section names this plan.
