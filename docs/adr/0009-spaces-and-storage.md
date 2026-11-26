@@ -45,3 +45,5 @@ Each personal space and shared space has its own SQLite file, with membership in
 Search across spaces must query each file and merge results. SQLite allows one writer per file and needs one host. Storage stays behind a per-space interface to limit any later rewrite. A compromised server container can still open all space files ([0016](0016-risk-register.md)).
 
 ## Amendments
+
+- 2026-11-25 (proposed, not yet accepted by the owner; a decision amendment for the owner): task state for research reports is in each space's file. The tables `tasks` and `task_steps` are appended as migration 5 and hold the task's kind, owner, conversation, status, token cap and counts, and each step's role and status, with a code word for a note and never text. A task is deleted with its conversation, and a task or step still running when the server starts is marked `interrupted`. The file stays one per space, so nothing here adds a store or a volume.
