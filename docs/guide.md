@@ -160,6 +160,16 @@ What leaves the house, and only this:
 
 Your message still goes to the model for the reply, as for any reply. The other limit is 10 searches per person per hour. The admin sets the search permission for each person on the [MCP](reference/settings/mcp.md#tool-permissions) page, or through the API (see [People & clients](reference/settings/people.md#search-and-fetch-permissions)), and the models for the search jobs (see [Providers & models](reference/settings/providers.md#model-for-each-job)).
 
+## Research reports
+
+A research report answers a question at more length, from several web pages. It needs the search and fetch permissions above and the three research models your administrator has pinned: the researchers, the report writer and the judge. When both are in place, the client shows a **Research** toggle beside **Search the web**. Press it, and your next message is answered as a report. Research is on by default; your administrator can switch it off for everyone, and then the toggle is hidden.
+
+**What leaves the house.** The question is split into two to four sub-questions, and each researcher sends its own sub-question to the search engine as at most two queries. Each researcher then fetches at most three pages, and only addresses that its own search results listed. The text of each page goes to the researcher's model to be summarised. The report writer sees the question and the summaries; the judge sees the question, the summaries with their source addresses, and the draft. Nothing else is sent. The models are the ones your administrator pinned, and they may run outside your house.
+
+**What you see.** While it works, progress lines say what it is doing: splitting the question, researching (how many researchers are done), writing and reviewing. The report appears all at once, with its sources, only after the judge approves it. The judge reads the summaries and the draft, never the pages. If it refuses, you get a plain note with the reason, such as `unsupported_claim` or `bad_citation`, and no report and no sources.
+
+**Limits.** By default a report may make 8 tool calls (searches and fetches together) and use 300,000 tokens across all its model calls. The administrator sets these and the other research limits within set bounds ([Search](reference/settings/search.md#research)). The research stage stops after 90 seconds, and once two researchers have finished the others have 8 seconds more; the report is then written from what was gathered. If the token cap is reached, the report stops and lists the sources gathered so far with a note, and there is no report. The administrator is alerted when a task reaches 75% and again at 90% of its token cap; the alert names no question or person. Each person runs one research report at a time: asking for another while one is running is refused until it finishes.
+
 ## Hotkeys by platform
 
 `Super+A` is accepted (`hotkey: "Super+A"`) and works on X11, but Windows reserves it for Quick Settings and GNOME for the app grid, so the default is `Ctrl+Shift+Space`. If a hotkey can't be registered, the window opens with the reason.

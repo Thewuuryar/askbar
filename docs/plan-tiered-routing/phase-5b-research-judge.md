@@ -80,7 +80,7 @@ Runs in track 1 as stage W7 of [plan-priorities.md](../plan-priorities.md). Need
   Files: `tests/e2e/mock_llm.py` and its test, `tests/e2e/searxng_mock.py` fixtures, `scripts/smoke.sh`.
   Do: extend the mock model to answer by role: split, query, summary, draft, and the judge in both fixed answers (approve, refuse) and a malformed one; a smoke step that sends `research: true`, checks the progress events, the `tool` spans and the gateway's `research_approval` spans, no question or summary text in any span or log, and the plain-note paths (no sources, research off, no permission); and the cap path with a small token cap. The report, the judge's approve, refuse and malformed answers and the writer-stage cap are covered by `services/server/tests/research.rs` (P5.13), because the native smoke cannot fetch a page (the front accepts only dotted DNS names on ports 80 and 443); the real-proxy path is proven only in the Docker stack.
   Accept: `scripts/smoke.sh` passes.
-- [ ] **P5B.8** `docs(docs): research reports in the user and admin guides` · haiku · after P5B.7, P5B.4
+- [x] **P5B.8** `docs(docs): research reports in the user and admin guides` · haiku · after P5B.7, P5B.4
   Files: `docs/guide.md`, the admin reference pages for roles and limits, `docs/reference/audit/model-calls.md`.
   Do: what leaves the house (the sub-questions as search queries, fetched URLs), that research needs search and fetch permissions and three pinned roles, that the report appears all at once after a review, what the judge sees (summaries and draft, not pages) and the refusal note, the limits and the token cap, the 75% and 90% alerts, and the research roles in the step records.
   Accept: `scripts/check-docs.sh` passes.

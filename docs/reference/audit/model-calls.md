@@ -25,3 +25,16 @@ A reply that searched the web has the trace of any reply, plus these records. No
 | `gate` `quick_search_refused`, when no search is made | `server` | `reason`: `not_permitted` (the user does not hold `search`) or `unavailable` (the search tools cannot be reached). |
 
 The fetched text is not kept in the conversation. The rules are in [Sealed access](sealed-access.md) and the [guide](../../guide.md#searching-the-web).
+
+## Research replies
+
+A research report has the trace of any reply, plus these records. The question, sub-questions, page text, summaries and draft are sealed payloads as for any turn, and none of them is in an attribute or a log.
+
+| Record | Written by | Holds |
+| --- | --- | --- |
+| `turn` `chat`, one per model call | `model-gateway` | `role`: `research.researcher` (summarises one sub-question's pages), `research.writer` (splits the question, then writes the draft) or `judge.review` (the verdict, and the reason when refused), with the provider and model. |
+| `gate` `research_approval`, one per tool call | `model-gateway` | The same as a quick-search approval: a refused call is a blocked span with its reason and counts. |
+| `tool` `search` and `tool` `fetch` | `mcp-gateway` | As for quick search. |
+| `gate` `research_refused`, when no research starts | `server` | `reason`: `disabled`, `unavailable`, `not_permitted`, `busy` (a report is already running) or `unpinned`. |
+
+The task's steps (role, status and a code word, never text) are kept in the conversation's space file, not in the audit trail, and are deleted with the conversation. The rules are in the [guide](../../guide.md#research-reports).

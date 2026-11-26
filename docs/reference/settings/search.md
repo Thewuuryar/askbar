@@ -40,7 +40,7 @@ The line above the table names the three models research uses: the researchers, 
 | Research time limit | `stage_secs` | 90 | 10 | 600 | seconds |
 | Tokens per researcher summary | `summary_tokens` | 800 | 100 | 4000 | tokens |
 
-Save, Reset and the range rule are as for the quick-search limits. A change reaches the gateway and the server on the next push.
+Save, Reset and the range rule are as for the quick-search limits. A change reaches the gateway and the server on the next push. A task that reaches 75% (warning) or 90% (critical) of its token cap raises a `task_cap_threshold` alert, with no task or person named.
 
 ## Search engine
 
