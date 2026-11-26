@@ -737,6 +737,72 @@ async fn pii_detection_records_counts_on_a_redact_step_and_the_provider_gets_the
     }
 }
 
+/// The sealed `provider_request` of the generation's attempt: the body the provider was sent.
+async fn sealed_body(rig: &Rig, generation: &str) -> String {
+    let attempt =
+        rig.wait_rows(&format!("SELECT id FROM spans WHERE trace_id = '{generation}' AND kind = 'attempt' AND status = 'done'")).await;
+    let sql =
+        format!("SELECT ciphertext FROM payloads WHERE span_id = '{}' AND role = 'provider_request'", attempt[0][0].as_str().unwrap());
+    rig.wait_rows(&sql).await;
+    let blob: Vec<u8> = rig.auditor.recorder.reader().unwrap().query_row(&sql, [], |r| r.get(0)).unwrap();
+    String::from_utf8(crypto_box::SecretKey::from(AUDIT_SECRET).unseal(&blob).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn enforce_sends_placeholders_and_detect_only_or_off_send_the_request_unchanged() {
+    const EMAIL: &str = "ann.lee@example.org";
+    const PHONE: &str = "+44 20 7946 0958";
+    let text = format!("mail {EMAIL} or {PHONE}, again {EMAIL}");
+    let logs = LogBuf::default();
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer({
+                let l = logs.clone();
+                move || l.clone()
+            })
+            .finish(),
+    );
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    for (gen, enabled, mode) in [("gen-off", false, "enforce"), ("gen-detect", true, "detect_only"), ("gen-enforce", true, "enforce")] {
+        cfg.pii.enabled = enabled;
+        cfg.pii.mode = serde_json::from_value(json!(mode)).unwrap();
+        assert_eq!(rig.push(&cfg).await.status(), 200);
+        rig.chat(&rig.request("p", gen, &text)).await;
+        let body = sealed_body(&rig, gen).await;
+        if gen == "gen-enforce" {
+            assert!(!body.contains("ann.lee") && !body.contains("7946"), "{body}");
+            assert!(body.contains("\u{27e6}EMAIL_1\u{27e7} or \u{27e6}PHONE_1\u{27e7}, again \u{27e6}EMAIL_1\u{27e7}"), "{body}");
+            assert!(body.contains("be brief\\n\\nSome private values"), "{body}");
+            let step =
+                rig.wait_rows("SELECT attrs_json FROM spans WHERE trace_id = 'gen-enforce' AND name = 'redact' AND status = 'done'").await;
+            let attrs: Value = serde_json::from_str(step[0][0].as_str().unwrap()).unwrap();
+            assert_eq!(attrs["pii"]["replaced"], 3);
+        } else {
+            assert!(body.contains(&text) && body.contains("\"be brief\""), "{body}");
+        }
+    }
+    // The provider's own log: the first two got the typed text, the last the placeholders.
+    let log = rig.mock.log.lock().unwrap().join("\n");
+    assert_eq!(log.matches("last='mail ann.lee@example.org or +44 20 794").count(), 2, "{log}");
+    assert_eq!(log.matches("last='mail \u{27e6}EMAIL_1\u{27e7} or \u{27e6}PHONE_1\u{27e7}, again").count(), 1, "{log}");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rig.gw.audit().queued() > 0 {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // The enforced turn's spans, the status and the log hold no value.
+    let status =
+        rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap().text().await.unwrap();
+    let spans = format!("{:?}", rig.rows("SELECT * FROM spans WHERE trace_id = 'gen-enforce'"));
+    let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).to_string();
+    for (what, t) in [("spans", &spans), ("status", &status), ("log", &log)] {
+        assert!(!t.contains("ann.lee") && !t.contains("7946 0958"), "{what}");
+    }
+}
+
 #[tokio::test]
 async fn a_key_appears_nowhere_a_caller_or_the_auditor_can_see() {
     let rig = rig().await;
