@@ -95,7 +95,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
   Files: `services/model-gateway/src/{lib,pii}.rs`.
   Do: in `run_attempts`, once before the retry loop, redact `messages` and `req.system` in `enforce` mode, numbering by first occurrence as in Decisions. After redaction, append one short line saying placeholders stand for private values and should be reused as written.
   Accept: the same value gives the same placeholder on two turns with the same history; two requests with the same text give the same result; `detect_only` changes nothing.
-- [ ] **PII-P2.2** `feat(model-gateway): add the reply filter and restore placeholders` · sonnet · after PII-P2.1
+- [x] **PII-P2.2** `feat(model-gateway): add the reply filter and restore placeholders` · sonnet · after PII-P2.1
   Files: `services/model-gateway/src/{lib,pii}.rs`, tests.
   Do: a plain filter struct (`push(&str) -> String`, `finish() -> String`), no trait or chain. Call `delta_tx.send(filter.push(d))` in the delta closure and `finish()` after `stream_chat_report` returns. On cancel or error, flush held-back text; never drop it. Restore from the per-request reverse map.
   Accept: property tests split placeholders at every byte; unknown placeholders pass through unchanged; a cancelled stream loses no text.
