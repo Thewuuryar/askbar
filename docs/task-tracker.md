@@ -20,11 +20,11 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 7 | 0 | 3 | 10 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
-| [PII detection and redaction](plan-pii-redaction.md) | 2 | 0 | 9 | 11 |
+| [PII detection and redaction](plan-pii-redaction.md) | 3 | 0 | 8 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **142** | **0** | **169** | **311** |
+| **Total** | **143** | **0** | **168** | **311** |
 
-## Completed (142)
+## Completed (143)
 
 ### Refactor (track 0)
 
@@ -194,12 +194,13 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 
 - [x] **[PII-P0.1](plan-pii-redaction.md)** amend 0054 and 0014: PII detection and placeholders
 - [x] **[PII-P0.2](plan-pii-redaction.md)** amend 0011 and 0051: provider request payload and PII attributes
+- [x] **[PII-P1.1](plan-pii-redaction.md)** add PII settings
 
 ## In progress (0)
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (173)
+## Not started (172)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -394,7 +395,6 @@ Nothing: no step has an open branch or pull request.
 
 ### PII detection and redaction (track 2)
 
-- [ ] **[PII-P1.1](plan-pii-redaction.md)** add PII settings
 - [ ] **[PII-P1.2](plan-pii-redaction.md)** detect PII and record counts
 - [ ] **[PII-P2.1](plan-pii-redaction.md)** replace PII with placeholders
 - [ ] **[PII-P2.2](plan-pii-redaction.md)** add the reply filter and restore placeholders

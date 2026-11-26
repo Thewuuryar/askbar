@@ -82,7 +82,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
 
 ### Phase 1: detect only
 
-- [ ] **PII-P1.1** `feat(proto): add PII settings` · haiku
+- [x] **PII-P1.1** `feat(proto): add PII settings` · haiku
   Files: `crates/askbar-proto/src/gateway.rs`. Accept: defaults as above; old config parses.
 - [ ] **PII-P1.2** `feat(model-gateway): detect PII and record counts` · sonnet · after PII-P1.1, owner approval of the `regex` dependency
   Files: `services/model-gateway/src/{lib,pii}.rs`, `services/model-gateway/Cargo.toml`, tests.

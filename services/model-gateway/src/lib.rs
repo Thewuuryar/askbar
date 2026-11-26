@@ -90,6 +90,9 @@ struct Applied {
     task_limits: askbar_proto::research::TaskLimits,
     /// Whether research is on for everyone (plan P5B.1); `POST /approvals/research` and `/decide` refuse while off.
     research_enabled: bool,
+    /// The PII settings (plan PII-P1.1); detection reads them in plan PII-P1.2.
+    #[allow(dead_code)]
+    pii: askbar_proto::pii::PiiConfig,
 }
 
 /// A reply that is running, so a stop can reach it: whose it is, and the channel that says why it must end.
@@ -392,6 +395,9 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
     if c.task_limits.validate().is_err() {
         return Err("task_limits is out of range.".into());
     }
+    if c.pii.validate().is_err() {
+        return Err("pii is out of range.".into());
+    }
     if c.paused_users.len() > 10_000 || c.paused_users.iter().any(|u| !valid_id(u)) {
         return Err("A paused user is an id of 1 to 64 letters, digits, - or _ (at most 10,000 of them).".into());
     }
@@ -444,6 +450,7 @@ fn check_config(c: &GatewayConfig) -> Result<Applied, String> {
         quick_search_enabled: c.quick_search_enabled,
         task_limits: c.task_limits,
         research_enabled: c.research_enabled,
+        pii: c.pii.clone(),
     })
 }
 

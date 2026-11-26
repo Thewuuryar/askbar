@@ -218,6 +218,7 @@ fn config(rig: &Rig, version: u64, models: &[(&str, &str)]) -> GatewayConfig {
         quick_search_enabled: true,
         task_limits: Default::default(),
         research_enabled: true,
+        pii: Default::default(),
         version,
         providers: models.iter().map(|(id, m)| provider(rig, id, m)).collect(),
         audit_public_key: Some(audit_key()),
