@@ -24,6 +24,11 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.hmac]
 opt-level = 3
+# The PII detector (model-gateway) scans every request: 100 KB in a test build must stay well under 100 ms.
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
 
 # Lints for every member (each has `[lints] workspace = true`). CI runs clippy with `-D warnings`.
 [workspace.lints.rust]

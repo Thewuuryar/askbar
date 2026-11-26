@@ -62,7 +62,7 @@ pub const MAX_TERM_CHARS: usize = 100;
 pub struct PiiConfig {
     pub enabled: bool,
     pub mode: PiiMode,
-    /// Type to action. A type left out takes its default action (see `action_for`).
+    /// Type to action (`CUSTOM` is not configurable). A type left out takes its default action (see `action_for`).
     pub entities: BTreeMap<String, PiiAction>,
     /// Values never to redact (for example a known internal address).
     pub allow_terms: Vec<String>,
@@ -85,6 +85,9 @@ impl PiiConfig {
     /// The action for a type: the configured one, else the default from the plan (secrets, private keys and card
     /// numbers block; email, phone, IBAN, national ID and custom terms pseudonymize; the rest allow).
     pub fn action_for(&self, ty: &str) -> PiiAction {
+        if ty == CUSTOM {
+            return PiiAction::Pseudonymize; // not configurable: the admin's own terms are always replaced
+        }
         self.entities.get(ty).copied().unwrap_or(match ty {
             API_KEY | GITHUB_TOKEN | JWT | PRIVATE_KEY | CARD => PiiAction::Block,
             EMAIL | PHONE | IBAN | NATIONAL_ID | CUSTOM => PiiAction::Pseudonymize,
@@ -95,8 +98,8 @@ impl PiiConfig {
     /// Refuses what the receiver must not take: an unknown type, too many entries, or a term that is empty, blank,
     /// too long or holds a control character.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.entities.len() > PII_TYPES.len() || self.entities.keys().any(|k| !PII_TYPES.contains(&k.as_str())) {
-            return Err("entities names an unknown type");
+        if self.entities.len() > PII_TYPES.len() || self.entities.keys().any(|k| k == CUSTOM || !PII_TYPES.contains(&k.as_str())) {
+            return Err("entities names an unknown or fixed type");
         }
         for list in [&self.allow_terms, &self.deny_terms] {
             if list.len() > MAX_TERMS {
@@ -136,6 +139,8 @@ mod tests {
         let mut c = PiiConfig::default();
         c.entities.insert(EMAIL.into(), PiiAction::Allow);
         c.entities.insert(CARD.into(), PiiAction::Pseudonymize);
+        c.entities.insert(CUSTOM.into(), PiiAction::Allow);
+        assert_eq!(c.action_for(CUSTOM), PiiAction::Pseudonymize, "CUSTOM ignores entities");
         assert_eq!(
             (c.action_for(EMAIL), c.action_for(CARD), c.action_for(PHONE)),
             (PiiAction::Allow, PiiAction::Pseudonymize, PiiAction::Pseudonymize)
@@ -163,8 +168,10 @@ mod tests {
         assert!(!ok(&c), "too many terms");
         c.deny_terms = vec!["t".into(); MAX_TERMS];
         assert!(ok(&c));
-        c.entities = PII_TYPES.iter().map(|t| (t.to_string(), PiiAction::Allow)).collect();
-        assert!(ok(&c), "every type once is at most the list");
+        c.entities = PII_TYPES.iter().filter(|t| **t != CUSTOM).map(|t| (t.to_string(), PiiAction::Allow)).collect();
+        assert!(ok(&c), "every configurable type once is at most the list");
+        c.entities.insert(CUSTOM.into(), PiiAction::Allow);
+        assert!(!ok(&c), "CUSTOM is not configurable");
     }
 
     #[test]
