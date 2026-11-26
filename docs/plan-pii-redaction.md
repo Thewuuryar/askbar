@@ -76,7 +76,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
 
 - [x] **PII-P0.1** `docs(adr): amend 0054 and 0014: PII detection and placeholders` · sonnet
   Accept: the Decisions table is recorded as rules; the limits paragraph from the Summary is included.
-- [ ] **PII-P0.2** `docs(adr): amend 0011 and 0051: provider request payload and PII attributes` · haiku · after PII-P0.1
+- [x] **PII-P0.2** `docs(adr): amend 0011 and 0051: provider request payload and PII attributes` · haiku · after PII-P0.1
   Files: the two ADRs, `docs/reference/audit/model-calls.md`.
   Do: skip the `provider_request` part if AV2.3 already recorded it. One amendment per commit, so split into two commits if the repo rule needs it.
 
