@@ -15,6 +15,7 @@
     foot: $('foot'),
     stop: $('stop'),
     searchToggle: $('search-toggle'),
+    researchToggle: $('research-toggle'),
     histToggle: $('history-toggle'),
     history: $('history'),
     histList: $('history-list'),
@@ -64,6 +65,7 @@
     pinned: true,        // thread follows new output until the user scrolls away from it
     newestFirst: false,  // the display setting: newest turn first, under the bar
     webSearch: false,    // the "Search the web" toggle: for the next message only
+    research: false,     // the "Research" toggle: for the next message only; never on together with webSearch
   };
 
   // ------------------------------------------------------------ helpers
@@ -147,6 +149,35 @@
   function setWebSearch(on) {
     state.webSearch = on;
     el.searchToggle.setAttribute('aria-pressed', String(on));
+    if (on) setResearch(false);
+  }
+
+  // The same for a researched report. The two toggles exclude each other (the server lets research win anyway).
+  function setResearch(on) {
+    state.research = on;
+    el.researchToggle.setAttribute('aria-pressed', String(on));
+    if (on) setWebSearch(false);
+  }
+
+  // The status line while the server works on a report: fixed strings by stage, never the server's text.
+  function showProgress(reply, m) {
+    const n = (v) => Number.isInteger(v) && v >= 0;
+    const lines = {
+      splitting: 'Planning the research...',
+      researching: n(m.done) && n(m.total) && m.total > 0 ? 'Researching (' + m.done + ' of ' + m.total + ')...' : 'Researching...',
+      writing: 'Writing the report...',
+      reviewing: 'Reviewing the report...',
+    };
+    if (!reply.progressNode) {
+      reply.progressNode = document.createElement('div');
+      reply.progressNode.className = 'progress';
+      reply.bodyNode.after(reply.progressNode);
+    }
+    reply.progressNode.textContent = Object.hasOwn(lines, m.stage) ? lines[m.stage] : 'Working...';
+  }
+
+  function clearProgress(reply) {
+    if (reply.progressNode) { reply.progressNode.remove(); reply.progressNode = null; }
   }
 
   // The queries and the pages a quick-search reply is built from, under the reply. Text only; a link is made only for http(s)
@@ -548,21 +579,28 @@
             // and its model, as a reopened conversation will.
             setProvider(reply, { id: m.id, name: m.name, model: m.model });
             break;
+          case 'progress':
+            showProgress(reply, m);
+            break;
           case 'search':
             showSearch(reply, m.queries, m.sources);
             break;
           case 'delta':
+            clearProgress(reply);
             reply.content += m.text;
             scheduleRender(reply);
             break;
           case 'done':
+            clearProgress(reply);
             showStatus(null);
             finish();
             break;
           case 'cancelled':
+            clearProgress(reply);
             finish();
             break;
           case 'error': {
+            clearProgress(reply);
             // A reply that was cut short keeps what it wrote. A question the server took is marked
             // failed, as a reopened conversation will show it; one it never took moves to "Not sent".
             const partial = reply.content.trim() !== '';
@@ -618,8 +656,10 @@
     hideNotice();
     state.pinned = true;
     const webSearch = state.webSearch;
+    const research = state.research;
     setWebSearch(false);
-    await startTurn(text, (channel) => invoke('ask', { conversationId: state.convId, text, model: state.model, webSearch, onEvent: channel }));
+    setResearch(false);
+    await startTurn(text, (channel) => invoke('ask', { conversationId: state.convId, text, model: state.model, webSearch, research, onEvent: channel }));
   }
 
   // ------------------------------------------------------- messages not sent
@@ -981,6 +1021,7 @@
   el.newChat.addEventListener('click', newChat);
   el.stop.addEventListener('click', cancel);
   el.searchToggle.addEventListener('click', () => { setWebSearch(!state.webSearch); el.input.focus(); });
+  el.researchToggle.addEventListener('click', () => { setResearch(!state.research); el.input.focus(); });
   el.noticeClose.addEventListener('click', hideNotice);
   el.pair.addEventListener('submit', submitPairing);
   el.pairCancel.addEventListener('click', closePairing);
@@ -1073,6 +1114,8 @@
     applyPolicy(b.policy);
     el.searchToggle.hidden = !b.web_search;
     if (!b.web_search) setWebSearch(false);
+    el.researchToggle.hidden = !b.research;
+    if (!b.research) setResearch(false);
     el.modelLabel.textContent = b.model ? b.model + ' via ' + b.provider : '';
     if (b.notice) showNotice(b.notice);
     await refreshModels();

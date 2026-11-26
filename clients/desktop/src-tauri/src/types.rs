@@ -15,6 +15,8 @@ pub struct Settings {
     pub policy: Option<askbar_proto::Policy>,
     /// The user holds the web search permission, so the window offers its toggle. `false` when the server could not be asked.
     pub web_search: bool,
+    /// The user may research, so the window offers its toggle. `false` when the server could not be asked.
+    pub research: bool,
 }
 
 impl Settings {
@@ -27,6 +29,7 @@ impl Settings {
             model: String::new(),
             policy: None,
             web_search: false,
+            research: false,
         }
     }
 }
@@ -55,6 +58,12 @@ pub enum StreamEvent {
     Search {
         queries: Vec<String>,
         sources: Vec<askbar_proto::SearchSource>,
+    },
+    /// Research: where the report is. Shown as a status line until the first text arrives.
+    Progress {
+        stage: String,
+        done: Option<u32>,
+        total: Option<u32>,
     },
     Done,
     Cancelled,
