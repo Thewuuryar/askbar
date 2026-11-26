@@ -460,3 +460,28 @@ async fn each_try_is_an_attempt_span_with_its_retry_index() {
     let turn: String = db.query_row("SELECT status FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [&trace], |r| r.get(0)).unwrap();
     assert_eq!(turn, "done");
 }
+
+#[tokio::test]
+async fn history_is_trimmed_to_the_providers_context_limit_and_the_turn_records_how_many_turns_went() {
+    let mock = MockLlm::start();
+    let (state, dir) = audit_state(mock.port).await;
+    {
+        let db = state.db.lock().unwrap();
+        let base = format!("http://127.0.0.1:{}/v1", mock.port);
+        let p = askbar_proto::SnapshotProvider { context_tokens: Some(1000), ..askbar_server::testing::provider("p1", "mock", &base, "m") };
+        askbar_server::testing::add_provider(&db, p);
+    }
+    let prompt = "word ".repeat(400); // about 500 tokens
+    let (first, conversation) = run_in(&state, None, &prompt).await;
+    let (second, _) = run_in(&state, Some(conversation.clone()), &prompt).await;
+    let (third, _) = run_in(&state, Some(conversation), &prompt).await;
+    state.audit.flush().await;
+    let trimmed = |trace: &str| -> u64 {
+        let a: Option<String> =
+            read(&dir).query_row("SELECT attrs_json FROM spans WHERE trace_id = ?1 AND kind = 'turn'", [trace], |r| r.get(0)).unwrap();
+        serde_json::from_str::<serde_json::Value>(&a.unwrap()).unwrap()["trimmed_turns"].as_u64().expect("a number")
+    };
+    assert_eq!(trimmed(&first), 0);
+    assert_eq!(trimmed(&second), 1, "one old turn does not fit with the new message");
+    assert_eq!(trimmed(&third), 2, "the newest message alone is kept");
+}

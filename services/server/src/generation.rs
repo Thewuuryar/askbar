@@ -534,6 +534,8 @@ struct Finisher {
     audit_key: Option<Vec<u8>>,
     /// The request payload was cut at `MAX_PAYLOAD_BYTES`.
     request_truncated: bool,
+    /// Turns cut to fit the provider's context limit; None when it has no limit.
+    trimmed_turns: Option<u32>,
     error_code: Option<String>,
     saved: bool,
     /// Progress is flushed to the row about once a second, or every 2 KB.
@@ -609,9 +611,15 @@ impl Finisher {
             }
         }
         let mut f = SpanFinish::new(&self.turn_span, status);
-        if truncated || self.request_truncated {
+        if truncated || self.request_truncated || self.trimmed_turns.is_some() {
             // Replaces the start attributes, so they are repeated.
             let mut attrs = turn_attrs(&self.space.id, &self.conversation_id, truncated);
+            if let Some(role) = &self.role {
+                attrs["role"] = serde_json::json!(role);
+            }
+            if let Some(n) = self.trimmed_turns {
+                attrs["trimmed_turns"] = n.into();
+            }
             if self.request_truncated {
                 attrs["request_truncated"] = true.into();
             }
@@ -695,6 +703,19 @@ fn timeout_now(state: &AppState, db: &crate::Db) -> Duration {
         .map(|s| s.generation_timeout_secs)
         .unwrap_or(askbar_proto::DEFAULT_GENERATION_TIMEOUT_SECS);
     Duration::from_secs(secs as u64)
+}
+
+/// Drops the oldest turns (a question and its reply) until the system prompt and history fit `budget` tokens, and
+/// says how many went. The newest message always stays, even if it alone is over: the provider answers it.
+/// The estimate is one token per four characters, as in the gateway's `estimate_tokens`, which this crate cannot use.
+fn trim_to_context(system: &str, mut history: Vec<ChatMessage>, budget: u64) -> (Vec<ChatMessage>, u32) {
+    let est = |h: &[ChatMessage]| (system.chars().count() + h.iter().map(|m| m.content.chars().count()).sum::<usize>()).div_ceil(4) as u64;
+    let mut dropped = 0;
+    while history.len() > 1 && est(&history) > budget {
+        history.drain(..history.len().min(2).min(history.len() - 1));
+        dropped += 1;
+    }
+    (history, dropped)
 }
 
 /// What a turn span says about where the generation ran (ADR 0009 mechanism 5: the space id).
@@ -924,6 +945,7 @@ fn spawn_run(
         turn_span: String::new(),
         audit_key,
         request_truncated: false,
+        trimmed_turns: None,
         error_code: None,
         id: id.to_string(),
         user_id: user_id.to_string(),
@@ -959,6 +981,14 @@ fn spawn_run(
         let Some(((provider, system), history)) = prepared else {
             fin.finish(Outcome::Error("The provider is no longer available.".into()));
             return;
+        };
+        let history = match provider.context_tokens {
+            Some(limit) => {
+                let (kept, n) = trim_to_context(&system, history, u64::from(limit.saturating_sub(provider.max_tokens.unwrap_or(0))));
+                fin.trimmed_turns = Some(n);
+                kept
+            }
+            None => history,
         };
 
         // Race the gateway's stream against the deadline. Dropping it on expiry closes the request in flight, which
@@ -1626,6 +1656,22 @@ mod tests {
             assert_eq!(day_start(t), day, "day of {t}");
             assert_eq!(month_start(t), month, "month of {t}");
         }
+    }
+
+    #[test]
+    fn trimming_drops_the_oldest_turns_and_keeps_the_newest_message() {
+        let h = |texts: &[&str]| -> Vec<ChatMessage> {
+            texts.iter().enumerate().map(|(i, t)| ChatMessage::new(if i % 2 == 0 { "user" } else { "assistant" }, t)).collect()
+        };
+        let msgs = h(&["aaaa", "bbbb", "cccc", "dddd", "eeee"]); // 5 tokens, plus 1 for a 4-char system prompt
+        let (kept, n) = trim_to_context("ssss", msgs.clone(), 100);
+        assert_eq!((kept.len(), n), (5, 0), "fits: nothing cut");
+        let (kept, n) = trim_to_context("ssss", msgs.clone(), 4);
+        assert_eq!((kept.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), n), (vec!["cccc", "dddd", "eeee"], 1));
+        let (kept, n) = trim_to_context("ssss", msgs, 0);
+        assert_eq!((kept.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), n), (vec!["eeee"], 2), "the newest stays");
+        let (kept, n) = trim_to_context("ssss", h(&[&"x".repeat(4000)]), 10);
+        assert_eq!((kept.len(), n), (1, 0), "a single huge message is sent");
     }
 
     #[test]

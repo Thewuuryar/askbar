@@ -82,7 +82,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
 | --- | --- | --- |
 | 0 | ADR amendments (0054 and 0014; 0051 and 0055 for `ContextTruncated`) | done |
 | 1 | Raw stop reason and input-count check, record only | done |
-| 2 | Provider context limit and server trimming | in progress |
+| 2 | Provider context limit and server trimming | done |
 | 3 | Echo canary, `ContextTruncated` alert and the settings checkbox | not started |
 | Later | See below | not started |
 
@@ -113,7 +113,7 @@ One new `Kind` in `crates/askbar-proto/src/alerter.rs`: `ContextTruncated`. `fed
   Files: `crates/askbar-proto/src/lib.rs`, `services/admin/src/{db,admin_api,gateway_link,server_link}.rs`, `services/admin/src/ui/templates/providers.html`, `services/admin/src/ui/app.js`, `docs/openapi/admin.v1.yaml`, admin browser test.
   Do: `context_tokens: Option<u32>` on `SnapshotProvider`, the gateway provider config and the provider row, with the same plumbing as `max_tokens`: an admin db migration adding a nullable column, the snapshot and the gateway config. A "Context limit" field in the providers form, with the help text that the effective limit is usually lower than advertised. Bounds next to the field.
   Accept: old config JSON parses unchanged; the OpenAPI test passes; a push carries the value; the field saves and reloads in the browser test.
-- [ ] **C2.2** `feat(server): trim history to the provider's context limit` · sonnet · after C2.1
+- [x] **C2.2** `feat(server): trim history to the provider's context limit` · sonnet · after C2.1
   Files: `services/server/src/{llm,generation}.rs`, tests.
   Do: after `last_turns` in `generation.rs`, drop the oldest turns until the estimate fits `context_tokens − max_tokens`; always keep the system prompt and the newest message; record `trimmed_turns` on the turn span.
   Accept: a test with a small limit sends fewer turns and records the count; no limit set means today's behaviour.
