@@ -7,15 +7,14 @@ use crate::space::SpaceStore;
 use rusqlite::{params, OptionalExtension};
 
 impl SpaceStore {
-    /// Starts a `running` task and returns its id.
-    pub fn create_task(&self, kind: &str, user_id: &str, conversation_id: &str, token_cap: u64) -> Result<String, DbError> {
-        let id = new_id();
+    /// Starts a `running` task with the id given (a reply's task is its generation id).
+    pub fn create_task(&self, id: &str, kind: &str, user_id: &str, conversation_id: &str, token_cap: u64) -> Result<(), DbError> {
         self.conn().execute(
             "INSERT INTO tasks (id, kind, user_id, conversation_id, status, created_at, token_cap)
              VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6)",
             params![id, kind, user_id, conversation_id, now(), token_cap as i64],
         )?;
-        Ok(id)
+        Ok(())
     }
 
     /// Writes a step's row, `running`, before the step starts. Returns the step's id.
@@ -82,7 +81,8 @@ mod tests {
         let db = store();
         let (a, b) = (db.create_conversation("u1", "a").unwrap(), db.create_conversation("u1", "b").unwrap());
         for c in [&a, &b] {
-            let t = db.create_task("research", "u1", c, 100).unwrap();
+            let t = new_id();
+            db.create_task(&t, "research", "u1", c, 100).unwrap();
             let s = db.begin_step(&t, 0, "writer", "research.writer").unwrap();
             db.finish_step(&s, "done", Some("draft"), 5).unwrap();
         }
@@ -100,7 +100,8 @@ mod tests {
         {
             let db = SpaceStore::open(&path).unwrap();
             let c = db.create_conversation("u1", "c").unwrap();
-            t = db.create_task("research", "u1", &c, 100).unwrap();
+            t = new_id();
+            db.create_task(&t, "research", "u1", &c, 100).unwrap();
             s = db.begin_step(&t, 0, "split", "research.researcher").unwrap();
         }
         let db = SpaceStore::open(&path).unwrap();
@@ -119,7 +120,8 @@ mod tests {
         let db = store();
         let c = db.create_conversation("u1", "c").unwrap();
         assert_eq!(db.running_task_of_kind("u1", "research").unwrap(), None);
-        let t = db.create_task("research", "u1", &c, 100).unwrap();
+        let t = new_id();
+        db.create_task(&t, "research", "u1", &c, 100).unwrap();
         assert_eq!(db.running_task_of_kind("u1", "research").unwrap(), Some(t.clone()));
         assert_eq!(db.running_task_of_kind("u1", "agent").unwrap(), None);
         assert_eq!(db.running_task_of_kind("u2", "research").unwrap(), None);

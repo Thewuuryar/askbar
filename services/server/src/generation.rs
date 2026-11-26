@@ -1050,6 +1050,8 @@ pub(crate) fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
             "gateway_rejected",
             "The model gateway did not accept this server. The administrator should check the link's token.",
         ),
+        E::RoleNotPinned => Failed::new("role_not_pinned", "Research is not set up."),
+        E::TaskTokenCap => Failed::new("task_token_cap", "This task used all the tokens it may."),
         E::Unreachable => Failed::new("gateway_unavailable", "The model gateway does not answer. Try again in a moment."),
         E::Other(_) => Failed::new("gateway_error", "The model gateway could not take the request."),
     }
