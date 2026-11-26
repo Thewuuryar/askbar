@@ -1871,6 +1871,46 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '502':
           description: The server is offline or refused the change; nothing was changed.
+  /api/admin/v1/privacy:
+    get:
+      operationId: getPrivacy
+      summary: The PII settings, and each entity type with the action it takes by default.
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      responses:
+        '200':
+          description: The settings (the default while none are saved) and the types.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivacyView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: putPrivacy
+      summary: Save the PII settings.
+      description: "The whole settings. An unknown or fixed type, too many terms or a blank, long or control-character term is a 400 (`bad_request`) naming the problem, never a term; nothing is saved or pushed. The terms are personal data: they are stored in the admin and pushed to the gateway and the MCP front, and appear in no record, log, alert or error. The change is recorded in the auditor (`privacy/set`: enabled, mode and the counts of overrides and terms; refused with 503 if it cannot be) and pushed to the gateway and the front within a moment."
+      security:
+        - adminSession: []
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PiiConfig'
+      responses:
+        '200':
+          description: The settings as they are now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivacyView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/admin/v1/roles:
     get:
       operationId: listRoles
@@ -2637,6 +2677,33 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LimitRow'
+    PiiConfig:
+      type: object
+      description: The PII settings (askbar-proto `pii`). A field left out takes its default.
+      properties:
+        enabled: {type: boolean, description: Whether detection runs. Default false.}
+        mode: {type: string, enum: [detect_only, enforce], description: Count only, or act on what is found. Default detect_only.}
+        entities:
+          type: object
+          propertyNames: {enum: [EMAIL, PHONE, CARD, IBAN, NATIONAL_ID, IP, API_KEY, GITHUB_TOKEN, JWT, PRIVATE_KEY]}
+          additionalProperties: {type: string, enum: [pseudonymize, block, allow]}
+        allow_terms: {type: array, maxItems: 500, items: {type: string, minLength: 1, maxLength: 100}}
+        deny_terms: {type: array, maxItems: 500, items: {type: string, minLength: 1, maxLength: 100}}
+    PrivacyView:
+      allOf:
+        - $ref: '#/components/schemas/PiiConfig'
+        - type: object
+          required: [types]
+          properties:
+            types:
+              type: array
+              description: Each configurable type with the action it takes when `entities` leaves it out.
+              items:
+                type: object
+                required: [name, default]
+                properties:
+                  name: {type: string}
+                  default: {type: string, enum: [pseudonymize, block, allow]}
     RolePin:
       type: object
       additionalProperties: false
