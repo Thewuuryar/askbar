@@ -596,6 +596,7 @@ components:
           - user_paused
           - model_not_approved
           - role_not_pinned
+          - pii_blocked
           - quick_search_tool
           - quick_search_arguments
           - quick_search_query_count
@@ -742,7 +743,7 @@ components:
       properties:
         code:
           type: string
-          enum: [timed_out, interrupted, kill_switch, user_paused, model_not_approved, budget_exceeded, provider_error, internal]
+          enum: [timed_out, interrupted, kill_switch, user_paused, model_not_approved, pii_blocked, budget_exceeded, provider_error, internal]
         message:
           type: string
     ReplyProvider:
@@ -1001,4 +1002,4 @@ components:
               type: string
             code:
               type: string
-              enum: [timed_out, interrupted, kill_switch, user_paused, model_not_approved, budget_exceeded, provider_error, internal]
+              enum: [timed_out, interrupted, kill_switch, user_paused, model_not_approved, pii_blocked, budget_exceeded, provider_error, internal]

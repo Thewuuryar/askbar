@@ -239,7 +239,9 @@ paths:
           description: >-
             The body could not be used (`bad_request`), or the model is not one the catalog approves for this provider
             (`model_not_approved`). Nothing was called. The second is a `blocked` `model_catalog` gate span in the
-            generation's trace.
+            generation's trace. Or, with PII in `enforce` mode, the system text or a message holds a value the settings
+            block (`pii_blocked`; the problem's `types` member lists the type names, never a value). The refusal is a
+            `blocked` `pii_block` gate span in the trace.
           content:
             application/problem+json:
               schema:
@@ -596,6 +598,7 @@ components:
           - user_paused
           - model_not_approved
           - role_not_pinned
+          - pii_blocked
           - quick_search_tool
           - quick_search_arguments
           - quick_search_query_count
