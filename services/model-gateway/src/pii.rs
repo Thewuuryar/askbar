@@ -391,6 +391,95 @@ pub fn redact(cfg: &PiiConfig, system: &str, messages: &[ChatMessage]) -> Redact
     Redacted { system, messages, reverse, step }
 }
 
+/// Puts the original values back into the reply as it streams (PII-P2.2). The model may write a placeholder as given
+/// (`⟦EMAIL_1⟧`) or without its brackets (`EMAIL_1`), and it can arrive split at any point between two deltas, so text
+/// that could still become a placeholder is held back: from a `⟦` until its `⟧` or until 24 characters are in hand, and
+/// for the bare form only a tail that is still a prefix of a known token. A placeholder with no entry passes through
+/// unchanged; a value is never invented. Holds real values: never log or record it.
+pub struct ReplyFilter {
+    map: Vec<(String, String)>,
+    held: String,
+    /// The last character already consumed, for the word boundary in front of a bare token.
+    prev: char,
+    restored: u64,
+}
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+impl ReplyFilter {
+    pub fn new(reverse: &[(String, String)]) -> Self {
+        Self { map: reverse.to_vec(), held: String::new(), prev: ' ', restored: 0 }
+    }
+
+    /// How many placeholders were put back so far.
+    pub fn restored(&self) -> u64 {
+        self.restored
+    }
+
+    /// The text of this delta that can go out now.
+    pub fn push(&mut self, delta: &str) -> String {
+        self.held.push_str(delta);
+        self.drain(false)
+    }
+
+    /// Everything still held, substituted if it is a whole placeholder. Call it when the stream ends, however it ends.
+    pub fn finish(&mut self) -> String {
+        let out = self.drain(true);
+        self.prev = ' ';
+        out
+    }
+
+    fn drain(&mut self, end: bool) -> String {
+        let buf = std::mem::take(&mut self.held);
+        let (mut out, mut i) = (String::new(), 0);
+        'scan: while i < buf.len() {
+            let rest = &buf[i..];
+            let c = rest.chars().next().unwrap_or(' ');
+            if c == '\u{27e6}' {
+                if let Some((j, close)) = rest.char_indices().take(24).find(|(_, c)| *c == '\u{27e7}') {
+                    let tok = &rest[..j + close.len_utf8()];
+                    match self.map.iter().find(|(p, _)| p == tok) {
+                        Some((_, orig)) => {
+                            out.push_str(orig);
+                            self.restored += 1;
+                        }
+                        None => out.push_str(tok),
+                    }
+                    (i, self.prev) = (i + tok.len(), '\u{27e7}');
+                    continue;
+                }
+                if !end && rest.chars().nth(23).is_none() {
+                    break;
+                }
+            } else if !is_word(self.prev) {
+                for (p, orig) in &self.map {
+                    let tok = p.trim_matches(['\u{27e6}', '\u{27e7}']);
+                    if let Some(after) = rest.strip_prefix(tok) {
+                        match after.chars().next() {
+                            Some(n) if is_word(n) => {}
+                            None if !end => break 'scan,
+                            _ => {
+                                out.push_str(orig);
+                                self.restored += 1;
+                                (i, self.prev) = (i + tok.len(), '\u{27e7}');
+                                continue 'scan;
+                            }
+                        }
+                    } else if !end && tok.starts_with(rest) {
+                        break 'scan;
+                    }
+                }
+            }
+            out.push(c);
+            (i, self.prev) = (i + c.len_utf8(), c);
+        }
+        self.held = buf[i..].to_string();
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +753,75 @@ mod tests {
             back = back.replace(ph, orig);
         }
         assert_eq!(back, t);
+    }
+    fn fixture() -> Vec<(String, String)> {
+        [("EMAIL_1", "ann@x.org"), ("PHONE_1", "+44 20"), ("EMAIL_2", "bo@y.org")]
+            .iter()
+            .map(|(p, o)| (format!("\u{27e6}{p}\u{27e7}"), o.to_string()))
+            .collect()
+    }
+
+    fn run_filter(parts: &[&str]) -> String {
+        let mut f = ReplyFilter::new(&fixture());
+        let mut out: String = parts.iter().map(|p| f.push(p)).collect();
+        out.push_str(&f.finish());
+        out
+    }
+
+    const REPLY: &str = "\u{27e6}EMAIL_1\u{27e7}\u{27e6}PHONE_1\u{27e7} hi EMAIL_2, PHONE_1. no \u{27e6}EMAIL_9\u{27e7} EMAIL_9 MY_EMAIL_1x EMAIL_1x \u{27e6}EMAIL_1\u{27e7}";
+    const RESTORED: &str = "ann@x.org+44 20 hi bo@y.org, +44 20. no \u{27e6}EMAIL_9\u{27e7} EMAIL_9 MY_EMAIL_1x EMAIL_1x ann@x.org";
+
+    #[test]
+    fn the_filter_restores_whole_text_and_leaves_the_rest() {
+        assert_eq!(run_filter(&[REPLY]), RESTORED);
+        assert_eq!(run_filter(&["EMAIL_1"]), "ann@x.org");
+        assert_eq!(run_filter(&["EMAIL_1x EMAIL_10 xEMAIL_1 EMAIL_1"]), "EMAIL_1x EMAIL_10 xEMAIL_1 ann@x.org");
+        assert_eq!(run_filter(&["a", "b"]), "ab");
+        let mut f = ReplyFilter::new(&fixture());
+        f.push(REPLY);
+        f.finish();
+        assert_eq!(f.restored(), 5);
+    }
+
+    #[test]
+    fn the_filter_gives_the_same_text_for_every_split() {
+        let chars: Vec<usize> = REPLY.char_indices().map(|(i, _)| i).chain([REPLY.len()]).collect();
+        for &at in &chars {
+            assert_eq!(run_filter(&[&REPLY[..at], &REPLY[at..]]), RESTORED, "split at {at}");
+        }
+        // Fixed-seed multi-splits: no dependency for a generator.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..2000 {
+            let mut cuts: Vec<usize> = (0..1 + seed as usize % 6)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    chars[seed as usize % chars.len()]
+                })
+                .collect();
+            cuts.sort();
+            let (mut parts, mut from) = (Vec::new(), 0);
+            for c in cuts.into_iter().chain([REPLY.len()]) {
+                parts.push(&REPLY[from..c]);
+                from = c;
+            }
+            assert_eq!(run_filter(&parts), RESTORED, "{parts:?}");
+        }
+    }
+
+    #[test]
+    fn a_lone_open_bracket_is_held_for_24_characters_and_flushed_by_finish() {
+        let mut f = ReplyFilter::new(&fixture());
+        assert_eq!(f.push(&format!("x \u{27e6}{}", "a".repeat(22))), "x ");
+        assert_eq!(f.push("a"), format!("\u{27e6}{}", "a".repeat(23)));
+        let mut f = ReplyFilter::new(&fixture());
+        assert_eq!(f.push("ok \u{27e6}EMA"), "ok ");
+        assert_eq!(f.finish(), "\u{27e6}EMA");
+        assert_eq!(f.finish(), "");
+        // Held at the end of a delta, then a whole token when the stream ends.
+        let mut f = ReplyFilter::new(&fixture());
+        assert_eq!(f.push("see EMAIL_1"), "see ");
+        assert_eq!(f.finish(), "ann@x.org");
     }
 }

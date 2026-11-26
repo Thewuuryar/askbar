@@ -7,7 +7,7 @@ message to get a long, slow reply (handy for testing Stop; about a minute), "bri
 same text in about 4 seconds (for tests that need the whole long reply), or "fail" to get
 an HTTP 401 error. "429" answers HTTP 429 with Retry-After: 1 and "500" answers
 HTTP 500. The same words in the model name ("m-429", "m-fail", "m-reset") work too. "429once" answers 429 (Retry-After: 1) the first time it sees that exact
-message and succeeds after, and "reset" sends two deltas then resets the connection (a failure
+message and succeeds after, and "reset" sends two deltas (or the MOCK-REPLY text, 6 characters at a time) then resets the connection (a failure
 that comes after text has been delivered). With stream_options.include_usage a final usage chunk is sent
 (cached_tokens is non-zero when the message contains "cached"). POST /v1/messages answers in Anthropic's streaming format with the same modes.
 "hang" accepts the request and sends nothing until the client closes;
@@ -146,7 +146,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if anthropic:
                     self.anthropic_start(body)
-                for piece in ("Reset ", "midway"):
+                chosen = re.search(r"^MOCK-REPLY (.*)$", last, re.M)
+                pieces = [chosen.group(1)[i:i + 6] for i in range(0, len(chosen.group(1)), 6)] if chosen else ("Reset ", "midway")
+                for piece in pieces:
                     self.delta(anthropic, piece)
                 time.sleep(0.05)
                 # Abort the connection (RST) instead of ending the stream: with SO_LINGER 0 a plain

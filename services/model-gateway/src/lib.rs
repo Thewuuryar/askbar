@@ -763,7 +763,9 @@ async fn run_attempts(
     let mut retry_index = 0u32;
     // What the provider gets, the sealed `provider_request` and the usage estimate all come from `redacted` (PII-P2.1).
     // A request with nothing found writes no `redact` step, to keep the trace small.
-    let pii::Redacted { system, messages, step: redact, .. } = redacted;
+    let pii::Redacted { system, messages, step: redact, reverse } = redacted;
+    // Only a request that was pseudonymized has a filter: any other reply path is as it was.
+    let mut filter = (!reverse.is_empty()).then(|| pii::ReplyFilter::new(&reverse));
     loop {
         // A stop that came while the last try waited, or before the first: no more tries (and no provider is called).
         if let Some(reason) = *stop_rx.borrow() {
@@ -804,16 +806,17 @@ async fn run_attempts(
         if let Ok(sealed) = seal::seal(&cfg.audit_key, cut(&provider_request, MAX_PAYLOAD_BYTES).as_bytes()) {
             gw.audit.payload(&attempt_id, "provider_request", &sealed.key_id, &sealed.bytes);
         }
-        if let Some(attrs) = &redact {
-            // Counts by type only: no value, snippet or offset. Not a model call, so it needs no acknowledgment.
+        // Counts by type only: no value, snippet or offset. Not a model call, so it needs no acknowledgment. Finished
+        // after the stream, with the number of placeholders put back.
+        let step_id = redact.as_ref().map(|attrs| {
             let step_id = askbar_service::ids::new_id();
             let mut step = start_of(&step_id, &req.generation_id, Some(&attempt_id), SpanKind::Step, "redact");
             step.user_id = Some(req.user_id.clone());
             step.client_id = req.client_id.clone();
             step.attrs = Some(attrs.clone());
             gw.audit.start(step);
-            gw.audit.finish(&step_id, finish("done"));
-        }
+            step_id
+        });
 
         // The caller going away cancels the request: a watcher holds the cancel sender until then.
         let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
@@ -848,10 +851,29 @@ async fn run_attempts(
         let mut text_this_try = false;
         let result = llm::stream_chat_report(&gw.http, &provider, &system, &messages, cancel_rx, |d| {
             text_this_try = true;
-            let _ = delta_tx.send(ChatEvent::Delta { text: d.to_string() });
+            let text = filter.as_mut().map_or_else(|| d.to_string(), |f| f.push(d));
+            if !text.is_empty() {
+                let _ = delta_tx.send(ChatEvent::Delta { text });
+            }
         })
         .await;
         watcher.abort();
+        // However the stream ended, text held back for a placeholder goes out now, before any error or done event.
+        if let Some(f) = filter.as_mut() {
+            let text = f.finish();
+            if !text.is_empty() {
+                let _ = tx.send(ChatEvent::Delta { text });
+            }
+        }
+        if let (Some(id), Some(attrs)) = (step_id, &redact) {
+            let mut end = finish("done");
+            let mut attrs = attrs.clone();
+            if let Some(f) = &filter {
+                attrs["pii"]["restored"] = f.restored().into();
+            }
+            end.attrs = Some(attrs);
+            gw.audit.finish(&id, end);
+        }
         sent_text |= text_this_try;
         let stopped_by = *stopped.lock().unwrap_or_else(|e| e.into_inner());
 
