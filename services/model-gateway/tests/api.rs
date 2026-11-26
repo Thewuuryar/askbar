@@ -805,6 +805,43 @@ async fn enforce_sends_placeholders_and_detect_only_or_off_send_the_request_unch
 }
 
 #[tokio::test]
+async fn the_redact_step_holds_numbers_only_and_the_sealed_request_holds_what_the_provider_got() {
+    const EMAIL: &str = "ann.lee@example.org";
+    const PHONE: &str = "+44 20 7946 0958";
+    let text = format!("mail {EMAIL} or {PHONE}, again {EMAIL}\nMOCK-REPLY it is \u{27e6}EMAIL_1\u{27e7}");
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.pii.enabled = true;
+    for (gen, mode) in [("gen-d", "detect_only"), ("gen-e", "enforce")] {
+        cfg.pii.mode = serde_json::from_value(json!(mode)).unwrap();
+        assert_eq!(rig.push(&cfg).await.status(), 200);
+        rig.chat(&rig.request("p", gen, &text)).await;
+        let body = sealed_body(&rig, gen).await;
+        let step =
+            rig.wait_rows(&format!("SELECT attrs_json FROM spans WHERE trace_id = '{gen}' AND name = 'redact' AND status = 'done'")).await;
+        let raw = step[0][0].as_str().unwrap();
+        let pii = serde_json::from_str::<Value>(raw).unwrap()["pii"].clone();
+        assert_eq!(pii["counts"], json!({ "EMAIL": 2, "PHONE": 1 }), "{pii}");
+        assert_eq!(pii["actions"], json!({ "EMAIL": "pseudonymize", "PHONE": "pseudonymize" }), "{pii}");
+        assert_eq!(pii["mode"], mode);
+        // No value, nor a piece of one, in the unsealed attributes.
+        for piece in ["ann", "lee", "example", "org", "7946", "0958", "+44"] {
+            assert!(!raw.contains(piece), "{piece} in {raw}");
+        }
+        if mode == "enforce" {
+            assert_eq!((&pii["replaced"], &pii["restored"]), (&json!(3), &json!(1)), "{pii}");
+            assert!(!body.contains("ann.lee") && !body.contains("7946"), "{body}");
+            assert!(body.contains("\u{27e6}EMAIL_1\u{27e7} or \u{27e6}PHONE_1\u{27e7}"), "{body}");
+            assert!(body.contains(askbar_model_gateway::pii::PLACEHOLDER_NOTE.split('\u{27e6}').next().unwrap()), "{body}");
+        } else {
+            // detect_only: the keys are absent, and the provider got the text as typed.
+            assert!(pii.get("replaced").is_none() && pii.get("restored").is_none(), "{pii}");
+            assert!(body.contains(EMAIL) && body.contains(PHONE) && !body.contains("Some private values"), "{body}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn enforce_refuses_a_blocked_type_at_the_gate_and_names_the_type_only() {
     const KEY: &str = "sk-ant-api03-ZzMARKERzZ9QqWwEeRrTtYy";
     const CARD: &str = "4111 1111 1111 1111";
