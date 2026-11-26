@@ -113,6 +113,28 @@ impl GatewayClient {
         self.approve("research", req).await
     }
 
+    /// The judge's verdict on a research draft (plan P5.13). `Err` is the problem's code, or `unreachable`; the caller treats
+    /// every `Err` as a refusal. An answer that is not a verdict is a refusal with `bad_format`, never an approval.
+    pub async fn judge(&self, input: &askbar_proto::research::JudgeInput) -> Result<askbar_proto::research::JudgeOutput, String> {
+        use askbar_proto::research::{JudgeOutput, JudgeReason};
+        let req = askbar_proto::decide::DecideRequest {
+            decision: askbar_proto::decide::Decision::Judge,
+            input: serde_json::to_value(input).map_err(|_| "gateway_error")?,
+            generation_id: Some(input.task_id.clone()),
+            user_id: Some(input.user_id.clone()),
+        };
+        let token = self.token().ok_or("gateway_rejected")?;
+        let url = format!("{}{}/decide", self.base, askbar_proto::paths::MODEL_GATEWAY_V1);
+        let resp =
+            self.http.post(url).bearer_auth(token).timeout(Duration::from_secs(120)).json(&req).send().await.map_err(|_| "unreachable")?;
+        if resp.status().as_u16() == 200 {
+            let body: Option<askbar_proto::decide::DecideResponse> = resp.json().await.ok();
+            let out = body.and_then(|b| serde_json::from_value::<JudgeOutput>(b.output).ok());
+            return Ok(out.unwrap_or(JudgeOutput::Refuse { reason: JudgeReason::BadFormat }));
+        }
+        Err(resp.json::<Problem>().await.ok().and_then(|p| p.code()).map_or("gateway_error", |c| c.as_str()).to_string())
+    }
+
     async fn approve(&self, route: &str, req: &impl serde::Serialize) -> Result<serde_json::Value, String> {
         let token = self.token().ok_or("gateway_rejected")?;
         let url = format!("{}{}/approvals/{route}", self.base, askbar_proto::paths::MODEL_GATEWAY_V1);

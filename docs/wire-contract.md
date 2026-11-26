@@ -95,7 +95,7 @@ Both follow the signed-in user, so all of a user's clients see the same values.
   the server's default.
 - `GET /api/client/v1/settings` returns `{"display": {...}, "policy": {...}, "web_search": bool, "research": bool}`: the server-wide display defaults, whether the caller
   holds the web search permission (`web_search`, asked of the MCP front on each call; `false` when it cannot say; absent from an older server),
-  whether the caller may research (`research`, added after 1.0, absent from an older server: `false`), and the
+  whether the caller may research (`research`: research is on and the caller holds the `search` and `fetch` tools; the role pins are the gateway's to check; added after 1.0, absent from an older server: `false`), and the
   **policy** (ADR 0012), which is what an app tells its person about the service. `policy.notice` is
   `{"enabled", "text", "retention_days", "version"}`: the privacy notice, with how many days audit records are kept and a
   `version` that is a hash of the wording and that number. An app shows it after pairing and whenever the `version` differs from
@@ -179,7 +179,7 @@ the server re-emits its own events. Each SSE message has `event:` naming the typ
 | `delta` | `{"event":"delta","text":"..."}` | the next piece of the reply; zero or more. Carries an SSE `id:` line, see below |
 | `done` | `{"event":"done"}` | the reply is complete (also when it was stopped with cancel: the text so far is kept) |
 | `search` | `{"event":"search","queries":["..."],"sources":[{"title":"...","url":"https://...","fetched":true}]}` | quick search only (`web_search` was sent). The queries used and the pages cited, sent once before the first `delta`. `queries` and `sources` are absent when empty; `fetched` is false for a result the reply did not read. An app that does not know it ignores it |
-| `progress` | `{"event":"progress","stage":"researching","done":1,"total":3,"percent":75}` | research only (`research` was sent). Where the report is: `stage` is `splitting`, `researching`, `writing` or `reviewing`; `done`, `total` and `percent` (a task cap crossing) are absent when they do not apply. An app that does not know it ignores it |
+| `progress` | `{"event":"progress","stage":"researching","done":1,"total":3,"percent":75}` | research only (`research` was sent), in order and all before `search` and the text: the report is held until the reviewer approves it, then sent as `search`, `delta`s and `done`; a refusal, an error or a cap stop sends a plain note instead of it. Where the report is: `stage` is `splitting`, `researching`, `writing` or `reviewing`; `done`, `total` and `percent` (a task cap crossing) are absent when they do not apply. An app that does not know it ignores it |
 | `error` | `{"event":"error","message":"...","code":"timed_out"}` | the reply failed or was cut short; the question is still saved, and so is any text that had arrived. `code` is the stable reason: `timed_out`, `interrupted`, `kill_switch`, `provider_error` or `internal` (absent from an older server). Branch on `code`; `message` is for a person |
 
 (Comment lines starting with `:` are keep-alives. A client ignores events it does not know.)

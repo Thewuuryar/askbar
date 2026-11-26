@@ -258,19 +258,25 @@ pub fn served_policy(db: &crate::Db) -> rusqlite::Result<Policy> {
     })
 }
 
-/// `web_search` is per user: whether the MCP front says the caller holds the `search` tool (asked on every call, no cache).
+/// `web_search` and `research` are per user: whether the MCP front says the caller holds the `search` tool (and `fetch`, for
+/// research), asked on every call, no cache, and the admin has the feature on. `research` does not check the role pins:
+/// the server's snapshot does not carry them, so an unpinned role is the gateway's refusal, and the reply says so.
 pub async fn settings(State(state): St, Extension(auth): Extension<ClientAuth>) -> Res<Settings> {
-    let on =
-        crate::snapshot::current(&state.db.lock().unwrap_or_else(|e| e.into_inner())).ok().flatten().is_none_or(|s| s.quick_search_enabled);
-    let web_search = match &state.mcp {
-        Some(mcp) if on => mcp.tools(&auth.user_id).await.is_some_and(|t| t.iter().any(|n| n == "search")),
-        _ => false,
+    let (qs_on, research_on) = crate::snapshot::current(&state.db.lock().unwrap_or_else(|e| e.into_inner()))
+        .ok()
+        .flatten()
+        .map_or((true, true), |s| (s.quick_search_enabled, s.research_enabled));
+    let held = match &state.mcp {
+        Some(mcp) if qs_on || research_on => mcp.tools(&auth.user_id).await.unwrap_or_default(),
+        _ => vec![],
     };
+    let has = |n: &str| held.iter().any(|t| t == n);
+    let (web_search, research) = (qs_on && has("search"), research_on && has("search") && has("fetch"));
     let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     Ok(Json(Settings {
         display: served_display(&db, None).map_err(internal)?,
         policy: served_policy(&db).map_err(internal)?,
         web_search,
-        research: false,
+        research,
     }))
 }
