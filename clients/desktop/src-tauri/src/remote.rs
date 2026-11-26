@@ -148,7 +148,7 @@ impl ReplyReader {
                 }
                 Ok(ChatEvent::Done) => steps.push(Step::Done),
                 Ok(ChatEvent::Search { queries, sources }) => steps.push(Step::Emit(StreamEvent::Search { queries, sources })),
-                Ok(ChatEvent::Progress { .. }) => {} // the popup shows no progress yet
+                Ok(ChatEvent::Progress { stage, done, total, .. }) => steps.push(Step::Emit(StreamEvent::Progress { stage, done, total })),
                 Ok(ChatEvent::Error { message, code }) => steps.push(Step::Fail { message, code }),
                 Err(_) => {} // unknown event from a newer server: ignore
             }
@@ -566,22 +566,23 @@ impl Remote {
         };
         // The notice and the warning come with the server-wide settings. A server that cannot be asked, or does not know them, says
         // nothing, and the window keeps what it last showed.
-        let (policy, web_search) = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/settings")) {
+        let (policy, web_search, research) = match quick(&askbar_proto::paths::join(askbar_proto::paths::CLIENT_V1, "/settings")) {
             Ok(req) => match i.send(req).await {
                 Ok(r) => {
                     let v = r.json::<serde_json::Value>().await.ok();
                     let policy = v.as_ref().and_then(|v| v.get("policy").cloned()).and_then(|p| serde_json::from_value(p).ok());
                     // The permission to search the web: absent (an older server) or unreadable means no toggle.
-                    (policy, v.is_some_and(|v| v["web_search"] == true))
+                    (policy, v.as_ref().is_some_and(|v| v["web_search"] == true), v.is_some_and(|v| v["research"] == true))
                 }
-                Err(_) => (None, false),
+                Err(_) => (None, false, false),
             },
-            Err(_) => (None, false),
+            Err(_) => (None, false, false),
         };
         let active = in_use(&models, prefs.active_model.as_deref());
         Ok(Settings {
             policy,
             web_search,
+            research,
             ui: merge_ui(&display, &cfg.ui),
             hotkey: cfg.hotkey.clone(),
             provider: active.map(|m| m.provider_name.clone()).unwrap_or_default(),
@@ -730,7 +731,7 @@ impl Remote {
     /// arrives, so whatever happens before that, the text is not lost.
     #[cfg(test)]
     pub async fn ask(&self, conversation_id: Option<String>, text: String, cancel: oneshot::Receiver<()>, emit: Emit<'_>) {
-        self.ask_with(None, false, conversation_id, text, cancel, emit).await
+        self.ask_with(None, false, false, conversation_id, text, cancel, emit).await
     }
 
     /// Like `ask`, with the model this chat picked (`provider/model`). With none, the model the person chose for their
@@ -739,6 +740,7 @@ impl Remote {
         &self,
         model: Option<String>,
         web_search: bool,
+        research: bool,
         conversation_id: Option<String>,
         text: String,
         cancel: oneshot::Receiver<()>,
@@ -755,7 +757,7 @@ impl Remote {
             None => i.active_model().await,
         };
         // The outbox keeps the text only: a message sent again from "Not sent" goes without the search.
-        let entry = OutboxEntry { web_search, ..i.outbox.add(conversation_id, model.as_deref().unwrap_or(""), &text) };
+        let entry = OutboxEntry { web_search, research, ..i.outbox.add(conversation_id, model.as_deref().unwrap_or(""), &text) };
         if let Err(e) = model {
             return emit(StreamEvent::error(e));
         }
@@ -832,7 +834,7 @@ impl Remote {
             Ok(r) => r.header("accept", "text/event-stream").json(&ChatRequest {
                 conversation_id: entry.conversation_id.clone(),
                 web_search: entry.web_search,
-                research: false,
+                research: entry.research,
                 model: Some(model).filter(|m| !m.is_empty()),
                 text: entry.text.clone(),
                 client_request_id: Some(entry.client_request_id.clone()),
@@ -958,6 +960,17 @@ mod tests {
                 queries: vec!["q".into()],
                 sources: vec![askbar_proto::SearchSource { title: "t".into(), url: "https://e.example/".into(), fetched: false }],
             })]
+        );
+        assert_eq!(r.last_id, 0, "not counted as text");
+    }
+
+    #[test]
+    fn the_reply_reader_passes_research_progress_on() {
+        let mut r = ReplyReader::default();
+        let data = r#"{"event":"progress","stage":"researching","done":1,"total":3}"#;
+        assert_eq!(
+            r.feed(sse("progress", None, data).as_bytes()),
+            [Step::Emit(StreamEvent::Progress { stage: "researching".into(), done: Some(1), total: Some(3) })]
         );
         assert_eq!(r.last_id, 0, "not counted as text");
     }
@@ -1656,6 +1669,7 @@ mod tests {
         assert_eq!((s.provider.as_str(), s.model.as_str()), ("mock", "mock-model"));
         // The privacy notice and the AI warning come with it: on, with the default wording, until the administrator chooses.
         assert!(!s.web_search, "this server has no search front, so no toggle");
+        assert!(!s.research, "research is not set up on this server, so no toggle");
         let policy = s.policy.expect("the server sends a policy");
         assert!(policy.notice.enabled && policy.ai_warning.enabled);
         assert_eq!(policy.ai_warning.text, askbar_proto::DEFAULT_AI_WARNING);

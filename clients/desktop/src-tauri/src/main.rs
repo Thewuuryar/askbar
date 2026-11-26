@@ -196,6 +196,8 @@ struct Bootstrap {
     policy: Option<askbar_proto::Policy>,
     /// Whether to offer the "Search the web" toggle.
     web_search: bool,
+    /// Whether to offer the "Research" toggle.
+    research: bool,
 }
 
 #[tauri::command]
@@ -215,6 +217,7 @@ async fn bootstrap(state: State<'_, AppState>) -> Result<Bootstrap, String> {
         notice,
         policy: cfg.policy,
         web_search: cfg.web_search,
+        research: cfg.research,
     })
 }
 
@@ -281,6 +284,7 @@ async fn ask(
     text: String,
     model: Option<String>,
     web_search: Option<bool>,
+    research: Option<bool>,
     on_event: Channel<StreamEvent>,
 ) -> Result<(), String> {
     let text = text.trim().to_string();
@@ -290,7 +294,7 @@ async fn ask(
     let backend = state.backend();
     with_cancel(&state, |rx| async move {
         backend
-            .ask_with(model, web_search.unwrap_or(false), conversation_id, text, rx, &|e| {
+            .ask_with(model, web_search.unwrap_or(false), research.unwrap_or(false), conversation_id, text, rx, &|e| {
                 let _ = on_event.send(e);
             })
             .await
