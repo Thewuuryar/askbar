@@ -20,11 +20,11 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 7 | 0 | 3 | 10 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
-| [PII detection and redaction](plan-pii-redaction.md) | 0 | 0 | 11 | 11 |
+| [PII detection and redaction](plan-pii-redaction.md) | 1 | 0 | 10 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **140** | **0** | **171** | **311** |
+| **Total** | **141** | **0** | **170** | **311** |
 
-## Completed (140)
+## Completed (141)
 
 ### Refactor (track 0)
 
@@ -190,11 +190,15 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[P8.8a](plan-tiered-routing/phase-8-admin-ui.md)** cover the MCP, egress and search pages at 1280 and 390 · W6
 - [x] **[P8.9a](plan-tiered-routing/phase-8-admin-ui.md)** the MCP, egress and search pages in the admin guide · W6
 
+### PII detection and redaction (track 2)
+
+- [x] **[PII-P0.1](plan-pii-redaction.md)** amend 0054 and 0014: PII detection and placeholders
+
 ## In progress (0)
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (175)
+## Not started (174)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -389,7 +393,6 @@ Nothing: no step has an open branch or pull request.
 
 ### PII detection and redaction (track 2)
 
-- [ ] **[PII-P0.1](plan-pii-redaction.md)** amend 0054 and 0014: PII detection and placeholders
 - [ ] **[PII-P0.2](plan-pii-redaction.md)** amend 0011 and 0051: provider request payload and PII attributes
 - [ ] **[PII-P1.1](plan-pii-redaction.md)** add PII settings
 - [ ] **[PII-P1.2](plan-pii-redaction.md)** detect PII and record counts
