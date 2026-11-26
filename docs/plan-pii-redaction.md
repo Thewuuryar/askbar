@@ -2,7 +2,7 @@
 
 Previous: [Tiered routing risks](plan-tiered-routing/risks.md) · Next: [Canaries](plan-canaries.md) · Tracker: [task-tracker.md](task-tracker.md)
 
-Status: built on the owner's instruction of 2026-11-26 (regex approved; the two-week detect_only wait waived, a test corpus stands in for it); the Phase 0 ADR amendments are proposed until the owner accepts them. Track 2 in [plan-priorities.md](plan-priorities.md). Rules for agents: [AGENTS.md](../AGENTS.md).
+Status: built on the owner's instruction of 2026-11-26 (regex approved; the two-week detect_only wait waived, a test corpus stands in for it); the Phase 0 ADR amendments (0054, 0014, 0051) were accepted by the owner on 2026-11-26. Track 2 in [plan-priorities.md](plan-priorities.md). Rules for agents: [AGENTS.md](../AGENTS.md).
 
 Related plans: [context checks and canaries](plan-canaries.md), which adds to the reply stream filter this plan builds, and [audit record viewing](plan-audit-viewer.md), which shows what this plan records.
 
