@@ -32,6 +32,8 @@ pub enum GatewayError {
     BudgetExceeded(String),
     /// The gateway refused: the model is not in its catalog (the authoritative copy).
     ModelNotApproved,
+    /// The gateway refused: the message holds a value the PII settings block (`pii_blocked`).
+    PiiBlocked,
     /// The gateway has no such provider (a key was never given to it for one that exists here).
     NoSuchProvider,
     /// The request's role has no model pinned at the gateway (`role_not_pinned`).
@@ -171,6 +173,7 @@ impl GatewayClient {
                 (429, Some(askbar_proto::ErrorCode::BudgetExceeded)) => GatewayError::BudgetExceeded(period),
                 (503, Some(askbar_proto::ErrorCode::AuditBacklog)) => GatewayError::AuditBacklog,
                 (503, Some(askbar_proto::ErrorCode::NotConfigured)) => GatewayError::NotConfigured,
+                (_, Some(askbar_proto::ErrorCode::PiiBlocked)) => GatewayError::PiiBlocked,
                 (_, Some(askbar_proto::ErrorCode::RoleNotPinned)) => GatewayError::RoleNotPinned,
                 (402, Some(askbar_proto::ErrorCode::TaskTokenCap)) => GatewayError::TaskTokenCap,
                 (404, _) => GatewayError::NoSuchProvider,
@@ -289,6 +292,19 @@ mod tests {
             post(|| async { ApiError::new(ErrorCode::BudgetExceeded, "used up").with("period", "monthly") }),
         );
         assert_eq!(client_for(app).await.chat(&request()).await.err(), Some(GatewayError::BudgetExceeded("monthly".into())));
+        // A blocked value: the type names ride along, and the person gets the one fixed sentence.
+        let app = axum::Router::new().route(
+            "/api/model-gateway/v1/chat",
+            post(|| async { ApiError::new(ErrorCode::PiiBlocked, "blocked").with("types", vec!["API_KEY"]) }),
+        );
+        let e = client_for(app).await.chat(&request()).await.err();
+        assert_eq!(e, Some(GatewayError::PiiBlocked));
+        let f = crate::generation::gateway_failure(e.unwrap());
+        assert_eq!(f.code, "pii_blocked");
+        assert_eq!(
+            f.message,
+            "Your message was not sent: it contains a private value (a card number or a secret). Remove it and send again."
+        );
         let dead = GatewayClient::new("http://127.0.0.1:1", std::env::temp_dir());
         assert_eq!(dead.chat(&request()).await.err(), Some(GatewayError::Rejected), "no token file here");
     }

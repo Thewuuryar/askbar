@@ -99,7 +99,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
   Files: `services/model-gateway/src/{lib,pii}.rs`, tests.
   Do: a plain filter struct (`push(&str) -> String`, `finish() -> String`), no trait or chain. Call `delta_tx.send(filter.push(d))` in the delta closure and `finish()` after `stream_chat_report` returns. On cancel or error, flush held-back text; never drop it. Restore from the per-request reverse map.
   Accept: property tests split placeholders at every byte; unknown placeholders pass through unchanged; a cancelled stream loses no text.
-- [ ] **PII-P2.3** `feat(model-gateway): refuse a turn with blocked PII` · haiku · after PII-P2.1
+- [x] **PII-P2.3** `feat(model-gateway): refuse a turn with blocked PII` · haiku · after PII-P2.1
   Files: `crates/askbar-proto`, `docs/openapi/model-gateway.v1.yaml`, `services/model-gateway/src/lib.rs`.
   Do: a new `ErrorCode`, its entry in the OpenAPI file, and a refusal in `gates()`. Detection runs before `gates()`. The server returns it as `application/problem+json` ([ADR 0023](adr/0023-api-error-format.md)). The refusal attrs carry the type only.
   Accept: a pasted `sk-ant-` key is refused, and the refusal carries no part of it.

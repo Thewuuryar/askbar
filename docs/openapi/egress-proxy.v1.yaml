@@ -160,6 +160,7 @@ components:
           - user_paused
           - model_not_approved
           - role_not_pinned
+          - pii_blocked
           - quick_search_tool
           - quick_search_arguments
           - quick_search_query_count

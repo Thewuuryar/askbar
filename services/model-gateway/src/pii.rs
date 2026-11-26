@@ -326,6 +326,8 @@ pub struct Redacted {
     /// `enforce` the number of values replaced. `None` when nothing was found, so a clean request adds nothing to the
     /// trace. No value, snippet or offset.
     pub step: Option<serde_json::Value>,
+    /// In `enforce`, the count of values whose action is `Block`, by type (PII-P2.3). Types and counts only.
+    pub blocked: std::collections::BTreeMap<&'static str, u64>,
 }
 
 /// What makes two values the same value: email and custom terms ignore case, a phone is its digits (and a leading `+`),
@@ -349,11 +351,15 @@ pub fn redact(cfg: &PiiConfig, system: &str, messages: &[ChatMessage]) -> Redact
     let mut seen: Vec<(&str, String)> = Vec::new(); // (type, normalised value); the index in `reverse` is the order
     let mut reverse: Vec<(String, String)> = Vec::new();
     let mut replaced = 0u64;
+    let mut blocked = std::collections::BTreeMap::<&'static str, u64>::new();
     let mut one = |text: &str| -> String {
         let spans = detect(text, cfg);
         let (mut out, mut at) = (String::new(), 0);
         for s in &spans {
             *counts.entry(s.ty).or_default() += 1;
+            if enforce && cfg.action_for(s.ty) == PiiAction::Block {
+                *blocked.entry(s.ty).or_default() += 1;
+            }
             if !enforce || cfg.action_for(s.ty) != PiiAction::Pseudonymize {
                 continue;
             }
@@ -388,7 +394,7 @@ pub fn redact(cfg: &PiiConfig, system: &str, messages: &[ChatMessage]) -> Redact
         }
         serde_json::json!({ "pii": pii })
     });
-    Redacted { system, messages, reverse, step }
+    Redacted { system, messages, reverse, step, blocked }
 }
 
 /// Puts the original values back into the reply as it streams (PII-P2.2). The model may write a placeholder as given
