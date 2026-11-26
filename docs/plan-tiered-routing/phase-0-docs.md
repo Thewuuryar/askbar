@@ -29,7 +29,7 @@ Docs only. Ends with G1.
 - [ ] **P0.9** `docs(adr): amend 0016: routing and library risks` · haiku · after P0.3. Files: `0016-risk-register.md`. Defend and Accept lists from the design row. Register.
 - [ ] **P0.10** `docs(adr): amend 0019: order, judge role, writer and pins` · haiku · after P0.3. Files: `0019-post-v1-order-and-tools.md`. Order: as set in step O0.1 of [plan-priorities.md](../plan-priorities.md), not copied here; hosted Jev on the allowlist if approved. Decision.
 - [ ] **P0.11** `docs(adr): amend 0020: approvals, library scripts and the executor deferred` · haiku · after P0.3. Files: `0020-remote-executor-and-ca-triggers.md`. The executor comes after agents with MCP tools and is deferrable. Decision.
-- [ ] **P0.12** `docs(adr): amend 0009: task state in the space file` · haiku · after P0.3. Files: `0009-spaces-and-storage.md`. Decision.
+- [x] **P0.12** `docs(adr): amend 0009: task state in the space file` · haiku · after P0.3. Files: `0009-spaces-and-storage.md`. Decision.
 - [ ] **P0.13** `docs(adr): amend 0022: the judge is a role, not a caller` · haiku · after P0.3
   Files: `0022-api-path-conventions.md`.
   Do: first `grep -n judge` in 0022; if it lists the judge as a `model-gateway` caller, correct it (the server calls the judge role). If it does not, tick as "not needed" with no commit.

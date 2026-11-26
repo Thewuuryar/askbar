@@ -9,22 +9,22 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 | [Refactor](plan-refactor.md) | 37 | 0 | 0 | 37 |
 | [Order of work and web search](plan-priorities.md) | 11 | 0 | 0 | 11 |
 | [Audit viewer](plan-audit-viewer.md) | 4 | 0 | 5 | 9 |
-| [Tiered routing Phase 0: records and docs](plan-tiered-routing/phase-0-docs.md) | 2 | 0 | 15 | 17 |
+| [Tiered routing Phase 0: records and docs](plan-tiered-routing/phase-0-docs.md) | 3 | 0 | 14 | 17 |
 | [Tiered routing Phase 1: records](plan-tiered-routing/phase-1-records.md) | 0 | 0 | 29 | 29 |
 | [Tiered routing Phase 2: shadow](plan-tiered-routing/phase-2-shadow.md) | 0 | 0 | 20 | 20 |
 | [Tiered routing Phase 3: Auto](plan-tiered-routing/phase-3-auto.md) | 0 | 0 | 28 | 28 |
 | [Tiered routing Phase 4: egress proxy](plan-tiered-routing/phase-4-egress-proxy.md) | 23 | 0 | 0 | 23 |
 | [Tiered routing Phase 5A: MCP gateway](plan-tiered-routing/phase-5a-mcp-gateway.md) | 41 | 0 | 1 | 42 |
-| [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 12 | 0 | 6 | 18 |
+| [Tiered routing Phase 5B: research and judge](plan-tiered-routing/phase-5b-research-judge.md) | 13 | 0 | 5 | 18 |
 | [Tiered routing Phase 6: agents](plan-tiered-routing/phase-6-agents.md) | 0 | 0 | 31 | 31 |
 | [Tiered routing Phase 8: admin UI](plan-tiered-routing/phase-8-admin-ui.md) | 7 | 0 | 3 | 10 |
 | [Tiered routing Phase 9: executor](plan-tiered-routing/phase-9-executor.md) | 0 | 0 | 6 | 6 |
 | [Tiered routing Phase 10: script library](plan-tiered-routing/phase-10-script-library.md) | 0 | 0 | 10 | 10 |
 | [PII detection and redaction](plan-pii-redaction.md) | 0 | 0 | 11 | 11 |
 | [Context checks and canaries](plan-canaries.md) | 0 | 0 | 9 | 9 |
-| **Total** | **137** | **0** | **174** | **311** |
+| **Total** | **139** | **0** | **172** | **311** |
 
-## Completed (137)
+## Completed (139)
 
 ### Refactor (track 0)
 
@@ -91,6 +91,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 
 - [x] **[P0.1](plan-tiered-routing/phase-0-docs.md)** add the tiered routing design
 - [x] **[P0.2](plan-tiered-routing/phase-0-docs.md)** replace the tiered routing plan
+- [x] **[P0.12](plan-tiered-routing/phase-0-docs.md)** amend 0009: task state in the space file
 
 ### Tiered routing Phase 4: egress proxy (track 1)
 
@@ -176,6 +177,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 - [x] **[P5B.6](plan-tiered-routing/phase-5b-research-judge.md)** research toggle, progress and sources · W7
 - [x] **[P5B.7](plan-tiered-routing/phase-5b-research-judge.md)** research report with the mock model and fixture pages · W7
 - [x] **[P5B.8](plan-tiered-routing/phase-5b-research-judge.md)** research reports in the user and admin guides · W7
+- [x] **[P5.17](plan-tiered-routing/phase-5b-research-judge.md)** amend 0004 and 0049, 0023 · W7
 
 ### Tiered routing Phase 8: admin UI (tracks 1 and 4)
 
@@ -191,7 +193,7 @@ A step is `[x]` only when its box is ticked on `main`. A step whose branch or pu
 
 Nothing: no step has an open branch or pull request.
 
-## Not started (178)
+## Not started (176)
 
 ### Audit viewer (tracks 1 and 5)
 
@@ -212,7 +214,6 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P0.9](plan-tiered-routing/phase-0-docs.md)** amend 0016: routing and library risks
 - [ ] **[P0.10](plan-tiered-routing/phase-0-docs.md)** amend 0019: order, judge role, writer and pins
 - [ ] **[P0.11](plan-tiered-routing/phase-0-docs.md)** amend 0020: approvals, library scripts and the executor deferred
-- [ ] **[P0.12](plan-tiered-routing/phase-0-docs.md)** amend 0009: task state in the space file
 - [ ] **[P0.13](plan-tiered-routing/phase-0-docs.md)** amend 0022: the judge is a role, not a caller
 - [ ] **[P0.14](plan-tiered-routing/phase-0-docs.md)** add tiered routing terms to the architecture
 - [ ] **[P0.15](plan-tiered-routing/phase-0-docs.md)** describe Auto, tiers and /decide in the architecture
@@ -315,7 +316,6 @@ Nothing: no step has an open branch or pull request.
 - [ ] **[P5.8](plan-tiered-routing/phase-5b-research-judge.md)** add step_check and research decisions to /decide
 - [ ] **[P5.14](plan-tiered-routing/phase-5b-research-judge.md)** add role pins and the role table
 - [ ] **[P5.15](plan-tiered-routing/phase-5b-research-judge.md)** set roles, decider thresholds and task caps
-- [ ] **[P5.17](plan-tiered-routing/phase-5b-research-judge.md)** amend 0004 and 0049, 0023 · W7
 - [ ] **[P5.18](plan-tiered-routing/phase-5b-research-judge.md)** amend 0054, 0039, 0040 for research and the judge · W7
 
 ### Tiered routing Phase 6: agents (track 4)
