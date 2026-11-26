@@ -26,4 +26,4 @@ The built-in tools that let a reply search the web (`search`) and read a page (`
 - `PUT /api/admin/v1/mcp/permissions/{user}`: sets the tools one user may use (`allowed`) and may not use (`denied`), replacing both lists. A tool in neither list is not held; a tool in both is refused. The change is recorded in the auditor, and is refused with 503 if it cannot be.
 - `DELETE /api/admin/v1/mcp/permissions/{user}`: removes every permission of that user.
 
-The limits are on [Search](search.md#mcp-limits) and [Search](search.md#quick-search). Refused requests to the search engines and to sites are listed on [Egress](egress.md#blocked-outbound-requests).
+The limits are on [Search](search.md#mcp-limits) and [Search](search.md#quick-search). Research reports need both `search` and `fetch`, and the three research models pinned ([Search](search.md#research)). Refused requests to the search engines and to sites are listed on [Egress](egress.md#blocked-outbound-requests).
