@@ -1,0 +1,15 @@
+# Secret-shaped test inputs, stored in parts so no line looks like a real credential.
+# The test joins the parts: `pem*` rows are one text ("\n" is a newline); the others are
+# `TYPE|leading text|part|part...`, the expected span being the parts joined.
+case01|API_KEY|key=|sk-proj-|AbCdEfGhIjKlMnOpQrSt_12
+case02|API_KEY||AIza|SyA1234567890abcdefghijklmnopqrstuv
+case03|API_KEY||xoxb-|1234567890-abcdefghij
+case04|API_KEY||sk_live_|abcdefghijklmnop1234
+case05|API_KEY||SG.|abcdefghijklmnop1234|.abcdefghijklmnop1234
+case06|API_KEY||glpat-|abcdefghij1234567890
+case07|JWT|Bearer |eyJhbGciOiJIUzI1NiJ9|.|eyJzdWIiOiIxMjM0NTY3ODkwIn0|.|abcdefghij-_KLMN
+pem1|k:\n|-----BEGIN |RSA |PRIVATE KEY-----|\nMIIEow\nIBAAKC\n|-----END |RSA |PRIVATE KEY-----|\nafter
+pem_end|-----END |RSA |PRIVATE KEY-----
+pem_cut|-----BEGIN |PRIVATE KEY-----|\nMIIEvQIBADANBgkq\nhkiG9w0BAQEFAASC\n\nnot base64 here
+pem_cut_want|-----BEGIN |PRIVATE KEY-----|\nMIIEvQIBADANBgkq\nhkiG9w0BAQEFAASC
+pem_long|-----BEGIN |PRIVATE KEY-----|\n

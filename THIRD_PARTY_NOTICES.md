@@ -358,8 +358,11 @@ What the shipped binaries (the services, the `cpa` supervisor and the desktop ap
 | redox_syscall | 0.5.18 | MIT |
 | redox_users | 0.5.3 | MIT |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
+| regex | 1.13.2 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
+| regex-automata | 0.4.19 | MIT OR Apache-2.0 |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
+| regex-syntax | 0.8.12 | MIT OR Apache-2.0 |
 | reqwest | 0.12.28 | MIT OR Apache-2.0 |
 | reqwest | 0.13.5 | MIT OR Apache-2.0 |
 | ring | 0.17.14 | Apache-2.0 AND ISC |

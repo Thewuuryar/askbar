@@ -661,6 +661,82 @@ async fn the_approval_key_is_held_after_a_push_that_carries_it_and_appears_nowhe
     assert!(!seen.contains(APPROVAL), "{seen}");
 }
 
+/// A `tracing` writer that keeps what is logged, so a test can search it.
+#[derive(Clone, Default)]
+struct LogBuf(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuf {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn pii_detection_records_counts_on_a_redact_step_and_the_provider_gets_the_request_unchanged() {
+    const EMAIL: &str = "ann.lee@example.org";
+    const KEY: &str = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv";
+    let logs = LogBuf::default();
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer({
+                let l = logs.clone();
+                move || l.clone()
+            })
+            .finish(),
+    );
+    let rig = rig().await;
+    let mut cfg = config(&rig, 1, &[("p", "m")]);
+    cfg.pii.enabled = true;
+    assert_eq!(rig.push(&cfg).await.status(), 200);
+
+    rig.chat(&rig.request("p", "gen-pii", &format!("{EMAIL} wrote about the key {KEY} and {EMAIL}"))).await;
+    let attempt = rig.wait_rows("SELECT id FROM spans WHERE trace_id = 'gen-pii' AND kind = 'attempt' AND status = 'done'").await;
+    let step = rig
+        .wait_rows(
+            "SELECT kind, parent_id, attrs_json, status FROM spans WHERE trace_id = 'gen-pii' AND name = 'redact' AND status = 'done'",
+        )
+        .await;
+    assert_eq!((&step[0][0], &step[0][1]), (&json!("step"), &attempt[0][0]));
+    let attrs: Value = serde_json::from_str(step[0][2].as_str().unwrap()).unwrap();
+    assert_eq!(
+        attrs["pii"],
+        json!({ "counts": { "EMAIL": 2, "API_KEY": 1 }, "actions": { "EMAIL": "pseudonymize", "API_KEY": "block" }, "mode": "detect_only" })
+    );
+
+    // The provider got the request as typed: its log line shows the start of it, and the sealed body holds all of it.
+    assert!(rig.mock.log.lock().unwrap().iter().any(|l| l.contains(EMAIL)), "{:?}", rig.mock.log.lock().unwrap());
+    let sql =
+        format!("SELECT ciphertext FROM payloads WHERE span_id = '{}' AND role = 'provider_request'", attempt[0][0].as_str().unwrap());
+    rig.wait_rows(&sql).await;
+    let blob: Vec<u8> = rig.auditor.recorder.reader().unwrap().query_row(&sql, [], |r| r.get(0)).unwrap();
+    let body = String::from_utf8(crypto_box::SecretKey::from(AUDIT_SECRET).unseal(&blob).unwrap()).unwrap();
+    assert!(body.contains(EMAIL) && body.contains(KEY), "{body}");
+
+    // A request with nothing found writes no step.
+    rig.chat(&rig.request("p", "gen-clean", "Will you call Rose and Mark?")).await;
+    rig.wait_rows("SELECT id FROM spans WHERE trace_id = 'gen-clean' AND kind = 'attempt' AND status = 'done'").await;
+    assert!(rig.rows("SELECT id FROM spans WHERE trace_id = 'gen-clean' AND name = 'redact'").is_empty());
+
+    // Neither value is in any span, the status or the log.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rig.gw.audit().queued() > 0 {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let status =
+        rig.http.get(format!("{}/api/model-gateway/v1/status", rig.admin)).bearer_auth(ADM).send().await.unwrap().text().await.unwrap();
+    let spans = format!("{:?}", rig.rows("SELECT * FROM spans"));
+    let log = String::from_utf8_lossy(&logs.0.lock().unwrap()).to_string();
+    for (what, text) in [("spans", &spans), ("status", &status), ("log", &log)] {
+        assert!(!text.contains(EMAIL) && !text.contains(KEY) && !text.contains("AbCdEfGh"), "{what}");
+    }
+}
+
 #[tokio::test]
 async fn a_key_appears_nowhere_a_caller_or_the_auditor_can_see() {
     let rig = rig().await;
