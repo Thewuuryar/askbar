@@ -92,7 +92,7 @@ Runs in track 1 as stage W7 of [plan-priorities.md](../plan-priorities.md). Need
   Files: `0004-bootstrap-and-per-link-tokens.md`, `0049-bootstrap.md`, `0023-api-error-format.md`.
   Do: one commit each. 0023: the new problem types (`task_token_cap` 402, `task_tool_calls`, `research_busy` 409). 0004 and 0049: W7 adds no link, token, volume or signing key (the key and links came with Phase 5A), so skip both and say so in the PR unless a step added one. If P0.12 is still unticked, include the ADR 0009 task-table amendment in this step (one commit, decision: owner approves).
   Accept: `scripts/check-docs.sh` passes.
-- [ ] **P5.18** `docs(adr): amend 0054, 0039, 0040 for research and the judge` · haiku · after P5.17
+- [x] **P5.18** `docs(adr): amend 0054, 0039, 0040 for research and the judge` · haiku · after P5.17
   Files: `0054-model-gateway.md` (`/decide`, `/approvals/research`, the task counters and the cap, the three roles), `0039-server.md` (the research flow, the task tables, one running task per user), `0040-admin.md` (the research limits and pins, the cap alert).
   Do: one commit each. Decision amendments: the owner approves the PRs. Say there is no per-call judge in W7 and why.
   Accept: `scripts/check-docs.sh` passes.
