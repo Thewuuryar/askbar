@@ -15,6 +15,7 @@ pub mod approval;
 pub mod decide;
 pub mod llm;
 pub mod models;
+pub mod pii;
 pub mod provider_test;
 pub mod router;
 pub mod seal;
@@ -758,6 +759,9 @@ async fn run_attempts(
     let mut sent_text = false;
     let mut retry_index = 0u32;
     let system = req.system.clone();
+    // Detect once: every attempt records the same `redact` step, and the request is sent as it is (detect_only, plan
+    // PII-P1.2). A request with nothing found writes no step, to keep the trace small.
+    let redact = pii::step_attrs(&cfg.pii, std::iter::once(req.system.as_str()).chain(req.messages.iter().map(|m| m.content.as_str())));
     loop {
         // A stop that came while the last try waited, or before the first: no more tries (and no provider is called).
         if let Some(reason) = *stop_rx.borrow() {
@@ -797,6 +801,16 @@ async fn run_attempts(
         }
         if let Ok(sealed) = seal::seal(&cfg.audit_key, cut(&provider_request, MAX_PAYLOAD_BYTES).as_bytes()) {
             gw.audit.payload(&attempt_id, "provider_request", &sealed.key_id, &sealed.bytes);
+        }
+        if let Some(attrs) = &redact {
+            // Counts by type only: no value, snippet or offset. Not a model call, so it needs no acknowledgment.
+            let step_id = askbar_service::ids::new_id();
+            let mut step = start_of(&step_id, &req.generation_id, Some(&attempt_id), SpanKind::Step, "redact");
+            step.user_id = Some(req.user_id.clone());
+            step.client_id = req.client_id.clone();
+            step.attrs = Some(attrs.clone());
+            gw.audit.start(step);
+            gw.audit.finish(&step_id, finish("done"));
         }
 
         // The caller going away cancels the request: a watcher holds the cancel sender until then.

@@ -43,7 +43,7 @@ pub struct PiiConfig {
     pub mode: PiiMode,                          // detect_only (default) | enforce
     pub entities: BTreeMap<String, PiiAction>,  // type -> pseudonymize | block | allow
     pub allow_terms: Vec<String>,
-    pub deny_terms: Vec<String>,                // always pseudonymized as CUSTOM
+    pub deny_terms: Vec<String>,                // always pseudonymized as CUSTOM; not in `entities`
 }
 ```
 
@@ -84,7 +84,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
 
 - [x] **PII-P1.1** `feat(proto): add PII settings` · haiku
   Files: `crates/askbar-proto/src/gateway.rs`. Accept: defaults as above; old config parses.
-- [ ] **PII-P1.2** `feat(model-gateway): detect PII and record counts` · sonnet · after PII-P1.1, owner approval of the `regex` dependency
+- [x] **PII-P1.2** `feat(model-gateway): detect PII and record counts` · sonnet · after PII-P1.1, owner approval of the `regex` dependency
   Files: `services/model-gateway/src/{lib,pii}.rs`, `services/model-gateway/Cargo.toml`, tests.
   Do: `detect(text, &PiiConfig) -> Vec<Span>` with types and byte ranges; validators for Luhn and IBAN; secret rules; secrets-only inside fenced code; allow and deny terms; merge overlaps, preferring validated spans. In `run_attempts`, run it once before the retry loop on `messages` and `req.system`; open a `redact` step with `attrs.pii = {counts, actions, mode}`; send nothing different to the provider.
   Accept: table tests per type, including false-positive cases (UUIDs, git hashes, version numbers, the names Will, Rose and Mark); counts appear on the `redact` step; a test greps logs and attributes for a planted email and finds nothing.
