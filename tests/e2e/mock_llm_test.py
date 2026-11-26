@@ -84,6 +84,32 @@ class Modes(unittest.TestCase):
             raise http.client.IncompleteRead(got)  # a clean end would not be a reset
         self.assertNotIn(b"[DONE]", got)
 
+    def reply(self, text, system):
+        _, r = self.srv.post(text, extra={"messages": [{"role": "system", "content": system}, {"role": "user", "content": text}],
+                                          "stream_options": {"include_usage": True}})
+        raw = r.read().decode()
+        chunks = [json.loads(l[6:]) for l in raw.splitlines() if l.startswith("data: {")]
+        return "".join(c["choices"][0]["delta"]["content"] for c in chunks if c["choices"]), chunks[-1].get("usage")
+
+    def test_research_stages_answer_by_system_prompt(self):
+        self.assertEqual(json.loads(self.reply("q", "You split one question into x")[0]), ["smoke-p5b-sub-one", "smoke-p5b-sub-two"])
+        self.assertEqual(len(json.loads(self.reply("q", "You propose web search queries for one")[0])), 2)
+        self.assertIn("smoke-p5b-summary-marker", self.reply("q", "You summarise web pages for a report")[0])
+        draft = self.reply("q", "You write cited research reports from x")[0]
+        self.assertTrue("smoke-p5b-draft-marker" in draft and "[1]" in draft and "[2]" in draft)
+
+    def test_judge_approves_refuses_or_answers_badly_by_a_marker(self):
+        judge = "You review a draft report before"
+        self.assertEqual(json.loads(self.reply("question", judge)[0]), {"verdict": "approve"})
+        self.assertEqual(json.loads(self.reply("MOCK-JUDGE approve", judge)[0]), {"verdict": "approve"})
+        self.assertEqual(json.loads(self.reply("MOCK-JUDGE refuse unsafe", judge)[0]), {"verdict": "refuse", "reason": "unsafe"})
+        with self.assertRaises(ValueError):
+            json.loads(self.reply("MOCK-JUDGE malformed", judge)[0])
+
+    def test_mock_tokens_sets_the_reported_usage(self):
+        self.assertEqual(self.reply("plain", "s")[1]["total_tokens"], 150)
+        self.assertEqual(self.reply("a\nMOCK-TOKENS 30000\nb", "s")[1]["completion_tokens"], 30000)
+
     def test_hang_sends_nothing_until_client_closes(self):
         c = http.client.HTTPConnection("127.0.0.1", self.srv.port, timeout=1)
         c.request("POST", "/v1/chat/completions", json.dumps(
