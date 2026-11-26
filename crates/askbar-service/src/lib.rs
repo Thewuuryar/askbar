@@ -10,6 +10,7 @@
 //! - [`ids`]: server-generated ULIDs.
 //! - [`audit_client`]: the link to the auditor, with its queue of records to send (ADR 0010, ADR 0054).
 //! - `approval` (feature `approval`): keys, sign and verify for one tool action.
+//! - `pii` (feature `pii`): finds personal data and secrets in text.
 //! - [`tar`]: the archive a backup export is written in.
 //!
 //! The common internal routes are the same in every service (ADR 0022): `GET /health`,
@@ -27,6 +28,8 @@ pub mod configured;
 pub mod ids;
 pub mod links;
 pub mod periods;
+#[cfg(feature = "pii")]
+pub mod pii;
 pub mod restart;
 pub mod restart_loop;
 pub mod status;

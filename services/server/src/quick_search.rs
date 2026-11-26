@@ -39,6 +39,8 @@ pub(crate) const MARKER: &str = "untrusted_web_content";
 const NOTE_OFF: &str = "Web search is not turned on for you, so this answer is not from the web.\n\n";
 const NOTE_DISABLED: &str = "Search is turned off by your administrator, so this answer is not from the web.\n\n";
 const NOTE_DOWN: &str = "Web search is unavailable right now, so this answer is not from the web.\n\n";
+/// Said when the MCP front cut private values out of a query (`left_out` in its result).
+pub(crate) const NOTE_LEFT_OUT: &str = "Part of the query was left out because it looked like private data.";
 const NOTE_NO_QUERIES: &str = "No web search could be made for this message, so this answer is not from the web.\n\n";
 
 /// The server's link to the MCP gateway's front (ADR 0057): the tools a user holds, and approved calls.
@@ -196,6 +198,9 @@ pub(crate) async fn prepare(cx: &Ctx<'_>, message: &str) -> Result<Prepared, Fai
     for (i, q) in queries.iter().enumerate() {
         match approved_call(cx, mcp, "search", json!({ "query": q })).await {
             Ok(r) => {
+                if r["left_out"].as_u64().unwrap_or(0) > 0 && !notes.iter().any(|n| n == NOTE_LEFT_OUT) {
+                    notes.push(NOTE_LEFT_OUT.into());
+                }
                 for hit in r["results"].as_array().into_iter().flatten() {
                     if let (Some(title), Some(url)) = (hit["title"].as_str(), hit["url"].as_str()) {
                         if !results.iter().any(|(_, u)| u == url) {

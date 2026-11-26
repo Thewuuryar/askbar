@@ -18,7 +18,7 @@ Detection is a filter, not a guarantee. On hard real-world text the best small m
 
 | Area | Decision |
 | --- | --- |
-| Where | A module, `services/model-gateway/src/pii.rs`. No new crate. [PII-P2.6](#phase-2-pseudonymize-and-restore) moves it into a crate only when that step starts |
+| Where | The detector is `crates/askbar-service/src/pii.rs` (feature `pii`, shared with the MCP gateway front since [PII-P2.6](#phase-2-pseudonymize-and-restore)); placeholders and the reply filter are `services/model-gateway/src/pii.rs`. No new crate |
 | Injection point | In `run_attempts` (`services/model-gateway/src/lib.rs`), once before the retry loop, on `messages` and `req.system`. Retries reuse the result |
 | Order | Detection runs before `gates()`, so a blocked type can be refused |
 | Placeholder | `⟦TYPE_n⟧`, numbered per request by first occurrence of each normalised value within a type: `⟦PERSON_1⟧`, `⟦PERSON_2⟧`, `⟦EMAIL_1⟧` |
@@ -106,7 +106,7 @@ The admin keeps it as one JSON settings row in `admin.db` and adds it in `build_
 - [x] **PII-P2.4** `feat(model-gateway): record the redact step` · haiku · after PII-P2.1, PII-P2.2, audit viewer AV2.3
   Do: AV2.3 seals `provider_request` on the attempt span. Check it holds the redacted text. The `redact` step span (kind `step`, under the attempt) gets counts by type and action, and the `restored` count in its attrs.
   Accept: the payload decrypts in the sealed view to the redacted text; the `redact` step shows counts and `restored`, no values.
-- [ ] **PII-P2.6** `feat(mcp-gateway): check search queries and fetch URLs for PII` · sonnet · after PII-P1.2
+- [x] **PII-P2.6** `feat(mcp-gateway): check search queries and fetch URLs for PII` · sonnet · after PII-P1.2
   Files: the MCP gateway front's search and fetch handlers, tests.
   Do: first move `pii.rs` into a crate shared with the MCP gateway front. Then run the tier 1 detector on each search query and fetch URL before the audit span. Secrets refuse the call; other PII is removed from the query, the call goes ahead, and the reply says a term was left out. Record counts on the tool span, never values. Placeholders are no use to a search engine, so queries are never pseudonymized.
   Accept: a query containing an email address reaches the fixture search engine without it; a query with a provider key is refused.
