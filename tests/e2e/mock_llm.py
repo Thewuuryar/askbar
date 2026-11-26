@@ -188,7 +188,9 @@ class Handler(BaseHTTPRequestHandler):
         brisk = "brisk" in last.lower()
         slow = brisk or "slow" in last.lower()
         text = SLOW if slow else REPLY
-        if "You propose web search queries" in system:
+        if (chosen := re.search(r"^MOCK-REPLY (.*)$", last, re.M)):
+            text = chosen.group(1)
+        elif "You propose web search queries" in system:
             text = QUERIES
         elif "You split one question" in system:
             text = SUBS
@@ -201,8 +203,6 @@ class Handler(BaseHTTPRequestHandler):
             text = ('{"verdict":"approve"}' if not j or j.group(1) == "approve" else
                     '{"verdict":"approve"} and a word' if j.group(1) == "malformed" else
                     json.dumps({"verdict": "refuse", "reason": j.group(2)}))
-        elif (chosen := re.search(r"^MOCK-REPLY (.*)$", last, re.M)):
-            text = chosen.group(1)
         elif "<untrusted_web_content>" in last:
             text = f"From the sources [1] and [2]: sources seen {len(re.findall(r'^\[\d+\] ', last, re.M))}."
         self.send_response(200)
