@@ -88,7 +88,7 @@ Runs in track 1 as stage W7 of [plan-priorities.md](../plan-priorities.md). Need
 - [ ] **P5.8** `feat(model-gateway): add step_check and research decisions to /decide` · not in W7: moved to track 4 (decider step checks and research filters).
 - [ ] **P5.14** `feat(model-gateway): add role pins and the role table` · not in W7: replaced by W4.1 and W4.2 (role pins) with the three roles added in P5B.1 and P5B.3. Track 4 adds the tiered role table.
 - [ ] **P5.15** `feat(admin): set roles, decider thresholds and task caps` · not in W7: the task limits are edited in P5B.3; decider thresholds and tiers wait for track 4.
-- [ ] **P5.17** `docs(adr): amend 0004 and 0049, 0023` · haiku · after P5.13, P5B.4
+- [x] **P5.17** `docs(adr): amend 0004 and 0049, 0023` · haiku · after P5.13, P5B.4
   Files: `0004-bootstrap-and-per-link-tokens.md`, `0049-bootstrap.md`, `0023-api-error-format.md`.
   Do: one commit each. 0023: the new problem types (`task_token_cap` 402, `task_tool_calls`, `research_busy` 409). 0004 and 0049: W7 adds no link, token, volume or signing key (the key and links came with Phase 5A), so skip both and say so in the PR unless a step added one. If P0.12 is still unticked, include the ADR 0009 task-table amendment in this step (one commit, decision: owner approves).
   Accept: `scripts/check-docs.sh` passes.
