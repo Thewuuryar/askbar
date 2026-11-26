@@ -40,6 +40,12 @@ pub enum GenEvent {
         queries: Vec<String>,
         sources: Vec<askbar_proto::SearchSource>,
     },
+    /// Where a research report is: `stage`, and how many researchers are done of the total. Before any delta; not counted in `seq`.
+    Progress {
+        stage: &'static str,
+        done: Option<u32>,
+        total: Option<u32>,
+    },
     Delta {
         seq: u64,
         text: String,
@@ -64,6 +70,8 @@ struct Inner {
     /// The provider announced before the first delta (one at most: there is no fallback): id, name, model.
     providers: Vec<(String, String, String)>,
     search: Option<(Vec<String>, Vec<askbar_proto::SearchSource>)>,
+    /// A research report's stages, in order (a handful at most).
+    progress: Vec<(&'static str, Option<u32>, Option<u32>)>,
     terminal: Option<Terminal>,
 }
 
@@ -83,6 +91,8 @@ pub struct Live {
     /// The message asked for a web search (plan W5.3). Kept here, not in the row, because a queued message that has not
     /// started has no row to say it and a restart ends it anyway.
     web_search: std::sync::atomic::AtomicBool,
+    /// The message asked for a research report (plan phase 5B); it wins over `web_search`.
+    research: std::sync::atomic::AtomicBool,
 }
 
 impl Live {
@@ -127,6 +137,18 @@ impl Live {
                 return;
             }
             g.search = Some((queries, sources));
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Announces a stage of a research report. Only before the first delta.
+    pub(crate) fn set_progress(&self, stage: &'static str, done: Option<u32>, total: Option<u32>) {
+        {
+            let mut g = self.lock();
+            if g.terminal.is_some() || !g.deltas.is_empty() {
+                return;
+            }
+            g.progress.push((stage, done, total));
         }
         self.notify.notify_waiters();
     }
@@ -225,11 +247,13 @@ impl Live {
             /// deltas has seen them and starts past them.
             providers_sent: usize,
             search_sent: bool,
+            progress_sent: usize,
         }
         let providers_sent = if after == 0 { 0 } else { usize::MAX };
         let search_sent = after != 0;
+        let progress_sent = if after == 0 { 0 } else { usize::MAX };
         futures_util::stream::unfold(
-            State { live: self.clone(), next: after, ended: false, providers_sent, search_sent },
+            State { live: self.clone(), next: after, ended: false, providers_sent, search_sent, progress_sent },
             |mut s| async move {
                 if s.ended {
                     return None;
@@ -246,6 +270,9 @@ impl Live {
                             let (id, name, model) = g.providers[s.providers_sent].clone();
                             s.providers_sent += 1;
                             Some(GenEvent::Provider { id, name, model })
+                        } else if let Some(&(stage, done, total)) = g.progress.get(s.progress_sent) {
+                            s.progress_sent += 1;
+                            Some(GenEvent::Progress { stage, done, total })
                         } else if let (false, Some((queries, sources))) = (s.search_sent, g.search.clone()) {
                             s.search_sent = true;
                             Some(GenEvent::Search { queries, sources })
@@ -259,7 +286,9 @@ impl Live {
                         }
                     };
                     match step {
-                        Some(ev @ (GenEvent::Provider { .. } | GenEvent::Search { .. })) => return Some((ev, s)),
+                        Some(ev @ (GenEvent::Provider { .. } | GenEvent::Progress { .. } | GenEvent::Search { .. })) => {
+                            return Some((ev, s))
+                        }
                         Some(ev @ GenEvent::Delta { .. }) => {
                             s.next += 1;
                             return Some((ev, s));
@@ -758,11 +787,11 @@ fn budget_gate(
 /// Starts a send: runs it now if its conversation is idle, else queues it. Everything that can
 /// fail with a plain HTTP status happens here, before any stream starts.
 pub fn submit(state: &Arc<AppState>, s: Submit) -> Result<Submitted, SubmitError> {
-    submit_with(state, s, false)
+    submit_with(state, s, false, false)
 }
 
-/// `submit`, for a message that may ask for a web search (plan W5.3).
-pub fn submit_with(state: &Arc<AppState>, s: Submit, web_search: bool) -> Result<Submitted, SubmitError> {
+/// `submit`, for a message that may ask for a web search (plan W5.3) or a research report (plan P5.13).
+pub fn submit_with(state: &Arc<AppState>, s: Submit, web_search: bool, research: bool) -> Result<Submitted, SubmitError> {
     // Generations already running finish; new ones wait until the audit store has caught up.
     if !state.audit.healthy() {
         return Err(SubmitError::AuditBacklog);
@@ -851,6 +880,7 @@ pub fn submit_with(state: &Arc<AppState>, s: Submit, web_search: bool) -> Result
         pass_budget_gate(state, &id, &s, &budget_note);
         let live = Live::new();
         live.web_search.store(web_search, std::sync::atomic::Ordering::Relaxed);
+        live.research.store(research, std::sync::atomic::Ordering::Relaxed);
         live.set_queue_span(state.audit.start_span(SpanStart::new(&id, Kind::Gate, "queue").who(&s.user_id, Some(&s.client_id))));
         state.generations.insert(&id, live.clone(), &space);
         return Ok(Submitted { generation_id: id, conversation_id, live, queued: true });
@@ -863,6 +893,7 @@ pub fn submit_with(state: &Arc<AppState>, s: Submit, web_search: bool) -> Result
     pass_budget_gate(state, &id, &s, &budget_note);
     let live = Live::new();
     live.web_search.store(web_search, std::sync::atomic::Ordering::Relaxed);
+    live.research.store(research, std::sync::atomic::Ordering::Relaxed);
     state.generations.insert(&id, live.clone(), &space);
     drop(store);
     drop(db);
@@ -935,7 +966,11 @@ fn spawn_run(
         let ended = {
             let run = async {
                 let (mut history, mut notice) = (history, String::new());
-                if fin.live.web_search.load(std::sync::atomic::Ordering::Relaxed) {
+                let (research, web_search) = (
+                    fin.live.research.load(std::sync::atomic::Ordering::Relaxed),
+                    fin.live.web_search.load(std::sync::atomic::Ordering::Relaxed),
+                );
+                if research || web_search {
                     let message = history.last().filter(|m| m.role == "user").map(|m| m.content.clone()).unwrap_or_default();
                     let cx = crate::quick_search::Ctx {
                         state: &state,
@@ -948,6 +983,35 @@ fn spawn_run(
                         model: &model,
                         audit_key: fin.audit_key.as_deref(),
                     };
+                    if research {
+                        // Research wins over web search. The report is held until the judge has approved it.
+                        let live = fin.live.clone();
+                        let progress = |stage, done, total| live.set_progress(stage, done, total);
+                        let report = tokio::select! {
+                            r = crate::research::run(&cx, &message, &progress) => r,
+                            _ = fin.live.cancel_asked() => return Ended::Cancelled(None),
+                        };
+                        match report {
+                            Err(f) => return Ended::Failed(f),
+                            Ok(crate::research::Report::Notice(n)) => notice = n.into(),
+                            Ok(crate::research::Report::Reply { text, queries, sources }) => {
+                                announce(&mut fin, &provider, &model);
+                                if !sources.is_empty() {
+                                    fin.live.set_search(queries, sources);
+                                }
+                                // After the verdict, in pieces so the stream reads like any reply.
+                                let mut rest = text.as_str();
+                                while !rest.is_empty() {
+                                    let at =
+                                        (1..=rest.len().min(REPORT_CHUNK)).rev().find(|&i| rest.is_char_boundary(i)).unwrap_or(rest.len());
+                                    fin.push(&rest[..at]);
+                                    rest = &rest[at..];
+                                }
+                                return Ended::Done(None);
+                            }
+                        }
+                        return via_gateway(&state, &mut fin, &provider, &model, &system, &history, &notice).await;
+                    }
                     let prepared = tokio::select! {
                         p = crate::quick_search::prepare(&cx, &message) => p,
                         _ = fin.live.cancel_asked() => return Ended::Cancelled(None),
@@ -999,6 +1063,10 @@ fn spawn_run(
             }
         };
         fin.usage = usage;
+        // A report cut short (time, Stop, a restart of the run) must not leave its task `running`: it would block the next one.
+        if fin.live.research.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = fin.space.lock().stop_task_if_running(&fin.id, fin.error_code.as_deref().unwrap_or("cancelled"));
+        }
         fin.finish(outcome);
     });
 }
@@ -1057,6 +1125,19 @@ pub(crate) fn gateway_failure(e: crate::gateway::GatewayError) -> Failed {
     }
 }
 
+/// Characters-ish (bytes, cut at a boundary) of a research report per `delta`.
+const REPORT_CHUNK: usize = 200;
+
+/// The row says which provider is serving it, and with which model, as they are now: the reply is labelled with
+/// these, even if it is written after a restart.
+fn announce(fin: &mut Finisher, provider: &askbar_proto::SnapshotProvider, model: &str) {
+    fin.provider_id = provider.id.clone();
+    let by = crate::ReplyBy { provider_id: provider.id.clone(), provider_name: provider.name.clone(), model: model.to_string() };
+    let _ = fin.space.lock().set_generation_provider(&fin.id, &by);
+    fin.by = Some(by);
+    fin.live.set_provider(&provider.id, &provider.name, model);
+}
+
 /// Sends the generation to the gateway and follows its events until the reply ends. Nothing is retried here: the gateway
 /// tries the provider up to three times and says how it ended. A cancel ends it at once, and dropping the stream
 /// cancels the request in flight.
@@ -1073,13 +1154,7 @@ async fn via_gateway(
     if live.cancel_was_asked() {
         return Ended::Cancelled(None);
     }
-    // The row says which provider is serving it, and with which model, as they are now: the reply is labelled with
-    // these, even if it is written after a restart.
-    fin.provider_id = provider.id.clone();
-    let by = crate::ReplyBy { provider_id: provider.id.clone(), provider_name: provider.name.clone(), model: model.to_string() };
-    let _ = fin.space.lock().set_generation_provider(&fin.id, &by);
-    fin.by = Some(by);
-    live.set_provider(&provider.id, &provider.name, model);
+    announce(fin, provider, model);
     // A search that was not made, or only in part, says so before the answer (quick search, plan W5.3).
     if !notice.is_empty() {
         fin.push(notice);
@@ -1408,6 +1483,7 @@ pub(crate) fn to_sse(e: GenEvent) -> Result<Event, Infallible> {
     Ok(match e {
         GenEvent::Provider { id, name, model } => sse_event(&ChatEvent::Provider { id, name, model: Some(model) }),
         GenEvent::Search { queries, sources } => sse_event(&ChatEvent::Search { queries, sources }),
+        GenEvent::Progress { stage, done, total } => sse_event(&ChatEvent::Progress { stage: stage.into(), done, total, percent: None }),
         GenEvent::Delta { seq, text } => sse_event_with_id(&ChatEvent::Delta { text }, Some(seq)),
         GenEvent::Done => sse_event(&ChatEvent::Done),
         GenEvent::Error { message, code } => sse_event(&ChatEvent::Error { message, code: Some(code.into()) }),

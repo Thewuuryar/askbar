@@ -46,6 +46,8 @@ pub struct Rig {
     keys: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
     /// The gateway's approval signing key (base64url PKCS#8), so it can sign quick search approvals.
     approval_pkcs8: String,
+    /// Roles the gateway gets no pin for, at the next `sync`.
+    unpinned: std::sync::Mutex<Vec<Role>>,
 }
 
 impl Drop for Rig {
@@ -111,6 +113,7 @@ impl Rig {
             server_tokens,
             admin_tokens,
             keys: Default::default(),
+            unpinned: Default::default(),
             approval_pkcs8: base64::Engine::encode(
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD,
                 askbar_service::approval::generate_keypair().unwrap().0,
@@ -168,6 +171,11 @@ impl Rig {
         self.keys.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), key.to_string());
     }
 
+    /// Leave `role` without a pin at the next `sync`.
+    pub fn unpin(&self, role: Role) {
+        self.unpinned.lock().unwrap_or_else(|e| e.into_inner()).push(role);
+    }
+
     /// Give the gateway what `state`'s snapshot describes: its providers, each with the key `set_key` gave it, and its audit
     /// key. A state with no audit key gives the gateway nothing (it runs nothing without one).
     pub fn sync(&self, state: &AppState) {
@@ -216,6 +224,7 @@ impl Rig {
             // The quick search and research roles run on the default model, so a test sees the role on the turn, not another model.
             role_pins: [Role::SearchQuery, Role::SearchWriter, Role::ResearchResearcher, Role::ResearchWriter, Role::JudgeReview]
                 .into_iter()
+                .filter(|r| !self.unpinned.lock().unwrap_or_else(|e| e.into_inner()).contains(r))
                 .filter_map(|r| Some((r, default_model.clone()?)))
                 .collect(),
             quick_search: snap.quick_search,

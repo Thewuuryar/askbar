@@ -835,8 +835,9 @@ components:
         research:
           type: boolean
           description: >-
-            Whether the caller may research (the `search` and `fetch` tools, the research roles pinned and research on), so an app may
-            offer its toggle. Added after 1.0; absent from an older server, read as `false`.
+            Whether the caller may research (the `search` and `fetch` tools of the MCP front, asked on each call, and research on), so an
+            app may offer its toggle. The server does not know the role pins: with an unpinned research role the reply is a plain
+            one with a note. Added after 1.0; absent from an older server, read as `false`.
     Policy:
       type: object
       required: [notice, ai_warning]
@@ -907,7 +908,8 @@ components:
           description: Search the web for this message (quick search). Omit it, or send false, for no search. Added in 1.0; a server that has not turned quick search on for this user ignores it.
         research:
           type: boolean
-          description: Write a researched report for this message. Omit it, or send false, for none. Wins over `web_search` when both are sent. Added after 1.0; a server that has not turned research on for this user ignores it.
+          description: >-
+            Write a researched report for this message. Omit it, or send false, for none. Wins over `web_search` when both are sent. Added after 1.0. The report is the reply and it is held until the reviewer (the judge) approves it: `progress` events come first, then `search` (the sub-questions and the sources) and the text. If the reviewer does not approve it, or fails, or the report cannot be made, the reply is a plain note naming the reason by its code and never the draft; with research off, not permitted or not set up, it is an ordinary reply that starts with a note.
     ChatEvent:
       description: The `data:` of each stream message; the SSE `event:` name is the `event` value.
       oneOf:
